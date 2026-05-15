@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/banner.svg" alt="BigSet" width="600" />
+  <img src="assets/banner.svg" alt="BigSet" width="100%" />
 </p>
 
 # BigSet
