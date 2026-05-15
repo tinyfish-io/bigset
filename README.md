@@ -21,11 +21,13 @@ Built on [TinyFish](https://tinyfish.ai) APIs.
 
 ## ✨ Why BigSet?
 
-- 💬 **Describe, don't scrape.** Tell BigSet what data you want in plain English. No selectors, no scripts, no maintenance.
-- 🔄 **Always fresh.** Cron jobs re-run collection on your schedule — every 30 minutes, hourly, or daily.
-- 🩹 **Self-healing.** If a collection breaks (site redesign, new captcha), a healer agent patches the script automatically.
-- 🧠 **Handles the hard stuff.** Form fills, login walls, JS-rendered pages — BigSet spins up real browser sessions when needed.
-- 🔓 **Fully open source.** Self-host the whole stack. No vendor lock-in, no usage limits you don't control.
+At the end of the day, the only thing that matters is data. Every decision, every agent, every product — it all comes down to having the right data at the right time.
+
+So what if you could just… ask for it? Describe the dataset you want — in plain English — and have it built, structured, and kept fresh automatically. No scrapers to maintain. No pipelines to babysit. No waking up to broken cron jobs because some site changed a div.
+
+You describe it. BigSet collects it. Your agents query it with SQL. It stays up to date on your schedule — every 30 minutes, every hour, whatever you need. And if something breaks, a healer agent patches it before you even notice.
+
+Any dataset. Any source. Always fresh. That's the idea.
 
 ---
 
