@@ -57,7 +57,7 @@ That's it. Postgres, backend, and frontend all spin up. Open [localhost:3500](ht
 
 ## 📁 Project Structure
 
-```
+```text
 bigset/
 ├── frontend/          Next.js 16 — the UI
 ├── backend/           Fastify — API server, auth, database, cron jobs

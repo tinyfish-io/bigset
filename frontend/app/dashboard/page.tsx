@@ -27,8 +27,12 @@ export default function DashboardPage() {
   }
 
   async function handleSignOut() {
-    await authClient.signOut();
-    router.push("/auth/sign-in");
+    try {
+      await authClient.signOut();
+      router.push("/auth/sign-in");
+    } catch {
+      router.push("/auth/sign-in");
+    }
   }
 
   return (

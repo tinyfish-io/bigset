@@ -7,6 +7,11 @@ services:
       POSTGRES_USER: bigset
       POSTGRES_PASSWORD: bigset
       POSTGRES_DB: bigset
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bigset -d bigset"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
     volumes:
       - pgdata:/var/lib/postgresql/data
 
@@ -26,7 +31,7 @@ services:
       PORT: 3501
     depends_on:
       db:
-        condition: service_started
+        condition: service_healthy
 
   frontend:
     build:

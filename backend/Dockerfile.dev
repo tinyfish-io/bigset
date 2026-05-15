@@ -7,5 +7,7 @@ RUN npm ci
 
 COPY tsconfig.json drizzle.config.ts ./
 COPY src/ ./src/
+RUN chown -R node:node /app
+USER node
 
 CMD ["sh", "-c", "npx drizzle-kit push && npx tsx watch src/index.ts"]

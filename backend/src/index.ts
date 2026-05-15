@@ -10,7 +10,7 @@ const fastify = Fastify({ logger: true });
 await fastify.register(fastifyCors, {
   origin: env.CLIENT_ORIGIN,
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"],
+  allowedHeaders: ["Content-Type", "Authorization", "Cookie"],
   credentials: true,
   maxAge: 86400,
 });
