@@ -1,0 +1,12 @@
+FROM node:22-alpine
+
+WORKDIR /app
+
+RUN npm install -g bun
+
+COPY package.json bun.lock ./
+RUN bun install
+
+COPY . .
+
+CMD ["bun", "dev", "--hostname", "0.0.0.0", "--port", "3500"]

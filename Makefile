@@ -2,6 +2,18 @@ SHELL := /usr/bin/env bash
 
 include $(wildcard makefiles/*)
 
+.PHONY: dev down clean
+
+dev:
+	docker compose -f docker-compose.dev.yml up --build
+
+down:
+	docker compose -f docker-compose.dev.yml down
+
+clean:
+	docker compose -f docker-compose.dev.yml down -v --rmi local
+	@echo "Cleaned containers, volumes, and images"
+
 .PHONY: check-trufflehog
 check-trufflehog:
 	@if ! which trufflehog > /dev/null 2>&1; then \

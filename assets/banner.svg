@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 3313 1184" width="3313" height="1184">
+  <defs>
+    <filter id="swirl" x="-30%" y="-30%" width="160%" height="160%">
+      <feTurbulence type="turbulence" baseFrequency="0.006 0.009" numOctaves="4" seed="3" result="turb">
+        <animate attributeName="seed" values="3;7;13;3" dur="8s" fill="freeze"/>
+      </feTurbulence>
+      <feDisplacementMap in="SourceGraphic" in2="turb" scale="180" xChannelSelector="R" yChannelSelector="G"/>
+    </filter>
+    <mask id="reveal">
+      <rect width="3313" height="1184" fill="black"/>
+      <g filter="url(#swirl)">
+        <ellipse cx="1656" cy="592" rx="0" ry="0" fill="white">
+          <animate attributeName="rx" values="0;0;2400"
+                   keyTimes="0;0.06;1"
+                   dur="7s" fill="freeze"
+                   calcMode="spline" keySplines="0 0 1 1; 0.16 0.7 0.3 1"/>
+          <animate attributeName="ry" values="0;0;1800"
+                   keyTimes="0;0.06;1"
+                   dur="7s" fill="freeze"
+                   calcMode="spline" keySplines="0 0 1 1; 0.16 0.7 0.3 1"/>
+          <animateTransform attributeName="transform" type="rotate"
+                            from="0 1656 592" to="360 1656 592"
+                            dur="7s" fill="freeze"
+                            calcMode="spline" keySplines="0.4 0 0.2 1"/>
+        </ellipse>
+      </g>
+    </mask>
+  </defs>
+  <image width="3313" height="1184" mask="url(#reveal)" href="banner.png"/>
+</svg>

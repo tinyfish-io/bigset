@@ -1,0 +1,27 @@
+{
+  "name": "bigset-backend",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "db:push": "drizzle-kit push"
+  },
+  "dependencies": {
+    "@fastify/cors": "^11.0.0",
+    "better-auth": "^1.2.0",
+    "dotenv": "^16.4.0",
+    "pg": "^8.13.0",
+    "drizzle-orm": "^0.45.2",
+    "fastify": "^5.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/pg": "^8.11.0",
+    "drizzle-kit": "^0.31.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0"
+  }
+}
