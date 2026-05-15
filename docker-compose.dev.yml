@@ -1,0 +1,52 @@
+services:
+  db:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: bigset
+      POSTGRES_PASSWORD: bigset
+      POSTGRES_DB: bigset
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bigset -d bigset"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    ports:
+      - "3501:3501"
+    volumes:
+      - ./backend/src:/app/src
+    environment:
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:-dev-secret-change-me-in-production}
+      BETTER_AUTH_URL: http://localhost:3501
+      CLIENT_ORIGIN: http://localhost:3500
+      DATABASE_URL: postgres://bigset:bigset@db:5432/bigset
+      PORT: 3501
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    ports:
+      - "3500:3500"
+    volumes:
+      - ./frontend/app:/app/app
+      - ./frontend/lib:/app/lib
+      - ./frontend/public:/app/public
+    environment:
+      NEXT_PUBLIC_AUTH_URL: http://localhost:3500
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:
