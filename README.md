@@ -19,15 +19,17 @@ Think of it like a spreadsheet that fills itself in — you describe the dataset
 
 Built on [TinyFish](https://tinyfish.ai) APIs.
 
-## Why BigSet?
+## ✨ Why BigSet?
 
-- **Describe, don't scrape.** Tell BigSet what data you want in plain English. No selectors, no scripts, no maintenance.
-- **Always fresh.** Cron jobs re-run collection on your schedule — every 30 minutes, hourly, or daily.
-- **Self-healing.** If a collection breaks (site redesign, new captcha), a healer agent patches the script automatically.
-- **Handles the hard stuff.** Form fills, login walls, JS-rendered pages — BigSet spins up real browser sessions when needed.
-- **Fully open source.** Self-host the whole stack. No vendor lock-in, no usage limits you don't control.
+- 💬 **Describe, don't scrape.** Tell BigSet what data you want in plain English. No selectors, no scripts, no maintenance.
+- 🔄 **Always fresh.** Cron jobs re-run collection on your schedule — every 30 minutes, hourly, or daily.
+- 🩹 **Self-healing.** If a collection breaks (site redesign, new captcha), a healer agent patches the script automatically.
+- 🧠 **Handles the hard stuff.** Form fills, login walls, JS-rendered pages — BigSet spins up real browser sessions when needed.
+- 🔓 **Fully open source.** Self-host the whole stack. No vendor lock-in, no usage limits you don't control.
 
-## Quick Start
+---
+
+## 🚀 Quick Start
 
 **Prerequisites:** [Docker](https://docs.docker.com/get-docker/) and [Make](https://www.gnu.org/software/make/)
 
@@ -39,7 +41,9 @@ make dev
 
 That's it. Postgres, backend, and frontend all spin up. Open [localhost:3500](http://localhost:3500).
 
-## Tech Stack
+---
+
+## 🛠 Tech Stack
 
 | Layer | Tech |
 |-------|------|
@@ -49,7 +53,7 @@ That's it. Postgres, backend, and frontend all spin up. Open [localhost:3500](ht
 | Database | PostgreSQL via Drizzle ORM |
 | Data Collection | TinyFish APIs (Search, Fetch, Browser) |
 
-## Project Structure
+## 📁 Project Structure
 
 ```
 bigset/
@@ -59,17 +63,19 @@ bigset/
 └── Makefile
 ```
 
-## Building in Public
+---
+
+## 🏗 Building in Public
 
 BigSet is a work in progress. We're building in the open because the best ideas come from the people who actually want to use the thing.
 
 We'd love your feedback, ideas, or help building — come say hi:
 
-- **Twitter:** [@Tiny_Fish](https://x.com/Tiny_Fish) for project updates
-- **Twitter:** [@not_simantak](https://x.com/not_simantak) for the unfiltered version
-- **GitHub Issues:** [Report bugs or request features](https://github.com/tinyfish-io/bigset/issues)
+- 🐦 **Twitter:** [@Tiny_Fish](https://x.com/Tiny_Fish) for project updates
+- 🗣 **Twitter:** [@not_simantak](https://x.com/not_simantak) for the unfiltered version
+- 🐛 **GitHub Issues:** [Report bugs or request features](https://github.com/tinyfish-io/bigset/issues)
 
-## Contributing
+## 🤝 Contributing
 
 Contributions are very welcome — whether it's code, feedback, or just telling us what datasets you'd want to build.
 
@@ -80,6 +86,6 @@ Contributions are very welcome — whether it's code, feedback, or just telling 
 
 If you're not sure where to start, [open an issue](https://github.com/tinyfish-io/bigset/issues) or come say hi.
 
-## License
+## 📄 License
 
 [AGPL-3.0](LICENSE)
