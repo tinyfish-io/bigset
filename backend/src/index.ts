@@ -4,6 +4,7 @@ import { fromNodeHeaders } from "better-auth/node";
 
 import { auth } from "./auth.js";
 import { env } from "./env.js";
+import { registerDatasetBuilderRoutes } from "./routes/dataset-builder.js";
 
 const fastify = Fastify({ logger: true });
 
@@ -58,6 +59,8 @@ fastify.get("/api/me", async (request, reply) => {
   }
   return reply.send(session);
 });
+
+await registerDatasetBuilderRoutes(fastify);
 
 try {
   await fastify.listen({ port: env.PORT, host: "0.0.0.0" });

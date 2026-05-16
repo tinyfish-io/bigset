@@ -5,6 +5,7 @@
   "private": true,
   "scripts": {
     "dev": "tsx watch src/index.ts",
+    "builder:plan": "tsx src/dataset-builder/run-prototype.ts",
     "build": "tsc",
     "start": "node dist/index.js",
     "db:push": "drizzle-kit push"

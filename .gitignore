@@ -1,5 +1,11 @@
 .DS_Store
 node_modules/
+backend/.npm-cache/
 .env
 .env.local
 Project_BigSet_brief.md
+notion-docs.md
+image.png
+image-1.png
+.omx/
+/car
