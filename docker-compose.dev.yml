@@ -45,6 +45,7 @@ services:
       - ./frontend/public:/app/public
     environment:
       NEXT_PUBLIC_AUTH_URL: http://localhost:3500
+      BACKEND_URL: http://backend:3501
     depends_on:
       - backend
 
