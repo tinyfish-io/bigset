@@ -1,0 +1,130 @@
+[
+  {
+    "id": "latest-ai-blog-posts",
+    "quality": "good",
+    "persona": "technical operator",
+    "prompt": "Can you make me a table of the latest blog posts from OpenAI, Anthropic, and Google DeepMind? I need title, publish date, and URL.",
+    "requiredColumns": ["entity_name", "latest_post_title", "latest_post_date", "source_url"],
+    "expectedStress": "Clear entities and fields; tests current web facts with low ambiguity."
+  },
+  {
+    "id": "saas-pricing-pages",
+    "quality": "good",
+    "persona": "startup founder",
+    "prompt": "For Stripe, Paddle, and Chargebee, collect the official pricing page URL and the plan names or starting prices shown on the page.",
+    "requiredColumns": ["entity_name", "pricing_page_url", "plan_or_price", "source_url"],
+    "expectedStress": "Official pricing evidence; should not require a browser agent unless pricing is hidden."
+  },
+  {
+    "id": "earnings-release-pages",
+    "quality": "good",
+    "persona": "finance analyst",
+    "prompt": "Find the latest investor relations earnings release page for Apple, Microsoft, and Nvidia. Include release date, fiscal quarter, and source URL.",
+    "requiredColumns": ["entity_name", "release_date", "fiscal_quarter", "source_url"],
+    "expectedStress": "Latest dated source pages; date precision matters."
+  },
+  {
+    "id": "mcp-docs-pages",
+    "quality": "good",
+    "persona": "developer",
+    "prompt": "I need official docs pages for setting up MCP servers from Anthropic, OpenAI, and Cloudflare. Give me title, URL, and what each page covers.",
+    "requiredColumns": ["entity_name", "docs_title", "docs_url", "summary"],
+    "expectedStress": "Official docs discovery; should avoid random blog posts."
+  },
+  {
+    "id": "menlo-park-coca-cola",
+    "quality": "average",
+    "persona": "local researcher",
+    "prompt": "restaurants in Menlo Park that serve Coca-Cola",
+    "requiredColumns": ["entity_name", "address", "serves_requested_item", "source_url"],
+    "expectedStress": "Short but understandable; menu evidence may require deeper page checks."
+  },
+  {
+    "id": "hcmc-bakery-products",
+    "quality": "average",
+    "persona": "food blogger",
+    "prompt": "bakeries in Ho Chi Minh City with pastry product pages, product name, product URL, and bakery name",
+    "requiredColumns": ["bakery_name", "product_name", "product_url", "source_url"],
+    "expectedStress": "Product-page proof and local business search."
+  },
+  {
+    "id": "ny-ai-startup-careers",
+    "quality": "average",
+    "persona": "job seeker",
+    "prompt": "AI startups in New York that have careers pages. I want company name, website, and whether they look like they are hiring.",
+    "requiredColumns": ["entity_name", "company_website", "careers_page_url", "is_hiring"],
+    "expectedStress": "Careers-page verification with partial data accepted."
+  },
+  {
+    "id": "vietnam-fintech-sites",
+    "quality": "average",
+    "persona": "market researcher",
+    "prompt": "Vietnamese fintech startups with official websites, short description, and source URL",
+    "requiredColumns": ["entity_name", "official_website", "description", "source_url"],
+    "expectedStress": "Company discovery with official-source preference."
+  },
+  {
+    "id": "district-one-coffee-sites",
+    "quality": "average",
+    "persona": "tourist",
+    "prompt": "coffee shops in District 1 Ho Chi Minh City that have their own website or online menu",
+    "requiredColumns": ["entity_name", "website_or_menu_url", "address", "source_url"],
+    "expectedStress": "Local search plus website/menu disambiguation."
+  },
+  {
+    "id": "amazon-starbucks-products",
+    "quality": "average",
+    "persona": "ecommerce operator",
+    "prompt": "I saw there is a Starbucks shop on Amazon. Can you scrape the Starbucks products with name, price, image, and whether each item is in stock?",
+    "requiredColumns": ["product_name", "price", "image_url", "in_stock"],
+    "expectedStress": "Ecommerce listing freshness; likely needs browser-style verification."
+  },
+  {
+    "id": "california-insurance-prices",
+    "quality": "bad",
+    "persona": "consumer",
+    "prompt": "find me the best car insurance prices in California so I can pick the best bang for my buck",
+    "requiredColumns": ["provider_name", "quote_page_url", "missing_inputs", "source_url"],
+    "expectedStress": "Missing driver, vehicle, ZIP, coverage, deductible; should ask clarifying questions."
+  },
+  {
+    "id": "la-coke-menu-lol",
+    "quality": "bad",
+    "persona": "casual user",
+    "prompt": "i need places in LA with coke on the menu lol",
+    "requiredColumns": ["entity_name", "menu_url", "serves_requested_item", "source_url"],
+    "expectedStress": "Ambiguous location and entity type; should still infer restaurants but require menu evidence."
+  },
+  {
+    "id": "sf-ml-hiring-rn",
+    "quality": "bad",
+    "persona": "job seeker",
+    "prompt": "who's hiring ML engineers around sf rn",
+    "requiredColumns": ["entity_name", "careers_page_url", "open_role_title", "source_url"],
+    "expectedStress": "Casual wording and broad geography; should find careers pages without over-claiming."
+  },
+  {
+    "id": "latest-ai-company-stuff",
+    "quality": "bad",
+    "persona": "busy founder",
+    "prompt": "get me the latest stuff from the big AI companies",
+    "requiredColumns": ["entity_name", "latest_item_title", "latest_item_url", "source_url"],
+    "expectedStress": "Underspecified entities, source type, and columns; should expose weak plan/questions."
+  },
+  {
+    "id": "pastry-things-menlo",
+    "quality": "bad",
+    "persona": "casual food search",
+    "prompt": "good pastry things near Menlo Park with websites",
+    "requiredColumns": ["entity_name", "product_or_business_name", "website_url", "source_url"],
+    "expectedStress": "Vague quality word and entity boundary; should return product/business evidence only."
+  },
+  {
+    "id": "perplexity-like-companies",
+    "quality": "bad",
+    "persona": "founder",
+    "prompt": "make a table of companies like Perplexity but with useful info",
+    "requiredColumns": ["entity_name", "official_website", "why_similar", "source_url"],
+    "expectedStress": "Vague comparator and columns; should avoid inventing what useful info means."
+  }
+]
