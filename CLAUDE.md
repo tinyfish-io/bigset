@@ -12,8 +12,8 @@ Frontend on :3500, backend on :3501.
    - `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` — from Clerk API Keys
    - `CLERK_SECRET_KEY` — from Clerk API Keys
    - `CLERK_JWT_ISSUER_DOMAIN` — your Frontend API URL (e.g. `https://your-app.clerk.accounts.dev`)
-4. Generate a Convex admin key: `docker compose exec convex ./generate_admin_key.sh` and add it as `CONVEX_SELF_HOSTED_ADMIN_KEY` in `frontend/.env.local`.
-5. Run `make dev` — this starts all Docker services AND pushes Convex functions automatically.
+4. Run `make dev` — this starts all Docker services AND pushes Convex functions automatically.
+5. Generate a Convex admin key (first run only): `docker compose exec convex ./generate_admin_key.sh` and add it as `CONVEX_SELF_HOSTED_ADMIN_KEY` in `frontend/.env.local`, then re-run `make dev`.
 
 ## Architecture
 

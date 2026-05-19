@@ -115,6 +115,7 @@ export default function NewDatasetPage() {
   const [cadence, setCadence] = useState<Cadence>("daily");
   const [columns, setColumns] = useState<ProposedColumn[]>([]);
   const [datasetName, setDatasetName] = useState("");
+  const [isCreating, setIsCreating] = useState(false);
   const generatingTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const createDataset = useMutation(api.datasets.create);
@@ -162,6 +163,8 @@ export default function NewDatasetPage() {
   }
 
   async function handleConfirm() {
+    if (isCreating) return;
+    setIsCreating(true);
     const datasetId = await createDataset({
       name: datasetName,
       description: prompt,

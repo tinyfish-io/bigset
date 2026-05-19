@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, type RefObject } from "react";
+import { useRef, useEffect, type RefObject } from "react";
 import type { Header } from "@tanstack/react-table";
 import type { DatasetRow, DatasetColumn } from "./types";
 import { ColumnHeader } from "./ColumnHeader";
@@ -23,9 +23,11 @@ export function TableHeader({
 }) {
   const checkboxRef = useRef<HTMLInputElement>(null);
 
-  if (checkboxRef.current) {
-    checkboxRef.current.indeterminate = allState === "indeterminate";
-  }
+  useEffect(() => {
+    if (checkboxRef.current) {
+      checkboxRef.current.indeterminate = allState === "indeterminate";
+    }
+  }, [allState]);
 
   const selectHeader = headers[0];
   const dataHeaders = headers.slice(1);

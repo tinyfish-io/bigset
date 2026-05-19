@@ -6,6 +6,15 @@ function truncate(str: string): string {
   return str.length > MAX_CHARS ? str.slice(0, MAX_CHARS) + "…" : str;
 }
 
+function toSafeHttpUrl(input: string): string | null {
+  try {
+    const u = new URL(input);
+    return u.protocol === "http:" || u.protocol === "https:" ? u.href : null;
+  } catch {
+    return null;
+  }
+}
+
 export function CellValue({
   value,
   type,
@@ -18,9 +27,11 @@ export function CellValue({
   if (!str) return <span className="text-muted/40">&mdash;</span>;
 
   if (type === "url") {
+    const safeUrl = toSafeHttpUrl(str);
+    if (!safeUrl) return <span title={str}>{truncate(str)}</span>;
     return (
       <a
-        href={str}
+        href={safeUrl}
         target="_blank"
         rel="noopener noreferrer"
         className="text-blue-600 underline underline-offset-2 decoration-blue-600/30 hover:decoration-blue-600/60"

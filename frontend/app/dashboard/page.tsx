@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useQuery, useMutation, useConvexAuth } from "convex/react";
 import { useUser, useClerk } from "@clerk/nextjs";
@@ -60,7 +60,8 @@ function MiniTable({
           {rows.map((row, i) => (
             <tr key={i} className="border-b border-border/50 last:border-0">
               {previewCols.map((col, j) => {
-                const val = row[col.name] ?? "";
+                const raw = row[col.name];
+                const val = raw == null ? "" : String(raw);
                 return (
                   <td
                     key={j}
@@ -126,9 +127,11 @@ export default function DashboardPage() {
   );
 
   const seedData = useMutation(api.seed.seed);
+  const hasSeeded = useRef(false);
 
   useEffect(() => {
-    if (datasets && datasets.length === 0 && isAuthenticated) {
+    if (datasets && datasets.length === 0 && isAuthenticated && !hasSeeded.current) {
+      hasSeeded.current = true;
       seedData({});
     }
   }, [datasets, isAuthenticated, seedData]);

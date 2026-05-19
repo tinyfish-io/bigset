@@ -53,13 +53,8 @@ function DataRowImpl({
         <input
           type="checkbox"
           checked={selected}
-          onChange={(e) =>
-            toggleRow(
-              row.original._id,
-              e.nativeEvent instanceof MouseEvent &&
-                (e.nativeEvent as MouseEvent).shiftKey,
-            )
-          }
+          readOnly
+          onClick={(e) => toggleRow(row.original._id, e.shiftKey)}
           className="h-3.5 w-3.5 accent-foreground cursor-pointer"
         />
       </div>
