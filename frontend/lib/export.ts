@@ -101,7 +101,8 @@ export async function downloadXLSX(
   const workbook = XLSX.utils.book_new();
   // Sheet names are limited to 31 chars; truncate datasets like
   // "Browser Automation & Web Agent Companies".
-  const sheetName = datasetName.slice(0, 31) || "Dataset";
+  const sheetName =
+    datasetName.replace(/[\\/?*[\]:]/g, "-").slice(0, 31) || "Dataset";
   XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
 
   XLSX.writeFile(workbook, safeFilename(datasetName, "xlsx"));
