@@ -5,9 +5,9 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 
-COPY tsconfig.json drizzle.config.ts ./
+COPY tsconfig.json ./
 COPY src/ ./src/
 RUN chown -R node:node /app
 USER node
 
-CMD ["sh", "-c", "npx drizzle-kit push && npx tsx watch src/index.ts"]
+CMD ["npx", "tsx", "watch", "src/index.ts"]

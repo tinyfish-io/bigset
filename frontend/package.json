@@ -9,16 +9,20 @@
     "lint": "eslint"
   },
   "dependencies": {
-    "better-auth": "^1.6.11",
+    "@clerk/nextjs": "^7.3.7",
+    "@tanstack/react-table": "^8.21.3",
+    "convex": "^1.39.1",
     "next": "16.2.6",
     "react": "19.2.4",
-    "react-dom": "19.2.4"
+    "react-dom": "19.2.4",
+    "react-window": "^1.8.11"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@types/react-window": "^1.8.8",
     "eslint": "^9",
     "eslint-config-next": "16.2.6",
     "tailwindcss": "^4",

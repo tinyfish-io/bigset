@@ -33,15 +33,48 @@ Any dataset. Any source. Always fresh. That's the idea.
 
 ## 🚀 Quick Start
 
-**Prerequisites:** [Docker](https://docs.docker.com/get-docker/) and [Make](https://www.gnu.org/software/make/)
+**Prerequisites:** [Docker](https://docs.docker.com/get-docker/), [Make](https://www.gnu.org/software/make/), and a free [Clerk](https://dashboard.clerk.com) account
+
+### 1. Clone and set up Clerk
 
 ```bash
 git clone https://github.com/tinyfish-io/bigset.git
 cd bigset
+```
+
+Create a Clerk application at [dashboard.clerk.com](https://dashboard.clerk.com), then go to **JWT Templates** and enable the **Convex** template.
+
+### 2. Configure env files
+
+```bash
+# Root .env — used by Docker for the frontend container
+cp .env.example .env
+# Fill in NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY and CLERK_SECRET_KEY
+
+# Frontend .env.local — used by Next.js and Convex CLI
+cp frontend/.env.example frontend/.env.local
+# Fill in all three Clerk keys (publishable, secret, and JWT issuer domain)
+```
+
+### 3. Start everything
+
+```bash
 make dev
 ```
 
-That's it. Postgres, backend, and frontend all spin up. Open [localhost:3500](http://localhost:3500).
+This starts all Docker services, waits for Convex to be healthy, and deploys Convex functions automatically.
+
+### 4. Generate Convex admin key (first time only)
+
+```bash
+docker compose exec convex ./generate_admin_key.sh
+```
+
+Paste the output into `frontend/.env.local` as `CONVEX_SELF_HOSTED_ADMIN_KEY`, then re-run `make dev`.
+
+Open [localhost:3500](http://localhost:3500) and click **Get started** to sign in.
+
+> **Note:** Backend env needs no setup — `backend/.env.example` has correct defaults. If you edit Convex functions in `frontend/convex/`, run `make convex-push` to deploy the changes.
 
 ---
 
@@ -50,17 +83,20 @@ That's it. Postgres, backend, and frontend all spin up. Open [localhost:3500](ht
 | Layer | Tech |
 |-------|------|
 | Frontend | Next.js 16, React 19, Tailwind 4 |
-| Backend | Fastify, TypeScript |
-| Auth | Better Auth (email/password, self-hosted) |
-| Database | PostgreSQL via Drizzle ORM |
-| Data Collection | TinyFish APIs (Search, Fetch, Browser) |
+| Backend | Fastify, TypeScript (agent runner) |
+| Auth | [Clerk](https://clerk.com) |
+| Database | [Convex](https://convex.dev) (self-hosted) |
+| Data Collection | [TinyFish](https://tinyfish.ai) APIs (Search, Fetch, Browser) |
 
 ## 📁 Project Structure
 
 ```text
 bigset/
-├── frontend/          Next.js 16 — the UI
-├── backend/           Fastify — API server, auth, database, cron jobs
+├── frontend/            Next.js 16 — UI + Convex schema & functions
+│   ├── convex/          Convex functions, schema, and auth config
+│   └── .env.local       Clerk + Convex keys (not committed)
+├── backend/             Fastify — agent runner, writes to Convex via HTTP
+├── .env                 Clerk keys for docker-compose (not committed)
 ├── docker-compose.dev.yml
 └── Makefile
 ```

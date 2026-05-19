@@ -2,8 +2,8 @@
 
 Fastify + TypeScript + ESM (`"type": "module"` — use `.js` extensions in imports).
 
-Better Auth has no native Fastify plugin. The catch-all in `src/index.ts` bridges Fastify requests to Better Auth's Web Request handler via `fromNodeHeaders`. Don't refactor this into middleware — it's intentionally explicit.
+The backend is an agent runner. It does not handle auth — that is Clerk's job on the frontend.
 
-Schema in `src/schema.ts` must match Better Auth's expected tables (user, session, account, verification). Check Better Auth docs before modifying.
+Writes to Convex via `ConvexHttpClient` in `src/convex.ts`. Import `{ convex, api }` from `./convex.js` to call Convex mutations and queries. The `api` types are re-exported from the frontend's generated Convex code.
 
-Drizzle ORM with `pg` driver. Connection string from `DATABASE_URL` env var.
+The `tsconfig.json` includes `../frontend/convex` so TypeScript can resolve the generated types.

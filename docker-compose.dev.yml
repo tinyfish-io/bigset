@@ -6,14 +6,15 @@ services:
     environment:
       POSTGRES_USER: bigset
       POSTGRES_PASSWORD: bigset
-      POSTGRES_DB: bigset
+      POSTGRES_DB: bigset_internal
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U bigset -d bigset"]
+      test: ["CMD-SHELL", "pg_isready -U bigset -d bigset_internal"]
       interval: 5s
       timeout: 5s
       retries: 10
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
 
   backend:
     build:
@@ -24,13 +25,11 @@ services:
     volumes:
       - ./backend/src:/app/src
     environment:
-      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:-dev-secret-change-me-in-production}
-      BETTER_AUTH_URL: http://localhost:3501
       CLIENT_ORIGIN: http://localhost:3500
-      DATABASE_URL: postgres://bigset:bigset@db:5432/bigset
+      CONVEX_URL: http://convex:3210
       PORT: 3501
     depends_on:
-      db:
+      convex:
         condition: service_healthy
 
   frontend:
@@ -42,11 +41,59 @@ services:
     volumes:
       - ./frontend/app:/app/app
       - ./frontend/lib:/app/lib
+      - ./frontend/components:/app/components
       - ./frontend/public:/app/public
+      - ./frontend/convex:/app/convex
     environment:
-      NEXT_PUBLIC_AUTH_URL: http://localhost:3500
+      NEXT_PUBLIC_CONVEX_URL: http://localhost:3210
+      NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY}
+      CLERK_SECRET_KEY: ${CLERK_SECRET_KEY}
+      NEXT_PUBLIC_CLERK_SIGN_IN_URL: /sign-in
+      NEXT_PUBLIC_CLERK_SIGN_UP_URL: /sign-up
+      NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL: /dashboard
+      NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL: /dashboard
+      NEXT_PUBLIC_CLERK_SIGN_IN_FORCE_REDIRECT_URL: /dashboard
+      NEXT_PUBLIC_CLERK_SIGN_UP_FORCE_REDIRECT_URL: /dashboard
+      NEXT_PUBLIC_CLERK_AFTER_SIGN_IN_URL: /dashboard
+      NEXT_PUBLIC_CLERK_AFTER_SIGN_UP_URL: /dashboard
     depends_on:
-      - backend
+      convex:
+        condition: service_healthy
+
+  convex:
+    image: ghcr.io/get-convex/convex-backend:latest
+    ports:
+      - "3210:3210"
+      - "3211:3211"
+    volumes:
+      - convex_data:/convex/data
+    environment:
+      CONVEX_CLOUD_ORIGIN: http://127.0.0.1:3210
+      CONVEX_SITE_ORIGIN: http://127.0.0.1:3211
+      POSTGRES_URL: postgresql://bigset:bigset@db:5432
+      DO_NOT_REQUIRE_SSL: 1
+      INSTANCE_NAME: convex-self-hosted
+      RUST_LOG: info
+      DISABLE_BEACON: true
+      DISABLE_METRICS_ENDPOINT: true
+    healthcheck:
+      test: curl -f http://localhost:3210/version
+      interval: 5s
+      start_period: 10s
+    depends_on:
+      db:
+        condition: service_healthy
+
+  convex-dashboard:
+    image: ghcr.io/get-convex/convex-dashboard:latest
+    ports:
+      - "6791:6791"
+    environment:
+      NEXT_PUBLIC_DEPLOYMENT_URL: http://127.0.0.1:3210
+    depends_on:
+      convex:
+        condition: service_healthy
 
 volumes:
   pgdata:
+  convex_data:

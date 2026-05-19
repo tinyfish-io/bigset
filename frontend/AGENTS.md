@@ -8,4 +8,6 @@ This version has breaking changes — APIs, conventions, and file structure may 
 
 Do not add API routes here. All backend logic lives in `backend/`.
 
-Auth flows use `better-auth/react` client — not Next.js server actions, not middleware auth checks. The frontend is a thin client.
+Auth uses Clerk (`@clerk/nextjs`) with Convex integration (`ConvexProviderWithClerk`). Do not use Better Auth, Next.js server actions, or custom auth middleware. Clerk proxy in `proxy.ts` handles route protection.
+
+After editing any file in `frontend/convex/`, you MUST run `make convex-push` from the project root. Convex is self-hosted and does not hot-reload — without the push, the running instance still has the old code.

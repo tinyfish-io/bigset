@@ -1,28 +1,44 @@
+"use client";
+
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useConvexAuth } from "convex/react";
+import { useEffect } from "react";
 
 export default function Home() {
+  const { isAuthenticated, isLoading } = useConvexAuth();
+  const router = useRouter();
+
+  useEffect(() => {
+    if (isAuthenticated) {
+      router.replace("/dashboard");
+    }
+  }, [isAuthenticated, router]);
+
+  if (isLoading || isAuthenticated) {
+    return (
+      <div className="flex flex-1 items-center justify-center">
+        <p className="text-muted">Loading...</p>
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-1 items-center justify-center px-4">
       <div className="w-full max-w-md space-y-8 text-center">
         <div>
-          <h1 className="text-4xl font-semibold tracking-tight">BigSet</h1>
-          <p className="mt-3 text-lg text-foreground/60">
+          <img src="/BigSetLogo.png" alt="BigSet" className="h-12 mx-auto" />
+          <p className="mt-3 text-lg text-muted">
             Live, queryable datasets — updated automatically.
           </p>
         </div>
 
-        <div className="flex flex-col gap-3 sm:flex-row sm:justify-center">
+        <div className="flex justify-center">
           <Link
-            href="/auth/sign-up"
-            className="rounded-lg bg-foreground px-6 py-2.5 text-sm font-medium text-background transition-opacity hover:opacity-90"
+            href="/sign-in"
+            className="border border-accent bg-accent px-6 py-2.5 text-sm font-semibold text-accent-text transition-opacity hover:opacity-90"
           >
             Get started
-          </Link>
-          <Link
-            href="/auth/sign-in"
-            className="rounded-lg border border-foreground/20 px-6 py-2.5 text-sm font-medium transition-colors hover:bg-foreground/5"
-          >
-            Sign in
           </Link>
         </div>
       </div>

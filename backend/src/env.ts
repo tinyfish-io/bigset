@@ -9,9 +9,7 @@ function required(name: string): string {
 }
 
 export const env = {
-  BETTER_AUTH_SECRET: required("BETTER_AUTH_SECRET"),
-  BETTER_AUTH_URL: required("BETTER_AUTH_URL"),
   CLIENT_ORIGIN: process.env.CLIENT_ORIGIN || "http://localhost:3500",
-  DATABASE_URL: required("DATABASE_URL"),
+  CONVEX_URL: required("CONVEX_URL"),
   PORT: Number(process.env.PORT || "3501"),
 };

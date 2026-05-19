@@ -1,9 +1,11 @@
 # Frontend
 
-Next.js 16, React 19, Tailwind 4. Pure UI — no API routes, no server-side auth.
+Next.js 16, React 19, Tailwind 4. Pure UI — no API routes, no server-side auth logic.
 
-Auth client in `lib/auth-client.ts` uses `better-auth/react`. `baseURL` points to `localhost:3500` (same origin) — the Next.js rewrite in `next.config.ts` proxies `/api/auth/*` to the backend. Do not point it at the backend directly.
+Auth uses `@clerk/nextjs`. `ClerkProvider` wraps the app in `layout.tsx`, `ConvexProviderWithClerk` bridges Clerk tokens to Convex in `convex-provider.tsx`. Protected routes enforced by `middleware.ts` (Clerk middleware). Sign-in/sign-up pages at `/sign-in` and `/sign-up` use Clerk's built-in components.
 
-Protected pages use `authClient.useSession()` and redirect to `/auth/sign-in` if no session.
+Use `useConvexAuth()` from `convex/react` (not Clerk's `useAuth()`) to check auth state in components. Use `useUser()` from `@clerk/nextjs` for user info (email, name). Use `useClerk()` for sign-out.
+
+Convex functions in `convex/` do NOT hot-reload. After editing any file in `frontend/convex/`, run `make convex-push` from the project root to deploy changes to the self-hosted instance.
 
 @AGENTS.md
