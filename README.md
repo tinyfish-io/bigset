@@ -56,6 +56,8 @@ cp frontend/.env.example frontend/.env.local
 # Fill in all three Clerk keys (publishable, secret, and JWT issuer domain)
 ```
 
+> **Optional:** to enable [PostHog](https://posthog.com) product analytics + session replay + error tracking, set `NEXT_PUBLIC_POSTHOG_KEY` and `NEXT_PUBLIC_POSTHOG_HOST`. Leave blank to disable cleanly (the app no-ops every event).
+
 ### 3. Start everything
 
 ```bash
@@ -72,6 +74,21 @@ docker compose exec convex ./generate_admin_key.sh
 
 Paste the output into `frontend/.env.local` as `CONVEX_SELF_HOSTED_ADMIN_KEY`, then re-run `make dev`.
 
+### 5. Load curated public datasets
+
+The landing page and the dashboard's "Curated" section read from a set of 9 system-owned datasets. Load them with:
+
+```bash
+cd frontend
+npx convex run publicSeed:seedPublicDatasets
+```
+
+The script is **idempotent** — rerunning it skips datasets that already exist (matched by a stable `seedKey`, so renaming a curated dataset never creates a duplicate). To add a 10th curated dataset, append it to `PUBLIC_DATASETS` in [frontend/convex/publicSeed.ts](frontend/convex/publicSeed.ts) with a fresh `seedKey` and rerun the command. To replace existing curated content in place, pass `force: true`:
+
+```bash
+npx convex run publicSeed:seedPublicDatasets '{"force":true}'
+```
+
 Open [localhost:3500](http://localhost:3500) and click **Get started** to sign in.
 
 > **Note:** Backend env needs no setup — `backend/.env.example` has correct defaults. If you edit Convex functions in `frontend/convex/`, run `make convex-push` to deploy the changes.
@@ -87,6 +104,8 @@ Open [localhost:3500](http://localhost:3500) and click **Get started** to sign i
 | Auth | [Clerk](https://clerk.com) |
 | Database | [Convex](https://convex.dev) (self-hosted) |
 | Data Collection | [TinyFish](https://tinyfish.ai) APIs (Search, Fetch, Browser) |
+| Table view | [TanStack Table](https://tanstack.com/table) + [react-window](https://github.com/bvaughn/react-window) virtualization |
+| Analytics | [PostHog](https://posthog.com) — events, session replay, error tracking (optional) |
 
 ## 📁 Project Structure
 
@@ -120,7 +139,8 @@ Contributions are very welcome — whether it's code, feedback, or just telling 
 1. Fork the repo
 2. Create a branch (`git checkout -b my-feature`)
 3. Make your changes
-4. Open a PR
+4. Run `bash scripts/verify-authz.sh` to confirm the authorization layer still holds
+5. Open a PR
 
 If you're not sure where to start, [open an issue](https://github.com/tinyfish-io/bigset/issues) or come say hi.
 

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { ClerkProvider } from "@clerk/nextjs";
 import { ConvexClientProvider } from "./convex-provider";
+import { AnalyticsProvider } from "@/lib/analytics-provider";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -19,6 +20,17 @@ export const metadata: Metadata = {
   description: "Live, queryable datasets by TinyFish",
 };
 
+/**
+ * Inline script: resolve theme BEFORE React hydrates so we never paint
+ * the wrong palette and then flip. Reads `bigset:theme` from localStorage,
+ * falls back to the OS preference. Sets `<html data-theme>` synchronously.
+ *
+ * Kept as a string and injected via `dangerouslySetInnerHTML` because Next
+ * inlines it as-is into `<head>` — Script components defer execution and
+ * would re-introduce the flicker.
+ */
+const themeInitScript = `(function(){try{var s=localStorage.getItem('bigset:theme');var t=s==='dark'||s==='light'?s:(window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');document.documentElement.setAttribute('data-theme',t);}catch(e){document.documentElement.setAttribute('data-theme','light');}})();`;
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -28,13 +40,19 @@ export default function RootLayout({
     <html
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      suppressHydrationWarning
     >
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
+      </head>
       <body className="min-h-full flex flex-col">
         <ClerkProvider
           signInForceRedirectUrl="/dashboard"
           signUpForceRedirectUrl="/dashboard"
         >
-          <ConvexClientProvider>{children}</ConvexClientProvider>
+          <ConvexClientProvider>
+            <AnalyticsProvider>{children}</AnalyticsProvider>
+          </ConvexClientProvider>
         </ClerkProvider>
       </body>
     </html>

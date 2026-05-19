@@ -1,119 +1,16 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useQuery, useMutation, useConvexAuth } from "convex/react";
 import { useUser, useClerk } from "@clerk/nextjs";
 import { api } from "@/convex/_generated/api";
-
-type DatasetStatus = "live" | "paused" | "building";
-
-function StatusBadge({ status }: { status: DatasetStatus }) {
-  const styles = {
-    live: "border-emerald-600/20 bg-emerald-600/5 text-emerald-700",
-    paused: "border-border bg-background text-muted",
-    building: "border-amber-600/20 bg-amber-600/5 text-amber-700",
-  };
-  const labels = { live: "Live", paused: "Paused", building: "Building..." };
-
-  return (
-    <span
-      className={`inline-flex items-center gap-1.5 border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider ${styles[status]}`}
-    >
-      {status === "live" && (
-        <span className="h-1.5 w-1.5 rounded-full bg-emerald-600 animate-pulse" />
-      )}
-      {status === "building" && (
-        <span className="h-1.5 w-1.5 rounded-full bg-amber-600 animate-pulse" />
-      )}
-      {labels[status]}
-    </span>
-  );
-}
-
-function MiniTable({
-  columns,
-  rows,
-}: {
-  columns: { name: string }[];
-  rows: Record<string, string>[];
-}) {
-  const previewCols = columns.slice(0, 5);
-
-  return (
-    <div className="overflow-hidden border border-border bg-surface">
-      <table className="w-full text-[10px] leading-none">
-        <thead>
-          <tr className="border-b border-border bg-background">
-            {previewCols.map((col, i) => (
-              <th
-                key={i}
-                className="px-2 py-1.5 text-left font-semibold text-foreground/60 whitespace-nowrap uppercase tracking-wider"
-                style={{ fontSize: "9px" }}
-              >
-                {col.name}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row, i) => (
-            <tr key={i} className="border-b border-border/50 last:border-0">
-              {previewCols.map((col, j) => {
-                const raw = row[col.name];
-                const val = raw == null ? "" : String(raw);
-                return (
-                  <td
-                    key={j}
-                    className={`px-2 py-1.5 whitespace-nowrap ${j === 0 ? "text-foreground/80 font-medium" : "text-muted"}`}
-                  >
-                    {val.length > 20 ? val.slice(0, 20) + "..." : val}
-                  </td>
-                );
-              })}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-/* eslint-disable @typescript-eslint/no-explicit-any */
-function DatasetCard({ dataset }: { dataset: any }) {
-  return (
-    <Link href={`/dataset/${dataset._id}`} className="block">
-      <div className="group flex flex-col border border-border bg-surface transition-all hover:border-foreground/20 hover:shadow-[0_2px_8px_rgba(0,0,0,0.04)] cursor-pointer">
-        <div className="px-5 pt-5 pb-4">
-          <h3 className="text-base font-semibold leading-tight tracking-tight">
-            {dataset.name}
-          </h3>
-          <p className="mt-2 text-[13px] leading-relaxed text-muted line-clamp-2">
-            {dataset.description}
-          </p>
-        </div>
-
-        <div className="px-4 pb-4 mt-auto">
-          <MiniTable
-            columns={dataset.columns}
-            rows={dataset.previewRows ?? []}
-          />
-        </div>
-
-        <div className="px-5 py-3 border-t border-border flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <StatusBadge status={dataset.status} />
-            <span className="text-[11px] text-muted">{dataset.cadence}</span>
-          </div>
-          <span className="text-[11px] text-muted">
-            {dataset.previewRows?.length ?? 0} rows
-          </span>
-        </div>
-      </div>
-    </Link>
-  );
-}
-/* eslint-enable @typescript-eslint/no-explicit-any */
+import {
+  DatasetCard,
+  type DatasetCardData,
+} from "@/components/dataset/DatasetCard";
+import { ThemeToggle } from "@/components/ThemeToggle";
+import { EVENTS, track } from "@/lib/analytics";
 
 export default function DashboardPage() {
   const { isAuthenticated, isLoading } = useConvexAuth();
@@ -121,20 +18,55 @@ export default function DashboardPage() {
   const { signOut } = useClerk();
   const [search, setSearch] = useState("");
 
-  const datasets = useQuery(
-    api.datasets.listWithPreview,
-    isAuthenticated ? {} : "skip"
+  const mine = useQuery(
+    api.datasets.listMine,
+    isAuthenticated ? {} : "skip",
   );
+  // Public datasets are open to anonymous users too, so no `skip` gate.
+  const curated = useQuery(api.datasets.listPublic, {});
 
   const seedData = useMutation(api.seed.seed);
   const hasSeeded = useRef(false);
 
   useEffect(() => {
-    if (datasets && datasets.length === 0 && isAuthenticated && !hasSeeded.current) {
+    if (mine && mine.length === 0 && isAuthenticated && !hasSeeded.current) {
       hasSeeded.current = true;
       seedData({});
     }
-  }, [datasets, isAuthenticated, seedData]);
+  }, [mine, isAuthenticated, seedData]);
+
+  // Fire dashboard_viewed once per mount when both queries have resolved,
+  // so we attach accurate counts. `dashboardFired` prevents the effect
+  // from re-firing when filtered counts change due to typing in search.
+  const dashboardFired = useRef(false);
+  useEffect(() => {
+    if (
+      !dashboardFired.current &&
+      isAuthenticated &&
+      mine !== undefined &&
+      curated !== undefined
+    ) {
+      dashboardFired.current = true;
+      track(EVENTS.DASHBOARD_VIEWED, {
+        owned_count: mine.length,
+        curated_count: curated.length,
+      });
+    }
+  }, [isAuthenticated, mine, curated]);
+
+  const { filteredMine, filteredCurated } = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const apply = (list: typeof mine) =>
+      (list ?? []).filter((ds) =>
+        !q ||
+        ds.name.toLowerCase().includes(q) ||
+        ds.description.toLowerCase().includes(q),
+      );
+    return {
+      filteredMine: apply(mine),
+      filteredCurated: apply(curated),
+    };
+  }, [mine, curated, search]);
 
   if (isLoading) {
     return (
@@ -146,18 +78,15 @@ export default function DashboardPage() {
 
   if (!isAuthenticated) return null;
 
-  const filtered = (datasets ?? []).filter(
-    (ds) =>
-      ds.name.toLowerCase().includes(search.toLowerCase()) ||
-      ds.description.toLowerCase().includes(search.toLowerCase())
-  );
-
   return (
     <div className="flex flex-1 flex-col">
       <header className="border-b border-border px-6 py-3 flex items-center justify-between bg-surface">
         <img src="/BigSetLogo.png" alt="BigSet" className="h-[30px]" />
         <div className="flex items-center gap-4">
-          <span className="text-xs text-muted">
+          <ThemeToggle />
+          <div className="w-px h-4 bg-border" />
+          {/* PII: mask the email in session replays */}
+          <span data-ph-mask-text="true" className="text-xs text-muted">
             {user?.primaryEmailAddress?.emailAddress}
           </span>
           <div className="w-px h-4 bg-border" />
@@ -170,7 +99,7 @@ export default function DashboardPage() {
         </div>
       </header>
 
-      <main className="flex-1 px-6 py-10 max-w-[1200px] mx-auto w-full">
+      <main className="flex-1 px-6 py-10 max-w-[1280px] mx-auto w-full">
         <div className="mb-8">
           <h2 className="text-[28px] font-bold tracking-tight leading-none">
             Your Datasets
@@ -188,6 +117,7 @@ export default function DashboardPage() {
               viewBox="0 0 24 24"
               stroke="currentColor"
               strokeWidth={2}
+              aria-hidden="true"
             >
               <path
                 strokeLinecap="round"
@@ -199,6 +129,18 @@ export default function DashboardPage() {
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
+              onBlur={() => {
+                // Fire on blur, not every keystroke. Send length, not the
+                // query string itself — search terms can be sensitive
+                // ("looking for a job at X"). Length is enough for the funnel.
+                if (search.trim().length > 0) {
+                  track(EVENTS.DATASET_SEARCH_USED, {
+                    query_length: search.trim().length,
+                    mine_count: filteredMine.length,
+                    curated_count: filteredCurated.length,
+                  });
+                }
+              }}
               placeholder="Search datasets..."
               className="w-full border border-border bg-surface py-2.5 pl-10 pr-3 text-sm outline-none placeholder:text-muted/60 focus:border-foreground/30 transition-colors"
             />
@@ -211,30 +153,75 @@ export default function DashboardPage() {
           </Link>
         </div>
 
-        {datasets === undefined ? (
-          <div className="flex items-center justify-center py-20">
-            <p className="text-sm text-muted">Loading datasets...</p>
-          </div>
-        ) : filtered.length > 0 ? (
-          <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
-            {filtered.map((ds) => (
-              <DatasetCard key={ds._id} dataset={ds} />
-            ))}
-          </div>
-        ) : search ? (
-          <div className="flex flex-col items-center justify-center py-20 text-center">
-            <p className="text-sm text-muted">
-              No datasets match &ldquo;{search}&rdquo;
-            </p>
-          </div>
-        ) : (
-          <div className="flex flex-col items-center justify-center py-20 text-center">
-            <p className="text-sm text-muted">
-              No datasets yet. Create your first one.
-            </p>
-          </div>
-        )}
+        <Section
+          eyebrow="Yours"
+          heading="Datasets you own"
+          isLoading={mine === undefined}
+          datasets={filteredMine as unknown as DatasetCardData[]}
+          emptyState={
+            search
+              ? `No datasets of yours match "${search}".`
+              : "You don't have any datasets yet. Create your first one above."
+          }
+        />
+
+        <div className="h-12" />
+
+        <Section
+          eyebrow="Curated by BigSet"
+          heading="Explore live datasets"
+          isLoading={curated === undefined}
+          datasets={filteredCurated as unknown as DatasetCardData[]}
+          emptyState={
+            search
+              ? `No curated datasets match "${search}".`
+              : "Curated datasets coming soon."
+          }
+        />
       </main>
+    </div>
+  );
+}
+
+function Section({
+  eyebrow,
+  heading,
+  isLoading,
+  datasets,
+  emptyState,
+}: {
+  eyebrow: string;
+  heading: string;
+  isLoading: boolean;
+  datasets: DatasetCardData[];
+  emptyState: string;
+}) {
+  return (
+    <div>
+      <div className="mb-5">
+        <p className="text-[11px] uppercase tracking-[0.15em] text-muted font-semibold">
+          {eyebrow}
+        </p>
+        <h3 className="mt-1 text-lg font-semibold tracking-tight">
+          {heading}
+        </h3>
+      </div>
+
+      {isLoading ? (
+        <div className="flex items-center justify-center py-12">
+          <p className="text-sm text-muted">Loading…</p>
+        </div>
+      ) : datasets.length === 0 ? (
+        <div className="border border-dashed border-border py-12 text-center">
+          <p className="text-sm text-muted">{emptyState}</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
+          {datasets.map((ds) => (
+            <DatasetCard key={ds._id} dataset={ds} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }

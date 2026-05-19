@@ -2,47 +2,70 @@
 
 import { useParams } from "next/navigation";
 import Link from "next/link";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useConvexAuth } from "convex/react";
+import { useAuth } from "@clerk/nextjs";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { DatasetTable } from "@/components/table";
-
-function StatusBadge({
-  status,
-}: {
-  status: "live" | "paused" | "building";
-}) {
-  const styles = {
-    live: "border-emerald-600/20 bg-emerald-600/5 text-emerald-700",
-    paused: "border-border bg-background text-muted",
-    building: "border-amber-600/20 bg-amber-600/5 text-amber-700",
-  };
-  const labels = { live: "Live", paused: "Paused", building: "Building..." };
-
-  return (
-    <span
-      className={`inline-flex items-center gap-1.5 border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider ${styles[status]}`}
-    >
-      {status === "live" && (
-        <span className="h-1.5 w-1.5 rounded-full bg-emerald-600 animate-pulse" />
-      )}
-      {status === "building" && (
-        <span className="h-1.5 w-1.5 rounded-full bg-amber-600 animate-pulse" />
-      )}
-      {labels[status]}
-    </span>
-  );
-}
+import { ThemeToggle } from "@/components/ThemeToggle";
+import { StatusBadge } from "@/components/dataset/StatusBadge";
+import { downloadCSV, downloadXLSX } from "@/lib/export";
+import { EVENTS, captureException, track } from "@/lib/analytics";
 
 export default function DatasetPage() {
   const params = useParams();
   const { isLoading } = useConvexAuth();
+  const { userId } = useAuth();
+  const [exporting, setExporting] = useState<"csv" | "xlsx" | null>(null);
 
   const datasetId = params.id as Id<"datasets">;
   const dataset = useQuery(api.datasets.get, { id: datasetId });
   const rows = useQuery(api.datasetRows.listByDataset, {
     datasetId,
   });
+
+  // Fire dataset_opened once per dataset visit, after the dataset has
+  // resolved. The ref keeps it idempotent across re-renders.
+  const openedFired = useRef<string | null>(null);
+  useEffect(() => {
+    if (dataset && openedFired.current !== dataset._id) {
+      openedFired.current = dataset._id;
+      track(EVENTS.DATASET_OPENED, {
+        datasetId: dataset._id,
+        seedKey: dataset.seedKey,
+        visibility: dataset.visibility ?? "private",
+        is_owner: userId === dataset.ownerId,
+      });
+    }
+  }, [dataset, userId]);
+
+  async function handleExport(format: "csv" | "xlsx") {
+    if (!dataset || !rows || exporting) return;
+    setExporting(format);
+    try {
+      if (format === "csv") {
+        downloadCSV(dataset.name, dataset.columns, rows);
+      } else {
+        await downloadXLSX(dataset.name, dataset.columns, rows);
+      }
+      track(EVENTS.DATASET_EXPORTED, {
+        format,
+        row_count: rows.length,
+        seedKey: dataset.seedKey,
+      });
+    } catch (err) {
+      console.error("[export] failed", err);
+      captureException(err, {
+        operation: "dataset_export",
+        format,
+        datasetId: dataset._id,
+        row_count: rows.length,
+      });
+    } finally {
+      setExporting(null);
+    }
+  }
 
   if (isLoading || dataset === undefined || rows === undefined) {
     return (
@@ -51,22 +74,10 @@ export default function DatasetPage() {
       </div>
     );
   }
-
-  if (!dataset) {
-    return (
-      <div className="flex flex-1 items-center justify-center">
-        <div className="text-center">
-          <p className="text-sm text-muted">Dataset not found.</p>
-          <Link
-            href="/dashboard"
-            className="mt-4 inline-block text-sm font-semibold text-foreground hover:underline"
-          >
-            Back to dashboard
-          </Link>
-        </div>
-      </div>
-    );
-  }
+  // Past this point `dataset` and `rows` are always defined. If the
+  // server-side authz layer rejected the request, `useQuery` would have
+  // thrown instead — caught by /dataset/[id]/error.tsx, which renders
+  // the "Dataset not found" UI.
 
   return (
     <div className="flex flex-1 flex-col h-screen">
@@ -85,12 +96,22 @@ export default function DatasetPage() {
           <span className="text-[11px] text-muted mr-2">
             {dataset.cadence}
           </span>
-          <button className="border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-foreground/[0.03] transition-colors">
-            Export CSV
+          <button
+            onClick={() => handleExport("csv")}
+            disabled={exporting !== null || rows.length === 0}
+            className="border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-foreground/[0.03] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {exporting === "csv" ? "Exporting…" : "Export CSV"}
           </button>
-          <button className="border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-foreground/[0.03] transition-colors">
-            Export XLSX
+          <button
+            onClick={() => handleExport("xlsx")}
+            disabled={exporting !== null || rows.length === 0}
+            className="border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-foreground/[0.03] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {exporting === "xlsx" ? "Exporting…" : "Export XLSX"}
           </button>
+          <div className="w-px h-4 bg-border mx-1" />
+          <ThemeToggle />
         </div>
       </header>
 

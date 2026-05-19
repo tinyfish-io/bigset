@@ -34,6 +34,11 @@ yarn-error.log*
 .env*
 !.env.example
 
+# package manager: this project uses bun (bun.lock is the source of truth).
+# Reject npm/yarn lockfiles so they don't drift from bun's resolution.
+package-lock.json
+yarn.lock
+
 # convex generated
 convex/_generated/
 

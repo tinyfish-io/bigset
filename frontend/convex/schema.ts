@@ -12,6 +12,15 @@ export default defineSchema({
       v.literal("building")
     ),
     cadence: v.string(),
+    // Optional for backward compat with rows seeded before this field existed.
+    // Treat undefined as "private" in authorization helpers.
+    visibility: v.optional(
+      v.union(v.literal("public"), v.literal("private"))
+    ),
+    // Stable identifier for system-managed/curated datasets so dedup at seed
+    // time doesn't rely on `name` (which marketing changes). User-created
+    // datasets do not set this. See convex/publicSeed.ts.
+    seedKey: v.optional(v.string()),
     columns: v.array(
       v.object({
         name: v.string(),
@@ -25,7 +34,10 @@ export default defineSchema({
         description: v.optional(v.string()),
       })
     ),
-  }).index("by_owner", ["ownerId"]),
+  })
+    .index("by_owner", ["ownerId"])
+    .index("by_visibility", ["visibility"])
+    .index("by_seed_key", ["seedKey"]),
 
   datasetRows: defineTable({
     datasetId: v.id("datasets"),

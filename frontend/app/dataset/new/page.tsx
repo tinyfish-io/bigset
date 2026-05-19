@@ -1,10 +1,11 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useMutation, useConvexAuth } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import { EVENTS, track } from "@/lib/analytics";
 
 type ColumnType = "text" | "number" | "boolean" | "url" | "date";
 
@@ -120,6 +121,17 @@ export default function NewDatasetPage() {
 
   const createDataset = useMutation(api.datasets.create);
 
+  // Page-view event: fires once when the wizard becomes visible (after
+  // auth resolves and the user is authenticated; we don't want to fire
+  // for unauth visitors who'll be redirected to /sign-in).
+  const startFired = useRef(false);
+  useEffect(() => {
+    if (!startFired.current && !isLoading && isAuthenticated) {
+      startFired.current = true;
+      track(EVENTS.DATASET_CREATION_STARTED);
+    }
+  }, [isLoading, isAuthenticated]);
+
   if (isLoading) {
     return (
       <div className="flex flex-1 items-center justify-center">
@@ -141,6 +153,11 @@ export default function NewDatasetPage() {
       setDatasetName(
         words.map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(" ")
       );
+      // Track schema generation. Intentionally NOT sending the prompt
+      // text — user-entered content may be sensitive.
+      track(EVENTS.DATASET_SCHEMA_GENERATED, {
+        column_count: schema.length,
+      });
       setStep("review");
     }, 2000);
   }
@@ -158,7 +175,7 @@ export default function NewDatasetPage() {
   function handleAddColumn() {
     setColumns((prev) => [
       ...prev,
-      { id: String(Date.now()), name: "New Column", type: "text" as ColumnType, description: "" },
+      { id: String(Date.now()), name: "New Column", type: "text", description: "" },
     ]);
   }
 
@@ -174,6 +191,11 @@ export default function NewDatasetPage() {
         type: c.type,
         description: c.description || undefined,
       })),
+    });
+    track(EVENTS.DATASET_CREATED, {
+      datasetId,
+      column_count: columns.length,
+      cadence: CADENCE_LABELS[cadence],
     });
     router.push(`/dataset/${datasetId}`);
   }

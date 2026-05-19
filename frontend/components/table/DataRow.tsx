@@ -65,6 +65,12 @@ function DataRowImpl({
         return (
           <div
             key={col.name}
+            // Session-replay masking: the cell VALUE could be anything
+            // (scraped emails, prices, internal data). Mask the text in
+            // replays. Layout, column structure, and clicks remain
+            // visible — enough to diagnose UI issues without leaking
+            // user data. See lib/analytics.ts session_recording config.
+            data-ph-mask-text="true"
             className={`shrink-0 overflow-hidden text-ellipsis whitespace-nowrap border-r border-border/30 last:border-r-0 ${
               cellIdx === 0
                 ? "font-medium text-foreground"

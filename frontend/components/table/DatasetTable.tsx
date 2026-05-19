@@ -55,7 +55,6 @@ export function DatasetTable({
   datasetId: string;
 }) {
   const tableContainerRef = useRef<HTMLDivElement>(null);
-  const listRef = useRef<FixedSizeList>(null);
   const [containerHeight, setContainerHeight] = useState(600);
 
   useEffect(() => {
@@ -141,7 +140,6 @@ export function DatasetTable({
         />
 
         <FixedSizeList
-          ref={listRef}
           height={Math.max(containerHeight - 32, 200)}
           itemCount={tableRows.length}
           itemSize={ROW_HEIGHT}

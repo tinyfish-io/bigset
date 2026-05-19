@@ -1,4 +1,5 @@
-import { mutation } from "./_generated/server";
+import { mutation } from "./_generated/server.js";
+import { assertNotReservedOwner, requireIdentity } from "./lib/authz.js";
 
 type ColType = "text" | "number" | "boolean" | "url" | "date";
 
@@ -163,9 +164,8 @@ const SEED_DATASETS: DatasetDef[] = [
 export const seed = mutation({
   args: {},
   handler: async (ctx) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Not authenticated");
-
+    const identity = await requireIdentity(ctx);
+    assertNotReservedOwner(identity.subject);
     const ownerId = identity.subject;
 
     const existing = await ctx.db
@@ -181,6 +181,7 @@ export const seed = mutation({
         ownerId,
         status: ds.status,
         cadence: ds.cadence,
+        visibility: "private",
         columns: ds.columns,
       });
 

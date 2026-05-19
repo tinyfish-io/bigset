@@ -1,40 +1,13 @@
-import { query, mutation } from "./_generated/server";
+import { query, mutation } from "./_generated/server.js";
+import type { QueryCtx } from "./_generated/server.js";
 import { v } from "convex/values";
-
-export const listWithPreview = query({
-  args: {},
-  handler: async (ctx) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Not authenticated");
-
-    const datasets = await ctx.db
-      .query("datasets")
-      .withIndex("by_owner", (q) => q.eq("ownerId", identity.subject))
-      .collect();
-
-    return Promise.all(
-      datasets.map(async (ds) => {
-        const rows = await ctx.db
-          .query("datasetRows")
-          .withIndex("by_dataset", (q) => q.eq("datasetId", ds._id))
-          .take(5);
-        return {
-          ...ds,
-          previewRows: rows.map((r) => r.data),
-        };
-      })
-    );
-  },
-});
-
-export const get = query({
-  args: { id: v.id("datasets") },
-  handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Not authenticated");
-    return await ctx.db.get(args.id);
-  },
-});
+import type { Doc } from "./_generated/dataModel.js";
+import {
+  assertNotReservedOwner,
+  loadOwnedDataset,
+  loadReadableDataset,
+  requireIdentity,
+} from "./lib/authz.js";
 
 const columnValidator = v.object({
   name: v.string(),
@@ -43,9 +16,70 @@ const columnValidator = v.object({
     v.literal("number"),
     v.literal("boolean"),
     v.literal("url"),
-    v.literal("date")
+    v.literal("date"),
   ),
   description: v.optional(v.string()),
+});
+
+const PREVIEW_ROW_COUNT = 5;
+
+async function attachPreview(ctx: QueryCtx, dataset: Doc<"datasets">) {
+  const rows = await ctx.db
+    .query("datasetRows")
+    .withIndex("by_dataset", (q) => q.eq("datasetId", dataset._id))
+    .take(PREVIEW_ROW_COUNT);
+  return {
+    ...dataset,
+    previewRows: rows.map((r) => r.data),
+  };
+}
+
+/**
+ * The signed-in user's own datasets, each with a small preview of rows.
+ * Scoped by `ownerId === identity.subject`. Returns [] for users with no
+ * datasets — never throws on empty.
+ */
+export const listMine = query({
+  args: {},
+  handler: async (ctx) => {
+    const identity = await requireIdentity(ctx);
+
+    const datasets = await ctx.db
+      .query("datasets")
+      .withIndex("by_owner", (q) => q.eq("ownerId", identity.subject))
+      .collect();
+
+    return Promise.all(datasets.map((ds) => attachPreview(ctx, ds)));
+  },
+});
+
+/**
+ * Curated public datasets, each with a small preview of rows. Callable
+ * WITHOUT authentication — anonymous visitors on the landing page read
+ * through this query.
+ *
+ * Scoped via `by_visibility` index so this stays O(public datasets), not
+ * O(all datasets). Ordered by creation time descending so newer curated
+ * datasets surface first.
+ */
+export const listPublic = query({
+  args: {},
+  handler: async (ctx) => {
+    const datasets = await ctx.db
+      .query("datasets")
+      .withIndex("by_visibility", (q) => q.eq("visibility", "public"))
+      .order("desc")
+      .collect();
+
+    return Promise.all(datasets.map((ds) => attachPreview(ctx, ds)));
+  },
+});
+
+export const get = query({
+  args: { id: v.id("datasets") },
+  handler: async (ctx, args) => {
+    return await loadReadableDataset(ctx, args.id);
+  },
 });
 
 export const create = mutation({
@@ -56,13 +90,14 @@ export const create = mutation({
     columns: v.array(columnValidator),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Not authenticated");
+    const identity = await requireIdentity(ctx);
+    assertNotReservedOwner(identity.subject);
 
     return await ctx.db.insert("datasets", {
       ...args,
       ownerId: identity.subject,
       status: "building",
+      visibility: "private",
     });
   },
 });
@@ -73,29 +108,27 @@ export const updateStatus = mutation({
     status: v.union(
       v.literal("live"),
       v.literal("paused"),
-      v.literal("building")
+      v.literal("building"),
     ),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Not authenticated");
-    await ctx.db.patch(args.id, { status: args.status });
+    const dataset = await loadOwnedDataset(ctx, args.id);
+    await ctx.db.patch(dataset._id, { status: args.status });
   },
 });
 
 export const remove = mutation({
   args: { id: v.id("datasets") },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Not authenticated");
+    const dataset = await loadOwnedDataset(ctx, args.id);
 
     const rows = await ctx.db
       .query("datasetRows")
-      .withIndex("by_dataset", (q) => q.eq("datasetId", args.id))
+      .withIndex("by_dataset", (q) => q.eq("datasetId", dataset._id))
       .collect();
     for (const row of rows) {
       await ctx.db.delete(row._id);
     }
-    await ctx.db.delete(args.id);
+    await ctx.db.delete(dataset._id);
   },
 });
