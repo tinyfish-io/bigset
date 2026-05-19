@@ -9,11 +9,39 @@ command that accepts a prompt and prints JSON.
 
 ## Run
 
+In this script, `--system name=command` means:
+
+- `name` is the label shown in the report, such as `mengzhe` or `edward`.
+- `command` is whatever local command runs that agent once for one prompt.
+- The benchmark calls that command once per prompt and reads JSON from stdout.
+
+It is not a system manager. It is just a benchmark lane.
+
+Recommended plug-in path:
+
+```bash
+cp benchmarks/dataset-agent/adapters/template-adapter.mjs \
+  benchmarks/dataset-agent/adapters/local-mengzhe-adapter.mjs
+```
+
+Edit `local-mengzhe-adapter.mjs` so `runCurrentAgent()` calls the current agent
+code. Then run:
+
 ```bash
 node benchmarks/dataset-agent/run-benchmark.mjs \
-  --system mengzhe='npm run benchmark -- {{promptJson}}' \
-  --system edward='node ./path/to/edward-agent.js --prompt {{promptJson}}'
+  --system mengzhe='node benchmarks/dataset-agent/adapters/local-mengzhe-adapter.mjs'
 ```
+
+For two agents:
+
+```bash
+node benchmarks/dataset-agent/run-benchmark.mjs \
+  --system mengzhe='node benchmarks/dataset-agent/adapters/local-mengzhe-adapter.mjs' \
+  --system edward='node benchmarks/dataset-agent/adapters/local-edward-adapter.mjs'
+```
+
+Local adapter files are gitignored, so people can wire their own branch without
+committing secrets, private paths, or messy prototype code.
 
 Useful placeholders:
 
@@ -28,6 +56,75 @@ The runner also sets env vars for each prompt:
 - `BIGSET_BENCHMARK_PROMPT_ID`
 - `BIGSET_BENCHMARK_PROMPT_QUALITY`
 - `BIGSET_BENCHMARK_REQUIRED_COLUMNS`
+
+Most adapters should read the env vars instead of using placeholders. Use
+placeholders only when the existing agent already has a CLI that accepts args.
+
+## How To Plug In An Existing Agent
+
+Do not rewrite the benchmark. Write a thin adapter around the current agent.
+
+The adapter has one job:
+
+1. Read `BIGSET_BENCHMARK_PROMPT`.
+2. Call the current dataset agent exactly once.
+3. Convert that agent's output into the JSON contract below.
+4. Print only that JSON object to stdout.
+5. Send logs to stderr with `console.error(...)`.
+
+If the existing agent is a JS/TS function, import it in the adapter:
+
+```js
+const prompt = process.env.BIGSET_BENCHMARK_PROMPT;
+const agentResult = await runDatasetAgent({ prompt });
+console.log(JSON.stringify(toBenchmarkPayload(agentResult)));
+```
+
+If the existing agent is a CLI, call it from the adapter:
+
+```js
+const child = spawn("npm", ["run", "agent:run", "--", prompt], {
+  stdio: ["ignore", "pipe", "pipe"],
+});
+```
+
+If the existing agent is a local HTTP server, call it from the adapter:
+
+```js
+const response = await fetch("http://localhost:3001/dataset-agent", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ prompt }),
+});
+```
+
+## Agent Handoff Prompt
+
+Paste this to another coding agent when handing off:
+
+```text
+Your task is to plug the current dataset agent into the benchmark harness.
+
+Do not change benchmarks/dataset-agent/run-benchmark.mjs.
+Create benchmarks/dataset-agent/adapters/local-mengzhe-adapter.mjs from
+benchmarks/dataset-agent/adapters/template-adapter.mjs.
+
+The adapter must:
+- read BIGSET_BENCHMARK_PROMPT
+- run the current dataset/data-collection agent once for that prompt
+- print one JSON object to stdout using the benchmark contract
+- put logs on stderr only
+- include rows, source URLs, evidence quotes, validation issues, usage tokens,
+  and search/fetch/browser/agent metrics when available
+
+Then run:
+node benchmarks/dataset-agent/run-benchmark.mjs \
+  --system mengzhe='node benchmarks/dataset-agent/adapters/local-mengzhe-adapter.mjs'
+
+For quick validation, first run with --prompts pointing at a 2-3 prompt subset.
+Commit only docs or reusable adapter templates. Do not commit local-* adapters,
+env files, logs, reports, screenshots, transcripts, private links, or secrets.
+```
 
 ## Agent Output Contract
 
