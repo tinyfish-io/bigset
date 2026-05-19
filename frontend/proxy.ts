@@ -23,9 +23,13 @@ import type { NextRequest } from "next/server";
 function isPublicPath(req: NextRequest): boolean {
   const path = req.nextUrl.pathname;
   if (path === "/") return true;
-  if (path.startsWith("/sign-in")) return true;
-  if (path.startsWith("/sign-up")) return true;
-  if (path.startsWith("/dataset/") && path !== "/dataset/new") return true;
+  if (path === "/sign-in" || path.startsWith("/sign-in/")) return true;
+  if (path === "/sign-up" || path.startsWith("/sign-up/")) return true;
+  if (
+    path.startsWith("/dataset/") &&
+    path !== "/dataset/new" &&
+    !path.startsWith("/dataset/new/")
+  ) return true;
   return false;
 }
 

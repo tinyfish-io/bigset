@@ -19,7 +19,11 @@ export interface ExportRow {
 
 function csvEscape(value: unknown): string {
   if (value == null) return "";
-  const str = String(value);
+  let str = String(value);
+  // Neutralize spreadsheet formula injection (=, +, -, @).
+  if (/^[=+\-@]/.test(str)) {
+    str = `'${str}`;
+  }
   // RFC 4180: fields containing comma, quote, CR, or LF must be quoted;
   // quotes inside the field are doubled.
   if (/[",\r\n]/.test(str)) {

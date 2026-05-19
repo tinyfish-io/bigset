@@ -31,7 +31,9 @@ export default function DashboardPage() {
   useEffect(() => {
     if (mine && mine.length === 0 && isAuthenticated && !hasSeeded.current) {
       hasSeeded.current = true;
-      seedData({});
+      void seedData({}).catch(() => {
+        hasSeeded.current = false;
+      });
     }
   }, [mine, isAuthenticated, seedData]);
 

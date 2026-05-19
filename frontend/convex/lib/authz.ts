@@ -32,7 +32,6 @@ type AnyCtx =
   | GenericMutationCtx<DataModel>;
 
 const DATASET_NOT_FOUND = "Dataset not found";
-const ROW_NOT_FOUND = "Row not found";
 const UNAUTHENTICATED = "Not authenticated";
 
 /**
@@ -218,7 +217,7 @@ export async function loadReadableRow(
       callerSubject: identity?.subject,
       op: "read",
     });
-    throw new Error(ROW_NOT_FOUND);
+    throw new Error(DATASET_NOT_FOUND);
   }
   const dataset = await loadReadableDataset(ctx, row.datasetId);
   return { row, dataset };

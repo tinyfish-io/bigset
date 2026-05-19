@@ -48,6 +48,10 @@ echo "════════════════════════�
 
 PUB_ID=$(query '{"path":"datasets:listPublic","args":{},"format":"json"}' \
   | python3 -c "import json,sys; print(json.load(sys.stdin)['value'][0]['_id'])")
+if [ -z "${PUB_ID:-}" ]; then
+  echo "No public dataset found. Seed curated data first (publicSeed:seedPublicDatasets)."
+  exit 1
+fi
 
 section "Anonymous READ — public dataset must be accessible"
 run_test "anon datasets.get(public)" \

@@ -407,7 +407,10 @@ export const seedPublicDatasets = internalMutation({
       // (one-time migration). Subsequent runs hit byKey instead.
       const legacy = byName.get(ds.name);
       if (legacy) {
-        await ctx.db.patch(legacy._id, { seedKey: ds.seedKey });
+        await ctx.db.patch(legacy._id, {
+          seedKey: ds.seedKey,
+          visibility: "public",
+        });
         backfilled++;
         continue;
       }
