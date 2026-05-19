@@ -37,7 +37,7 @@ For two agents:
 ```bash
 node benchmarks/dataset-agent/run-benchmark.mjs \
   --system mengzhe='node benchmarks/dataset-agent/adapters/local-mengzhe-adapter.mjs' \
-  --system edward='node benchmarks/dataset-agent/adapters/local-edward-adapter.mjs'
+  --system edward='node benchmarks/dataset-agent/adapters/edward-ai-sdk-adapter.mjs'
 ```
 
 Local adapter files are gitignored, so people can wire their own branch without
@@ -59,6 +59,34 @@ The runner also sets env vars for each prompt:
 
 Most adapters should read the env vars instead of using placeholders. Use
 placeholders only when the existing agent already has a CLI that accepts args.
+
+## Edward AI SDK Agent
+
+This branch includes Edward's AI SDK dataset agent adapter:
+
+```bash
+DATASET_AGENT_RUNTIME=ai-sdk \
+DATASET_AGENT_MODEL=openai/gpt-5.4 \
+node benchmarks/dataset-agent/run-benchmark.mjs \
+  --system edward='node benchmarks/dataset-agent/adapters/edward-ai-sdk-adapter.mjs'
+```
+
+It uses the backend script:
+
+```bash
+npm --prefix backend run dataset-agent:benchmark
+```
+
+For local no-secret smoke tests, use deterministic mode:
+
+```bash
+DATASET_AGENT_RUNTIME=deterministic \
+node benchmarks/dataset-agent/run-benchmark.mjs \
+  --system edward='node benchmarks/dataset-agent/adapters/edward-ai-sdk-adapter.mjs'
+```
+
+Real AI SDK runs require model auth plus `TINYFISH_API_KEY` loaded execution-only.
+Do not commit local env files.
 
 ## How To Plug In An Existing Agent
 
