@@ -17,3 +17,20 @@ Rules:
 - `dataset_name` must be snake_case.
 - All column `name` values must be snake_case and unique.
 - Prefer concrete column choices over speculative ones — better to omit a column than guess wildly.
+
+# @MMeteorL's comments/suggestions:
+# This may be too early in the agent workflow to suggest these without more
+# context. In the current agent system, the agent would first use Tinyfish
+# search to search for candidate urls and fetch those results for analysis
+# of what is the best way to retrieve.
+#
+# For the same reason, instead of source_hint, it may be helpful to generate
+# search_query_hint.
+#
+# Retrieval_hint is a great idea, however, because of the varied sources
+# that Tinyfish search would propose, this may not be the best fit. This
+# should be a decision left for downstream agent with more information.
+#
+# My recommendation is to produce: 'search_queries': generate [X number] of
+# search queries based on the user prompt and data spec. These search queries
+# should be differentiated from each other.
