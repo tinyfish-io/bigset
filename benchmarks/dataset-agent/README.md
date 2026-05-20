@@ -109,6 +109,30 @@ before running the full 16 prompts.
 Real AI SDK runs require model auth plus `TINYFISH_API_KEY` loaded execution-only.
 Do not commit local env files.
 
+## Recipe Healer Prototype
+
+The first self-healing slice is intentionally contract-only.
+
+The recipe runtime treats a generated Playwright script as a runtime artifact,
+not as committed source code. A recipe run still returns the normal dataset-agent
+shape: `rows`, `validationIssues`, `usage`, and `metrics`.
+
+PR1 proves:
+
+- recipe metadata can track dataset id, version, status, requested columns, and
+  minimum required columns
+- fake recipe runs can produce the same output contract as the AI SDK agent
+- production validation is separate from benchmark scoring
+- rows need identity, source URLs, and evidence quotes to be accepted
+- missing requested fields lower completeness but do not automatically reject a
+  row
+- a candidate recipe only replaces the active recipe when validation or benchmark
+  score improves without a regression
+
+PR2 should add the real Playwright executor, timeout handling, artifact capture,
+and sandbox boundaries. DB persistence and cron should wait until that runner is
+trustworthy.
+
 ## How To Plug In An Existing Agent
 
 Do not rewrite the benchmark. Write a thin adapter around the current agent.

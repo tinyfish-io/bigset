@@ -8,6 +8,26 @@ import type {
 } from "./types.js";
 
 export type { DatasetAgentRunInput, DatasetAgentRunResult } from "./types.js";
+export {
+  applyRecipePromotionDecision,
+  decideRecipePromotion,
+} from "./recipe-healer.js";
+export {
+  createDatasetRecipe,
+  createDatasetRecipeRunResult,
+  emptyRecipeRunResult,
+  evaluateRecipeProductionValidation,
+  FakeDatasetRecipeRuntime,
+} from "./recipe-runtime.js";
+export type {
+  DatasetRecipe,
+  DatasetRecipeArtifact,
+  DatasetRecipeBenchmarkScore,
+  DatasetRecipeProductionValidation,
+  DatasetRecipeRunInput,
+  DatasetRecipeRunResult,
+  DatasetRecipeRuntime,
+} from "./recipe-types.js";
 
 export function createDatasetAgentRuntime(input: {
   runtime?: string;
