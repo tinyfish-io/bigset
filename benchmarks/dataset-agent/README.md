@@ -201,7 +201,11 @@ The runner is forgiving and also understands common variants like `data`,
 
 The report includes:
 
-- pass/fail
+- ok/failed/blocked status
+- factual accuracy score
+- failure category
+- expected entity coverage
+- official-domain accuracy
 - wall-clock latency
 - row count
 - required-cell completeness
@@ -222,10 +226,21 @@ Default pass gate:
 
 - command exits `0`
 - stdout contains parseable JSON
-- at least one row
-- at least one source URL
-- at least one evidence quote
-- required-cell completeness is at least `0.75`
+- prompt output satisfies the prompt-specific answer key in `run-benchmark.mjs`
+- answerable prompts include rows, source URLs, evidence quotes, required cells,
+  expected entities, and official domains
+- underspecified prompts can pass by asking for missing inputs or explicitly
+  abstaining instead of inventing facts
+
+Auth, credit, quota, rate-limit, and timeout failures are marked `blocked`, not
+`failed`, so benchmark quality is not polluted by infra noise.
+
+Rescore existing artifacts without rerunning agents:
+
+```bash
+node benchmarks/dataset-agent/run-benchmark.mjs \
+  --rescore-dir benchmark-results/<run-directory>
+```
 
 Cost defaults:
 
