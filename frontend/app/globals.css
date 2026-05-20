@@ -39,11 +39,8 @@
   --font-mono: var(--font-geist-mono);
 }
 
-:root {
-  transition: background-color 0.3s ease, color 0.3s ease;
-}
-
-* {
+.theme-transition,
+.theme-transition *:not(.card-glow *) {
   transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease;
 }
 

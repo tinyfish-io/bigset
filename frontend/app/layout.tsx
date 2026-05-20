@@ -45,7 +45,7 @@ export default function RootLayout({
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
       </head>
-      <body className="min-h-full flex flex-col">
+      <body className="min-h-full flex flex-col theme-transition">
         <ClerkProvider
           signInForceRedirectUrl="/dashboard"
           signUpForceRedirectUrl="/dashboard"

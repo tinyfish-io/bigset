@@ -43,10 +43,8 @@ export default function Home() {
   return (
     <div className="flex flex-1 flex-col">
       <header className="border-b border-border px-6 py-3 flex items-center justify-between bg-surface">
-        <picture>
-          <img src="/BigSetLogo.png" alt="BigSet" className="h-[30px] dark:hidden" />
-          <img src="/BigSetLogoDarkBG.png" alt="BigSet" className="h-[30px] hidden dark:block" />
-        </picture>
+        <img src="/BigSetLogo.png" alt="BigSet" className="h-[30px] dark:hidden" />
+        <img src="/BigSetLogoDarkBG.png" alt="BigSet" className="h-[30px] hidden dark:block" />
         <div className="flex items-center gap-3">
           <ThemeToggle />
           <Link
