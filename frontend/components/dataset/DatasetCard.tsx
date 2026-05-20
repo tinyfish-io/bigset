@@ -25,31 +25,33 @@ export interface DatasetCardData {
 export function DatasetCard({ dataset }: { dataset: DatasetCardData }) {
   return (
     <Link href={`/dataset/${dataset._id}`} className="block group">
-      <div className="flex flex-col h-full border border-border bg-surface transition-all duration-150 group-hover:border-foreground/20 group-hover:shadow-[0_2px_12px_rgba(0,0,0,0.05)] dark:group-hover:shadow-[0_2px_12px_rgba(0,0,0,0.4)]">
-        <div className="px-5 pt-5 pb-4">
-          <h3 className="text-base font-semibold leading-tight tracking-tight">
-            {dataset.name}
-          </h3>
-          <p className="mt-2 text-[13px] leading-relaxed text-muted line-clamp-2">
-            {dataset.description}
-          </p>
-        </div>
-
-        <div className="px-4 pb-4 mt-auto">
-          <MiniTable
-            columns={dataset.columns}
-            rows={dataset.previewRows ?? []}
-          />
-        </div>
-
-        <div className="px-5 py-3 border-t border-border flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <StatusBadge status={dataset.status} />
-            <span className="text-[11px] text-muted">{dataset.cadence}</span>
+      <div className="card-glow rounded-xl">
+        <div className="flex flex-col h-full rounded-xl border border-white/10 bg-surface dark:border-white/[0.06] dark:bg-surface group-hover:border-transparent">
+          <div className="px-5 pt-5 pb-4">
+            <h3 className="text-base font-semibold leading-tight tracking-tight">
+              {dataset.name}
+            </h3>
+            <p className="mt-2 text-[13px] leading-relaxed text-muted line-clamp-2">
+              {dataset.description}
+            </p>
           </div>
-          <span className="text-[11px] text-muted">
-            {dataset.previewRows?.length ?? 0} rows
-          </span>
+
+          <div className="px-4 pb-4 mt-auto">
+            <MiniTable
+              columns={dataset.columns}
+              rows={dataset.previewRows ?? []}
+            />
+          </div>
+
+          <div className="px-5 py-3 border-t border-border flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <StatusBadge status={dataset.status} />
+              <span className="text-[11px] text-muted">{dataset.cadence}</span>
+            </div>
+            <span className="text-[11px] text-muted">
+              {dataset.previewRows?.length ?? 0} rows
+            </span>
+          </div>
         </div>
       </div>
     </Link>

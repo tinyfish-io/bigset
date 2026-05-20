@@ -43,7 +43,10 @@ export default function Home() {
   return (
     <div className="flex flex-1 flex-col">
       <header className="border-b border-border px-6 py-3 flex items-center justify-between bg-surface">
-        <img src="/BigSetLogo.png" alt="BigSet" className="h-[30px]" />
+        <picture>
+          <img src="/BigSetLogo.png" alt="BigSet" className="h-[30px] dark:hidden" />
+          <img src="/BigSetLogoDarkBG.png" alt="BigSet" className="h-[30px] hidden dark:block" />
+        </picture>
         <div className="flex items-center gap-3">
           <ThemeToggle />
           <Link
@@ -58,11 +61,8 @@ export default function Home() {
       <main className="flex-1">
         <section className="px-6 pt-20 pb-16">
           <div className="max-w-2xl mx-auto text-center space-y-7">
-            <img
-              src="/BigSetLogo.png"
-              alt="BigSet"
-              className="h-12 mx-auto"
-            />
+            <img src="/BigSetLogo.png" alt="BigSet" className="h-12 mx-auto dark:hidden" />
+            <img src="/BigSetLogoDarkBG.png" alt="BigSet" className="h-12 mx-auto hidden dark:block" />
             <p className="text-xl leading-relaxed text-foreground/80">
               Live, queryable datasets — described in plain English, kept fresh by web agents.
             </p>

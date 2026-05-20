@@ -83,7 +83,10 @@ export default function DashboardPage() {
   return (
     <div className="flex flex-1 flex-col">
       <header className="border-b border-border px-6 py-3 flex items-center justify-between bg-surface">
-        <img src="/BigSetLogo.png" alt="BigSet" className="h-[30px]" />
+        <picture>
+          <img src="/BigSetLogo.png" alt="BigSet" className="h-[30px] dark:hidden" />
+          <img src="/BigSetLogoDarkBG.png" alt="BigSet" className="h-[30px] hidden dark:block" />
+        </picture>
         <div className="flex items-center gap-4">
           <ThemeToggle />
           <div className="w-px h-4 bg-border" />
@@ -144,12 +147,12 @@ export default function DashboardPage() {
                 }
               }}
               placeholder="Search datasets..."
-              className="w-full border border-border bg-surface py-2.5 pl-10 pr-3 text-sm outline-none placeholder:text-muted/60 focus:border-foreground/30 transition-colors"
+              className="w-full rounded-lg border border-border bg-surface py-2.5 pl-10 pr-3 text-sm outline-none placeholder:text-muted/60 focus:border-foreground/30 transition-[border-color] duration-150"
             />
           </div>
           <Link
             href="/dataset/new"
-            className="border border-accent bg-accent px-5 py-2.5 text-sm font-semibold text-accent-text transition-opacity hover:opacity-90"
+            className="rounded-lg border border-accent bg-accent px-5 py-2.5 text-sm font-semibold text-accent-text transition-opacity hover:opacity-90"
           >
             + New Dataset
           </Link>

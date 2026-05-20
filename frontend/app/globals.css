@@ -39,8 +39,57 @@
   --font-mono: var(--font-geist-mono);
 }
 
+:root {
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+* {
+  transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease;
+}
+
 body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-sans), sans-serif;
+}
+
+@property --border-angle {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+
+@keyframes spin-border {
+  to { --border-angle: 360deg; }
+}
+
+.card-glow {
+  position: relative;
+}
+
+.card-glow::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: conic-gradient(
+    from var(--border-angle),
+    #4285f4, #ea4335, #fbbc04, #34a853, #4285f4
+  );
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+  opacity: 0;
+  transition: opacity 0.25s ease;
+}
+
+.group:hover .card-glow::before {
+  opacity: 0.8;
+  animation: spin-border 0.8s linear infinite;
+}
+
+:root[data-theme="dark"] .group:hover .card-glow::before {
+  opacity: 0.45;
 }

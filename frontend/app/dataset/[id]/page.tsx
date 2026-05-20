@@ -84,7 +84,8 @@ export default function DatasetPage() {
       <header className="border-b border-border px-5 py-3 flex items-center justify-between bg-surface shrink-0">
         <div className="flex items-center gap-3">
           <Link href="/dashboard" className="hover:opacity-80 transition-opacity">
-            <img src="/BigSetLogo.png" alt="BigSet" className="h-[26px]" />
+            <img src="/BigSetLogo.png" alt="BigSet" className="h-[26px] dark:hidden" />
+            <img src="/BigSetLogoDarkBG.png" alt="BigSet" className="h-[26px] hidden dark:block" />
           </Link>
           <span className="text-foreground/15">/</span>
           <h1 className="text-sm font-semibold tracking-tight truncate max-w-md">
