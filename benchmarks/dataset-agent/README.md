@@ -85,6 +85,19 @@ node benchmarks/dataset-agent/run-benchmark.mjs \
   --system edward='node benchmarks/dataset-agent/adapters/edward-ai-sdk-adapter.mjs'
 ```
 
+When using a fresh API key, start with a cheap canary subset:
+
+```bash
+DATASET_AGENT_RUNTIME=ai-sdk \
+DATASET_AGENT_MODEL=openai/gpt-5.4 \
+node benchmarks/dataset-agent/run-benchmark.mjs \
+  --prompt-ids latest-ai-blog-posts,saas-pricing-pages \
+  --system edward='node benchmarks/dataset-agent/adapters/edward-ai-sdk-adapter.mjs'
+```
+
+If the canary is blocked by auth, credits, quota, rate limits, or timeout, fix that
+before running the full 16 prompts.
+
 Real AI SDK runs require model auth plus `TINYFISH_API_KEY` loaded execution-only.
 Do not commit local env files.
 
@@ -149,7 +162,7 @@ Then run:
 node benchmarks/dataset-agent/run-benchmark.mjs \
   --system mengzhe='node benchmarks/dataset-agent/adapters/local-mengzhe-adapter.mjs'
 
-For quick validation, first run with --prompts pointing at a 2-3 prompt subset.
+For quick validation, first run with --prompt-ids on a 2-3 prompt subset.
 Commit only docs or reusable adapter templates. Do not commit local-* adapters,
 env files, logs, reports, screenshots, transcripts, private links, or secrets.
 ```

@@ -10,7 +10,8 @@ const defaultMinimumFactualAccuracy = 0.75;
 
 async function main() {
   const config = parseArgs(process.argv.slice(2));
-  const prompts = JSON.parse(await readFile(config.promptsPath, "utf8"));
+  const allPrompts = JSON.parse(await readFile(config.promptsPath, "utf8"));
+  const prompts = selectPrompts(allPrompts, config.promptIds);
   const runStartedAt = new Date();
   const runDirectory = config.outDirectory ?? join(
     process.cwd(),
@@ -637,6 +638,7 @@ async function runSystemPrompt(input) {
 function parseArgs(args) {
   const config = {
     promptsPath: defaultPromptsPath,
+    promptIds: null,
     systems: [],
     timeoutMs: 10 * 60 * 1000,
     inputUsdPer1M: 0.05,
@@ -651,6 +653,9 @@ function parseArgs(args) {
     const value = args[index + 1];
     if (arg === "--prompts") {
       config.promptsPath = value;
+      index += 1;
+    } else if (arg === "--prompt-ids") {
+      config.promptIds = parsePromptIds(value);
       index += 1;
     } else if (arg === "--out") {
       config.outDirectory = value;
@@ -688,6 +693,50 @@ function parseArgs(args) {
   }
 
   return config;
+}
+
+function parsePromptIds(value) {
+  const promptIds = value
+    .split(",")
+    .map((promptId) => promptId.trim())
+    .filter(Boolean);
+
+  if (promptIds.length === 0) {
+    throw new Error("--prompt-ids requires at least one prompt id");
+  }
+
+  return promptIds;
+}
+
+function selectPrompts(prompts, promptIds) {
+  if (!promptIds) {
+    return prompts;
+  }
+
+  const promptsById = new Map(prompts.map((promptDefinition) => [
+    promptDefinition.id,
+    promptDefinition,
+  ]));
+  const selectedPrompts = [];
+  const missingPromptIds = [];
+
+  for (const promptId of promptIds) {
+    const promptDefinition = promptsById.get(promptId);
+    if (promptDefinition) {
+      selectedPrompts.push(promptDefinition);
+    } else {
+      missingPromptIds.push(promptId);
+    }
+  }
+
+  if (missingPromptIds.length > 0) {
+    const availablePromptIds = prompts.map((promptDefinition) => promptDefinition.id).join(", ");
+    throw new Error(
+      `Unknown prompt id(s): ${missingPromptIds.join(", ")}. Available ids: ${availablePromptIds}`
+    );
+  }
+
+  return selectedPrompts;
 }
 
 function parseSystem(value) {
@@ -882,6 +931,10 @@ async function rescoreBenchmarkRun({ runDirectory, prompts, config }) {
   const rescoredLaneResults = [];
 
   for (const laneResult of previousSummary.laneResults ?? []) {
+    if (config.promptIds && !config.promptIds.includes(laneResult.promptId)) {
+      continue;
+    }
+
     const promptDefinition = promptsById.get(laneResult.promptId);
     if (!promptDefinition) {
       rescoredLaneResults.push(laneResult);
@@ -1524,6 +1577,11 @@ function printHelpAndExit() {
   console.log(`Usage:
 node benchmarks/dataset-agent/run-benchmark.mjs \\
   --system mengzhe='npm run benchmark -- {{promptJson}}' \\
+  --system edward='node ./my-agent.js --prompt {{promptJson}}'
+
+Run a canary subset before spending credits on all prompts:
+node benchmarks/dataset-agent/run-benchmark.mjs \\
+  --prompt-ids latest-ai-blog-posts,saas-pricing-pages \\
   --system edward='node ./my-agent.js --prompt {{promptJson}}'
 
 Rescore existing artifacts without spending credits:
