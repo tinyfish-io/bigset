@@ -18,9 +18,8 @@ export const env = {
   // once the agent runner actually writes to Convex.
   CONVEX_ADMIN_KEY: process.env.CONVEX_SELF_HOSTED_ADMIN_KEY,
 
-  // Used by ./clerk-auth.ts to verify JWTs on user-facing routes. Optional
-  // today because no protected routes exist yet; required as soon as one is
-  // added.
+  // Used by ./clerk-auth.ts to verify JWTs on protected routes (e.g.
+  // /infer-schema). Required for the backend to function.
   CLERK_SECRET_KEY: process.env.CLERK_SECRET_KEY,
   CLERK_PUBLISHABLE_KEY: process.env.CLERK_PUBLISHABLE_KEY,
 

@@ -1,11 +1,7 @@
 import { createStep, createWorkflow } from "@mastra/core/workflows";
 import { z } from "zod";
 import { inferSchema } from "../../pipeline/schema-inference.js";
-import {
-  datasetSchemaSchema,
-  columnDefinitionSchema,
-  retrievalStrategySchema,
-} from "../../pipeline/types.js";
+import { datasetSchemaSchema } from "../../pipeline/types.js";
 
 const inferSchemaStep = createStep({
   id: "infer-schema",
