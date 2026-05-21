@@ -2,7 +2,8 @@ import Fastify from "fastify";
 import fastifyCors from "@fastify/cors";
 
 import { env } from "./env.js";
-import clerkAuthPlugin from "./clerk-auth.js";
+import clerkAuthPlugin, { requireAuth } from "./clerk-auth.js";
+import { inferSchema } from "./pipeline/schema-inference.js";
 
 const fastify = Fastify({ logger: true });
 
@@ -27,17 +28,26 @@ fastify.get("/health", async () => ({ status: "ok" }));
 
 // ────────────────────────────────────────────────────────────────────────
 //  Protected routes — gated by Clerk JWT verification
-//
-//  When user-facing endpoints are added (e.g. manual refresh trigger),
-//  register them inside this scope. Example:
-//
-//    await fastify.register(async (instance) => {
-//      instance.addHook("preHandler", requireAuth);
-//      instance.get("/me", async (req) => req.auth);
-//    });
-//
-//  No protected routes exist yet, so the scope is intentionally empty.
 // ────────────────────────────────────────────────────────────────────────
+
+await fastify.register(async (instance) => {
+  instance.addHook("preHandler", requireAuth);
+
+  instance.post("/infer-schema", async (req, reply) => {
+    const body = req.body as { prompt?: string };
+    if (!body?.prompt || typeof body.prompt !== "string" || !body.prompt.trim()) {
+      return reply.code(400).send({ error: "prompt is required" });
+    }
+
+    try {
+      const schema = await inferSchema(body.prompt.trim());
+      return schema;
+    } catch (err) {
+      req.log.error(err, "Schema inference failed");
+      return reply.code(502).send({ error: "Schema inference failed. Please try again." });
+    }
+  });
+});
 
 try {
   await fastify.listen({ port: env.PORT, host: "0.0.0.0" });

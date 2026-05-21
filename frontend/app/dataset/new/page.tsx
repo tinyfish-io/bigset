@@ -3,9 +3,12 @@
 import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { useAuth } from "@clerk/nextjs";
 import { useMutation, useConvexAuth } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { EVENTS, track } from "@/lib/analytics";
+import { inferSchema, type InferredColumn } from "@/lib/backend";
+
 
 type ColumnType = "text" | "number" | "boolean" | "url" | "date";
 
@@ -43,67 +46,42 @@ const COLUMN_TYPES: { value: ColumnType; label: string; icon: string }[] = [
   { value: "date", label: "Date", icon: "☆" },
 ];
 
-const MOCK_SCHEMAS: Record<string, ProposedColumn[]> = {
-  default: [
-    { id: "1", name: "Name", type: "text", description: "Primary identifier for each entry" },
-    { id: "2", name: "Description", type: "text", description: "Brief summary of the entry" },
-    { id: "3", name: "URL", type: "url", description: "Source website or reference link" },
-    { id: "4", name: "Status", type: "text", description: "Current status or state" },
-    { id: "5", name: "Last Updated", type: "date", description: "When this entry was last refreshed" },
-  ],
-  hiring: [
-    { id: "1", name: "Company", type: "text", description: "Company name" },
-    { id: "2", name: "Description", type: "text", description: "What the company does" },
-    { id: "3", name: "Website", type: "url", description: "Company website" },
-    { id: "4", name: "Hiring", type: "boolean", description: "Currently hiring engineers" },
-    { id: "5", name: "Open Roles", type: "number", description: "Number of open engineering positions" },
-    { id: "6", name: "Stage", type: "text", description: "Funding stage" },
-    { id: "7", name: "Location", type: "text", description: "HQ or primary office location" },
-    { id: "8", name: "Employees", type: "number", description: "Approximate employee count" },
-    { id: "9", name: "LinkedIn", type: "url", description: "Company LinkedIn profile" },
-  ],
-  price: [
-    { id: "1", name: "Product", type: "text", description: "Product or item name" },
-    { id: "2", name: "Retailer", type: "text", description: "Store or seller name" },
-    { id: "3", name: "Price", type: "number", description: "Current listed price" },
-    { id: "4", name: "In Stock", type: "boolean", description: "Whether the item is available" },
-    { id: "5", name: "URL", type: "url", description: "Direct link to product page" },
-    { id: "6", name: "Shipping", type: "text", description: "Shipping cost or method" },
-    { id: "7", name: "Last Checked", type: "date", description: "When price was last verified" },
-  ],
-  insurance: [
-    { id: "1", name: "Provider", type: "text", description: "Insurance company name" },
-    { id: "2", name: "Monthly Premium", type: "number", description: "Monthly cost of the policy" },
-    { id: "3", name: "Deductible", type: "number", description: "Deductible amount" },
-    { id: "4", name: "Coverage Type", type: "text", description: "Full, Basic, or Liability only" },
-    { id: "5", name: "Website", type: "url", description: "Provider website" },
-    { id: "6", name: "AM Best Rating", type: "text", description: "Financial strength rating" },
-    { id: "7", name: "Customer Rating", type: "number", description: "Average customer review score" },
-    { id: "8", name: "Quote Date", type: "date", description: "When quote was obtained" },
-  ],
+const BACKEND_TYPE_MAP: Record<InferredColumn["type"], ColumnType> = {
+  string: "text",
+  enum: "text",
+  url: "url",
+  date: "date",
+  number: "number",
+  boolean: "boolean",
 };
 
-function pickMockSchema(prompt: string): ProposedColumn[] {
-  const lower = prompt.toLowerCase();
-  if (lower.includes("hiring") || lower.includes("companies") || lower.includes("yc") || lower.includes("startup")) return MOCK_SCHEMAS.hiring;
-  if (lower.includes("price") || lower.includes("gpu") || lower.includes("stock") || lower.includes("retail")) return MOCK_SCHEMAS.price;
-  if (lower.includes("insurance") || lower.includes("quote") || lower.includes("premium")) return MOCK_SCHEMAS.insurance;
-  return MOCK_SCHEMAS.default;
+function mapBackendColumn(col: InferredColumn, index: number): ProposedColumn {
+  return {
+    id: String(index + 1),
+    name: col.display_name,
+    type: BACKEND_TYPE_MAP[col.type],
+    description: col.retrieval_hint,
+  };
 }
 
 function TypeSelector({ value, onChange }: { value: ColumnType; onChange: (v: ColumnType) => void }) {
   return (
-    <select
-      value={value}
-      onChange={(e) => onChange(e.target.value as ColumnType)}
-      className="border border-border bg-surface px-2 py-1 text-xs outline-none focus:border-foreground/30"
-    >
-      {COLUMN_TYPES.map((t) => (
-        <option key={t.value} value={t.value}>
-          {t.icon} {t.label}
-        </option>
-      ))}
-    </select>
+    <div className="relative inline-flex">
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value as ColumnType)}
+        className="w-full appearance-none rounded border border-border bg-surface pl-2 pr-8 py-1 text-xs outline-none focus:border-foreground/30 cursor-pointer"
+      >
+        {COLUMN_TYPES.map((t) => (
+          <option key={t.value} value={t.value}>
+            {t.icon} {t.label}
+          </option>
+        ))}
+      </select>
+      <svg className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 h-3 w-3 text-muted" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M3 5l3 3 3-3" />
+      </svg>
+    </div>
   );
 }
 
@@ -117,7 +95,8 @@ export default function NewDatasetPage() {
   const [columns, setColumns] = useState<ProposedColumn[]>([]);
   const [datasetName, setDatasetName] = useState("");
   const [isCreating, setIsCreating] = useState(false);
-  const generatingTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const { getToken } = useAuth();
 
   const createDataset = useMutation(api.datasets.create);
 
@@ -142,24 +121,32 @@ export default function NewDatasetPage() {
 
   if (!isAuthenticated) return null;
 
-  function handleGenerate() {
+  async function handleGenerate() {
     if (!prompt.trim()) return;
+    setError(null);
     setStep("generating");
 
-    generatingTimeout.current = setTimeout(() => {
-      const schema = pickMockSchema(prompt);
-      setColumns(schema.map((c) => ({ ...c })));
-      const words = prompt.trim().split(/\s+/).slice(0, 6);
+    try {
+      const token = await getToken();
+      if (!token) throw new Error("Not authenticated");
+
+      const schema = await inferSchema(prompt.trim(), token);
+
+      setColumns(schema.columns.map(mapBackendColumn));
       setDatasetName(
-        words.map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(" ")
+        schema.dataset_name
+          .split("_")
+          .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+          .join(" ")
       );
-      // Track schema generation. Intentionally NOT sending the prompt
-      // text — user-entered content may be sensitive.
       track(EVENTS.DATASET_SCHEMA_GENERATED, {
-        column_count: schema.length,
+        column_count: schema.columns.length,
       });
       setStep("review");
-    }, 2000);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Something went wrong");
+      setStep("describe");
+    }
   }
 
   function handleUpdateColumn(id: string, field: "name" | "type" | "description", value: string) {
@@ -233,33 +220,20 @@ export default function NewDatasetPage() {
                   onChange={(e) => setPrompt(e.target.value)}
                   placeholder="e.g. YC companies that are currently hiring engineers, with their funding stage, location, and number of open roles"
                   rows={4}
-                  className="w-full border border-border bg-surface px-4 py-3 text-sm outline-none placeholder:text-muted/50 focus:border-foreground/30 transition-colors resize-none"
+                  className="w-full rounded-lg border border-border bg-surface px-4 py-3 text-sm outline-none placeholder:text-muted/50 focus:border-foreground/30 transition-colors resize-none"
                 />
               </div>
 
-              <div className="space-y-2">
-                <label className="block text-sm font-medium">Update frequency</label>
-                <div className="flex flex-wrap gap-2">
-                  {CADENCE_OPTIONS.map((opt) => (
-                    <button
-                      key={opt.value}
-                      onClick={() => setCadence(opt.value)}
-                      className={`border px-3 py-1.5 text-xs font-medium transition-colors ${
-                        cadence === opt.value
-                          ? "border-foreground bg-foreground text-accent-text"
-                          : "border-border bg-surface text-foreground hover:border-foreground/30"
-                      }`}
-                    >
-                      {opt.label}
-                    </button>
-                  ))}
+              {error && (
+                <div className="rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-950/30 dark:text-red-300">
+                  {error}
                 </div>
-              </div>
+              )}
 
               <button
                 onClick={handleGenerate}
                 disabled={!prompt.trim()}
-                className="border border-accent bg-accent px-6 py-2.5 text-sm font-semibold text-accent-text transition-opacity hover:opacity-90 disabled:opacity-30"
+                className="rounded-lg border border-accent bg-accent px-6 py-2.5 text-sm font-semibold text-accent-text transition-opacity hover:opacity-90 disabled:opacity-30"
               >
                 Generate Schema
               </button>
@@ -280,90 +254,127 @@ export default function NewDatasetPage() {
           )}
 
           {step === "review" && (
-            <div className="space-y-8">
+            <div className="space-y-6">
               <div>
                 <h2 className="text-[28px] font-bold tracking-tight leading-none">
                   Review your schema
                 </h2>
                 <p className="mt-2 text-sm text-muted">
-                  We proposed a schema based on your description. Edit column names, types, or remove ones you don&apos;t need.
+                  Edit column names, types, or remove ones you don&apos;t need.
                 </p>
               </div>
 
-              <div className="space-y-2">
-                <label className="block text-sm font-medium">Dataset name</label>
-                <input
-                  type="text"
-                  value={datasetName}
-                  onChange={(e) => setDatasetName(e.target.value)}
-                  className="w-full border border-border bg-surface px-4 py-2.5 text-sm font-medium outline-none focus:border-foreground/30 transition-colors"
-                />
-              </div>
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <label className="block text-sm font-medium">Dataset name</label>
+                  <div className="relative">
+                    <input
+                      type="text"
+                      value={datasetName}
+                      onChange={(e) => setDatasetName(e.target.value)}
+                      className="w-full rounded-lg border border-border bg-surface px-4 py-2.5 text-sm font-medium outline-none focus:border-foreground/30 transition-colors"
+                    />
+                    <div className="group absolute -bottom-3 right-2 z-10">
+                      <div className="flex items-center gap-2 rounded-full border border-border bg-surface px-2.5 py-1 shadow-sm cursor-default transition-all duration-200 group-hover:rounded-xl group-hover:px-4 group-hover:py-3 group-hover:shadow-lg">
+                        <svg className="h-3 w-3 text-muted shrink-0" viewBox="0 0 16 16" fill="currentColor">
+                          <path d="M8 1C4.136 1 1 3.636 1 7c0 1.511.617 2.897 1.636 3.986-.076.71-.396 1.37-.882 1.876a.5.5 0 00.356.852c1.494 0 2.737-.575 3.573-1.206C6.425 12.83 7.19 13 8 13c3.864 0 7-2.636 7-6s-3.136-6-7-6z" />
+                        </svg>
+                        <span className="text-[11px] font-medium text-muted whitespace-nowrap group-hover:hidden">My Prompt...</span>
+                        <div className="hidden group-hover:block max-w-sm">
+                          <p className="text-[10px] uppercase tracking-wider text-muted font-medium mb-1">Your prompt</p>
+                          <p className="text-sm text-foreground/70 leading-relaxed">{prompt}</p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
 
-              <div className="border border-border bg-background px-4 py-3">
-                <p className="text-[11px] uppercase tracking-wider text-muted font-medium mb-1">Your prompt</p>
-                <p className="text-sm text-foreground/70">{prompt}</p>
-                <div className="mt-2 flex items-center gap-3">
-                  <span className="text-[11px] text-muted">
-                    Cadence: {CADENCE_LABELS[cadence]}
-                  </span>
+                <div className="space-y-2">
+                  <label className="block text-sm font-medium">Update frequency</label>
+                  <div className="flex flex-wrap gap-2">
+                    {CADENCE_OPTIONS.map((opt) => (
+                      <button
+                        key={opt.value}
+                        onClick={() => setCadence(opt.value)}
+                        className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${
+                          cadence === opt.value
+                            ? "border-foreground bg-foreground text-accent-text"
+                            : "border-border bg-surface text-foreground hover:border-foreground/30"
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
 
               <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <label className="block text-sm font-medium">Columns ({columns.length})</label>
-                  <button onClick={handleAddColumn} className="text-xs font-medium text-foreground hover:underline">
-                    + Add column
-                  </button>
-                </div>
+                <label className="block text-sm font-medium">Columns ({columns.length})</label>
 
-                <div className="border border-border bg-surface divide-y divide-border">
-                  <div className="grid grid-cols-[1fr_120px_1fr_40px] gap-3 px-4 py-2 bg-background">
-                    <span className="text-[10px] uppercase tracking-wider font-semibold text-muted">Name</span>
+                <div className="rounded-lg border border-border bg-surface divide-y divide-border overflow-hidden">
+                  <div className="grid grid-cols-[100px_1fr_1.5fr_32px] gap-3 px-4 py-2 bg-background">
                     <span className="text-[10px] uppercase tracking-wider font-semibold text-muted">Type</span>
+                    <span className="text-[10px] uppercase tracking-wider font-semibold text-muted">Name</span>
                     <span className="text-[10px] uppercase tracking-wider font-semibold text-muted">Description</span>
                     <span />
                   </div>
 
                   {columns.map((col) => (
-                    <div key={col.id} className="grid grid-cols-[1fr_120px_1fr_40px] gap-3 px-4 py-2.5 items-center">
+                    <div key={col.id} className="grid grid-cols-[100px_1fr_1.5fr_32px] gap-3 px-4 py-2.5 items-start">
+                      <TypeSelector value={col.type} onChange={(v) => handleUpdateColumn(col.id, "type", v)} />
                       <input
                         type="text"
                         value={col.name}
                         onChange={(e) => handleUpdateColumn(col.id, "name", e.target.value)}
-                        className="border border-border bg-background px-2 py-1 text-sm outline-none focus:border-foreground/30"
+                        className="rounded border border-border bg-background px-2 py-1 text-sm outline-none focus:border-foreground/30"
                       />
-                      <TypeSelector value={col.type} onChange={(v) => handleUpdateColumn(col.id, "type", v)} />
-                      <input
-                        type="text"
+                      <textarea
+                        ref={(el) => {
+                          if (el) {
+                            el.style.height = "auto";
+                            el.style.height = el.scrollHeight + "px";
+                          }
+                        }}
                         value={col.description}
-                        onChange={(e) => handleUpdateColumn(col.id, "description", e.target.value)}
-                        className="border border-border bg-background px-2 py-1 text-xs text-muted outline-none focus:border-foreground/30"
+                        onChange={(e) => {
+                          handleUpdateColumn(col.id, "description", e.target.value);
+                          e.target.style.height = "auto";
+                          e.target.style.height = e.target.scrollHeight + "px";
+                        }}
+                        rows={1}
+                        className="rounded border border-border bg-background px-2 py-1 text-sm text-foreground/70 outline-none focus:border-foreground/30 resize-none overflow-hidden"
                         placeholder="Optional description"
                       />
                       <button
                         onClick={() => handleRemoveColumn(col.id)}
-                        className="text-muted hover:text-red-600 transition-colors text-center text-sm"
+                        className="text-muted hover:text-red-600 transition-colors text-center text-sm mt-0.5"
                         title="Remove column"
                       >
                         &times;
                       </button>
                     </div>
                   ))}
+
+                  <button
+                    onClick={handleAddColumn}
+                    className="w-full px-4 py-2.5 text-sm font-medium text-foreground/50 hover:text-foreground bg-foreground/[0.03] hover:bg-foreground/[0.06] transition-colors text-center"
+                  >
+                    + New column
+                  </button>
                 </div>
               </div>
 
               <div className="flex items-center gap-3">
                 <button
                   onClick={handleConfirm}
-                  className="border border-accent bg-accent px-6 py-2.5 text-sm font-semibold text-accent-text transition-opacity hover:opacity-90"
+                  className="rounded-lg border border-accent bg-accent px-6 py-2.5 text-sm font-semibold text-accent-text transition-opacity hover:opacity-90"
                 >
                   Create Dataset
                 </button>
                 <button
                   onClick={() => setStep("describe")}
-                  className="border border-border px-4 py-2.5 text-sm font-medium text-foreground hover:bg-foreground/[0.03] transition-colors"
+                  className="rounded-lg border border-border px-4 py-2.5 text-sm font-medium text-foreground hover:bg-foreground/[0.03] transition-colors"
                 >
                   Back
                 </button>
@@ -372,6 +383,7 @@ export default function NewDatasetPage() {
           )}
         </div>
       </main>
+
     </div>
   );
 }

@@ -28,10 +28,28 @@ services:
       CLIENT_ORIGIN: http://localhost:3500
       CONVEX_URL: http://convex:3210
       PORT: 3501
-      # Optional today; required once internal mutations are called.
       CONVEX_SELF_HOSTED_ADMIN_KEY: ${CONVEX_SELF_HOSTED_ADMIN_KEY:-}
-      # Optional today; required once protected routes are added.
       CLERK_SECRET_KEY: ${CLERK_SECRET_KEY:-}
+      CLERK_PUBLISHABLE_KEY: ${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+    depends_on:
+      convex:
+        condition: service_healthy
+
+  mastra:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.mastra
+    ports:
+      - "4111:4111"
+    volumes:
+      - ./backend/src:/app/src
+    environment:
+      HOST: 0.0.0.0
+      PORT: 4111
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      CONVEX_URL: http://convex:3210
+      CONVEX_SELF_HOSTED_ADMIN_KEY: ${CONVEX_SELF_HOSTED_ADMIN_KEY:-}
     depends_on:
       convex:
         condition: service_healthy
@@ -65,6 +83,7 @@ services:
       NEXT_PUBLIC_CLERK_SIGN_UP_FORCE_REDIRECT_URL: /dashboard
       NEXT_PUBLIC_CLERK_AFTER_SIGN_IN_URL: /dashboard
       NEXT_PUBLIC_CLERK_AFTER_SIGN_UP_URL: /dashboard
+      NEXT_PUBLIC_BACKEND_URL: http://localhost:3501
       # PostHog — analytics no-ops if unset
       NEXT_PUBLIC_POSTHOG_KEY: ${NEXT_PUBLIC_POSTHOG_KEY:-}
       NEXT_PUBLIC_POSTHOG_HOST: ${NEXT_PUBLIC_POSTHOG_HOST:-https://us.i.posthog.com}

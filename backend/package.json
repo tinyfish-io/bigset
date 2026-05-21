@@ -7,21 +7,23 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "infer-schema": "tsx src/cli.ts"
+    "mastra:dev": "mastra dev"
   },
   "dependencies": {
     "@clerk/backend": "^3.4.11",
-    "@openrouter/ai-sdk-provider": "^2.9.0",
     "@fastify/cors": "^11.0.0",
+    "@mastra/core": "^1.36.0",
+    "@openrouter/ai-sdk-provider": "^2.9.0",
+    "ai": "^6.0.0",
     "convex": "^1.39.1",
     "dotenv": "^16.4.0",
     "fastify": "^5.0.0",
-    "ai": "^6.0.0",
     "fastify-plugin": "^5.1.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "mastra": "^1.10.0",
     "tsx": "^4.0.0",
     "typescript": "^5.0.0"
   }

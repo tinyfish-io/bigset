@@ -13,7 +13,9 @@ dev:
 	$(MAKE) convex-env
 	$(MAKE) convex-push
 	@echo ""
-	@echo "Ready! Open http://localhost:3500"
+	@echo "Ready!"
+	@echo "  App:           http://localhost:3500"
+	@echo "  Mastra Studio: http://localhost:4111"
 	docker compose -f docker-compose.dev.yml logs -f
 
 convex-env:

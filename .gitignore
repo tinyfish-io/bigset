@@ -20,4 +20,10 @@ yarn-debug.log*
 tmp/
 temp/
 
-backend/output/
+.mastra
+
+# Local tarballs
+*.tgz
+
+# Internal docs
+BigSet Technical Specs & Goals.md

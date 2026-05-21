@@ -22,6 +22,7 @@ export const env = {
   // today because no protected routes exist yet; required as soon as one is
   // added.
   CLERK_SECRET_KEY: process.env.CLERK_SECRET_KEY,
+  CLERK_PUBLISHABLE_KEY: process.env.CLERK_PUBLISHABLE_KEY,
 
   OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY,
 };

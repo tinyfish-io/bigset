@@ -48,7 +48,10 @@ const clerkPlugin: FastifyPluginAsync = async (fastify: FastifyInstance) => {
     );
   }
 
-  const clerk = createClerkClient({ secretKey: env.CLERK_SECRET_KEY ?? "" });
+  const clerk = createClerkClient({
+    secretKey: env.CLERK_SECRET_KEY ?? "",
+    publishableKey: env.CLERK_PUBLISHABLE_KEY ?? "",
+  });
   fastify.decorate("clerk", clerk);
 };
 
