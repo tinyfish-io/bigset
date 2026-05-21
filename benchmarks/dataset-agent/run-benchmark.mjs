@@ -1578,9 +1578,23 @@ function failureReason({
   }
   if (answerKeyScore && !answerKeyScore.passed) {
     if (answerKeyScore.failureCategory === "source_evidence") {
-      return `Source/domain evidence failed; factual accuracy ${answerKeyScore.factualAccuracyScore}, domain accuracy ${answerKeyScore.domainAccuracyRatio}.`;
+      return [
+        "Source/domain evidence failed:",
+        `domain accuracy ${answerKeyScore.domainAccuracyRatio}`,
+        `evidence support ${answerKeyScore.evidenceSupportRatio}`,
+        `factual accuracy ${answerKeyScore.factualAccuracyScore}.`,
+      ].join(" ");
     }
-    return `Factual accuracy ${answerKeyScore.factualAccuracyScore} below ${answerKeyScore.minimumScore}; missing entities: ${answerKeyScore.missingExpectedEntities.join(", ") || "none"}.`;
+    if (answerKeyScore.claimSupportRatio < 1) {
+      return `Claim support ${answerKeyScore.claimSupportRatio} below 1; factual accuracy ${answerKeyScore.factualAccuracyScore}.`;
+    }
+    if (answerKeyScore.entityCoverageRatio < 1) {
+      return `Entity coverage ${answerKeyScore.entityCoverageRatio} below 1; missing entities: ${answerKeyScore.missingExpectedEntities.join(", ") || "none"}.`;
+    }
+    if (answerKeyScore.factualAccuracyScore < answerKeyScore.minimumScore) {
+      return `Factual accuracy ${answerKeyScore.factualAccuracyScore} below ${answerKeyScore.minimumScore}; missing entities: ${answerKeyScore.missingExpectedEntities.join(", ") || "none"}.`;
+    }
+    return `Answer-key gate failed; factual accuracy ${answerKeyScore.factualAccuracyScore}, entity coverage ${answerKeyScore.entityCoverageRatio}, domain accuracy ${answerKeyScore.domainAccuracyRatio}, claim support ${answerKeyScore.claimSupportRatio}.`;
   }
   return "Benchmark failed.";
 }

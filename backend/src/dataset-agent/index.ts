@@ -70,7 +70,7 @@ export function createDatasetAgentRuntime(input: {
 
   return new AiSdkDatasetAgentRuntime({
     model: createOpenRouterDatasetAgentModel(
-      input.model ?? DEFAULT_DATASET_AGENT_MODEL
+      input.model ?? process.env.DATASET_AGENT_MODEL ?? DEFAULT_DATASET_AGENT_MODEL
     ),
     maxSteps: input.maxSteps ?? numberEnv("DATASET_AGENT_MAX_STEPS", 8),
     toolProvider,

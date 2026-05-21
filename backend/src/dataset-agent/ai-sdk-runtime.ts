@@ -11,6 +11,7 @@ import {
 } from "./output.js";
 import type {
   DatasetAgentMetrics,
+  DatasetAgentRunResult,
   DatasetAgentRunInput,
   DatasetAgentRuntime,
   DatasetAgentToolProvider,
@@ -144,10 +145,7 @@ export class AiSdkDatasetAgentRuntime implements DatasetAgentRuntime {
       metrics,
     });
 
-    if (
-      repairedResult.validationIssues.length <=
-      firstResult.validationIssues.length
-    ) {
+    if (isRepairResultBetter({ firstResult, repairedResult })) {
       return repairedResult;
     }
 
@@ -157,6 +155,69 @@ export class AiSdkDatasetAgentRuntime implements DatasetAgentRuntime {
       metrics: { ...metrics },
     };
   }
+}
+
+function isRepairResultBetter(input: {
+  firstResult: DatasetAgentRunResult;
+  repairedResult: DatasetAgentRunResult;
+}): boolean {
+  if (
+    input.firstResult.rows.length > 0 &&
+    input.repairedResult.rows.length === 0
+  ) {
+    return false;
+  }
+
+  if (
+    input.repairedResult.validationIssues.length === 0 &&
+    input.firstResult.validationIssues.length > 0
+  ) {
+    return true;
+  }
+
+  return (
+    resultUsefulnessScore(input.repairedResult) >
+    resultUsefulnessScore(input.firstResult)
+  );
+}
+
+function resultUsefulnessScore(result: DatasetAgentRunResult): number {
+  const nonEmptyCellCount = result.rows.reduce(
+    (total, row) =>
+      total +
+      Object.values(row.cells).filter((cellValue) => isUsefulCell(cellValue))
+        .length,
+    0
+  );
+  const sourceUrlCount = result.rows.reduce(
+    (total, row) => total + row.sourceUrls.length,
+    0
+  );
+  const evidenceQuoteCount = result.rows.reduce(
+    (total, row) => total + row.evidence.length,
+    0
+  );
+
+  return (
+    result.rows.length * 4 +
+    nonEmptyCellCount * 2 +
+    sourceUrlCount +
+    evidenceQuoteCount -
+    result.validationIssues.length * 3
+  );
+}
+
+function isUsefulCell(value: unknown): boolean {
+  if (value === null || value === undefined) {
+    return false;
+  }
+  if (typeof value === "string") {
+    return value.trim().length > 0;
+  }
+  if (Array.isArray(value)) {
+    return value.length > 0;
+  }
+  return true;
 }
 
 async function generateWithTelemetry(input: {

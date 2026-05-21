@@ -460,6 +460,65 @@ test("AI SDK runtime keeps repair telemetry when repair is worse", async () => {
   });
 });
 
+test("AI SDK runtime does not let repair erase source-backed rows", async () => {
+  let generateCount = 0;
+  const runtime = new AiSdkDatasetAgentRuntime({
+    model: "test/model",
+    toolProvider: fakeToolProvider(),
+    createAgent: () => ({
+      async generate() {
+        generateCount += 1;
+        if (generateCount === 1) {
+          return {
+            output: {
+              rows: [
+                {
+                  cells: {
+                    entity_name: "OpenAI",
+                    source_url: "https://openai.com/news",
+                  },
+                  sourceUrls: ["https://openai.com/news"],
+                  evidence: [
+                    {
+                      columnName: "entity_name",
+                      sourceUrl: "https://openai.com/news",
+                      quote: "OpenAI",
+                    },
+                  ],
+                },
+              ],
+              validationIssues: ["Missing optional title."],
+            },
+            usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+            steps: [{}],
+          };
+        }
+
+        return {
+          output: {
+            rows: [],
+            validationIssues: [],
+          },
+          usage: { promptTokens: 2, completionTokens: 2, totalTokens: 4 },
+          steps: [{}],
+        };
+      },
+    }),
+  });
+
+  const result = await runtime.runDatasetBuild(runInput);
+
+  assert.equal(generateCount, 2);
+  assert.equal(result.rows.length, 1);
+  assert.equal(result.rows[0]?.cells.entity_name, "OpenAI");
+  assert.match(result.validationIssues.join("\n"), /Missing optional title/i);
+  assert.deepEqual(result.usage, {
+    promptTokens: 3,
+    completionTokens: 3,
+    totalTokens: 6,
+  });
+});
+
 function fakeToolProvider(): DatasetAgentToolProvider {
   return {
     async search() {
