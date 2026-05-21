@@ -1,8 +1,8 @@
 # BigSet
 
-Monorepo: `frontend/` (Next.js 16) + `backend/` (Fastify). Run with `make dev` (Docker).
+Monorepo: `frontend/` (Next.js 16) + `backend/` (Fastify + Mastra). Run with `make dev` (Docker).
 
-Frontend on :3500, backend on :3501.
+Frontend on :3500, backend on :3501, Mastra Studio on :4111, Convex dashboard on :6791.
 
 ## Setup
 
@@ -12,8 +12,9 @@ Frontend on :3500, backend on :3501.
    - `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` — from Clerk API Keys
    - `CLERK_SECRET_KEY` — from Clerk API Keys
    - `CLERK_JWT_ISSUER_DOMAIN` — your Frontend API URL (e.g. `https://your-app.clerk.accounts.dev`)
-4. Run `make dev` — this starts all Docker services AND pushes Convex functions automatically.
-5. Generate a Convex admin key (first run only): `docker compose exec convex ./generate_admin_key.sh` and add it as `CONVEX_SELF_HOSTED_ADMIN_KEY` in `frontend/.env.local`, then re-run `make dev`.
+4. Add an OpenRouter API key to the root `.env` file: `OPENROUTER_API_KEY=sk-or-...` (get one at https://openrouter.ai/settings/keys). Docker Compose reads the root `.env` and passes it to the backend and Mastra containers.
+5. Run `make dev` — this starts all Docker services AND pushes Convex functions automatically.
+6. Generate a Convex admin key (first run only): `docker compose exec convex ./generate_admin_key.sh` and add it as `CONVEX_SELF_HOSTED_ADMIN_KEY` in `frontend/.env.local`, then re-run `make dev`.
 
 ## Architecture
 
@@ -21,11 +22,22 @@ Auth is Clerk. Frontend uses `@clerk/nextjs` with `ClerkProvider` wrapping the a
 
 Dataset storage uses Convex (self-hosted at :3210). Schema in `frontend/convex/schema.ts`, functions in `frontend/convex/datasets.ts` and `frontend/convex/datasetRows.ts`. Convex dashboard at :6791.
 
-Frontend uses Convex React hooks (`useQuery`, `useMutation`) with `ConvexProviderWithClerk` for authenticated realtime queries. Use `useConvexAuth()` (not Clerk's `useAuth()`) to check auth state in components.
+Frontend uses Convex React hooks (`useQuery`, `useMutation`) with `ConvexProviderWithClerk` for authenticated realtime queries. Use `useConvexAuth()` (not Clerk's `useAuth()`) to check auth state in components. For backend calls, the frontend uses `useAuth().getToken()` from `@clerk/nextjs` to get a Bearer token and passes it to the API client in `frontend/lib/backend.ts`.
 
-Backend is an agent runner — Fastify + `ConvexHttpClient`. It writes to Convex via HTTP mutations (`backend/src/convex.ts`). It does not handle auth.
+Backend is Fastify + Mastra. Fastify serves the HTTP API (Clerk JWT auth on protected routes via `backend/src/clerk-auth.ts`). Mastra (`backend/src/mastra/`) is the workflow orchestration layer — it wraps pipelines into inspectable workflows with a Studio UI. Both run as separate Docker services sharing the same source code.
+
+The schema inference pipeline: frontend calls `POST /infer-schema` → Fastify verifies the Clerk JWT → calls `inferSchema()` in `backend/src/pipeline/schema-inference.ts` → Claude Sonnet 4.6 via OpenRouter → returns a Zod-validated `DatasetSchema` → frontend maps it to editable columns in the wizard.
 
 Convex functions use `ctx.auth.getUserIdentity()` to get the authenticated user. The `ownerId` field on datasets stores `identity.subject` (Clerk user ID). Do not pass `ownerId` from the client.
+
+## Environment Variables
+
+Docker Compose interpolates variables from the root `.env` file. Key variables:
+- `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY` — shared by frontend and backend
+- `OPENROUTER_API_KEY` — used by backend and Mastra for AI model calls
+- `CONVEX_SELF_HOSTED_ADMIN_KEY` — used by backend for system-level Convex writes
+
+The backend container maps `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` → `CLERK_PUBLISHABLE_KEY` (see `docker-compose.dev.yml`).
 
 ## Convex Deploys
 
