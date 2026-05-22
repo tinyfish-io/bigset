@@ -1,4 +1,10 @@
-import type { DatasetSpec, SourceCandidate, SourceTriageResult } from "../models/schemas.js";
+import type {
+  DatasetSpec,
+  ExtractedRecord,
+  SourceCandidate,
+  SourceTriageResult,
+} from "../models/schemas.js";
+import { scoreDocsUrlForOfficialSource } from "../records/source-urls.js";
 import { getDomain } from "../utils/url.js";
 
 export interface PromptSourceEntity {
@@ -121,6 +127,32 @@ function searchPhrasesForPrompt(prompt: string): string[] {
   return uniqueStrings(phrases);
 }
 
+function wantsDocsSource(policy: PromptSourcePolicy): boolean {
+  return policy.searchPhrases.some((phrase) =>
+    /\b(?:docs|documentation|mcp|model context protocol)\b/i.test(phrase),
+  );
+}
+
+function isWeakDocsSurface(url: string): boolean {
+  return /\b(?:blog|news|course|academy|directory|skilljar)\b/i.test(url);
+}
+
+function preferredDocsHost(entity: PromptSourceEntity): string {
+  const primary = entity.primaryToken.toLowerCase();
+  if (primary === "openai") return "developers.openai.com";
+  if (primary === "cloudflare") return "developers.cloudflare.com";
+  if (primary === "anthropic") return "platform.claude.com";
+  return `docs.${primary}.com`;
+}
+
+function officialDomainAliasesForEntity(entity: PromptSourceEntity): string[] {
+  const primary = entity.primaryToken.toLowerCase();
+  if (primary === "anthropic") {
+    return ["docs.anthropic.com", "platform.claude.com"];
+  }
+  return [];
+}
+
 export function derivePromptSourcePolicy(prompt: string): PromptSourcePolicy {
   const taskText = taskTextFromPrompt(prompt);
   const entities = extractExplicitEntities(taskText);
@@ -161,11 +193,21 @@ export function promptSourceSearchQueries(policy: PromptSourcePolicy): string[] 
   const phrases = policy.searchPhrases.length
     ? policy.searchPhrases
     : ["official source"];
+  const primaryPhrase = phrases[0] ?? "official source";
+  const siteQualifiedDocsQueries = wantsDocsSource(policy)
+    ? policy.entities.map(
+        (entity) =>
+          `${entity.name} ${primaryPhrase} site:${preferredDocsHost(entity)}`,
+      )
+    : [];
 
   return uniqueStrings(
-    policy.entities.flatMap((entity) =>
-      phrases.map((phrase) => `${entity.name} ${phrase}`),
-    ),
+    [
+      ...siteQualifiedDocsQueries,
+      ...policy.entities.flatMap((entity) =>
+        phrases.map((phrase) => `${entity.name} ${phrase}`),
+      ),
+    ],
   );
 }
 
@@ -199,7 +241,32 @@ export function urlMatchesPromptSourcePolicy(
   if (GENERIC_HOSTED_DOMAIN.test(domain)) {
     return false;
   }
-  return policy.entities.some((entity) => domain.includes(entity.primaryToken));
+  return policy.entities.some(
+    (entity) => urlMatchesEntitySourcePolicy(url, entity, policy),
+  );
+}
+
+function urlMatchesEntitySourcePolicy(
+  url: string,
+  entity: PromptSourceEntity,
+  policy: PromptSourcePolicy,
+): boolean {
+  const domain = getDomain(url).toLowerCase();
+  if (GENERIC_HOSTED_DOMAIN.test(domain)) {
+    return false;
+  }
+  const entityOwnedDomain =
+    domain.includes(entity.primaryToken) ||
+    officialDomainAliasesForEntity(entity).some((alias) =>
+      domain.endsWith(alias),
+    );
+  if (!entityOwnedDomain) {
+    return false;
+  }
+  if (wantsDocsSource(policy) && isWeakDocsSurface(url)) {
+    return false;
+  }
+  return true;
 }
 
 export function sourceCandidatePolicyBoost(
@@ -224,9 +291,20 @@ export function sourceCandidatePolicyBoost(
     /\b(official|pricing|docs|documentation|investor relations|earnings|blog)\b/.test(
       searchableText,
     );
+  const docsSurface =
+    wantsDocsSource(policy) &&
+    /(?:^|\/\/)(?:docs|developers)\.|\/(?:docs|documentation|guides|api\/docs|agents)(?:\/|$)/.test(
+      searchableText,
+    );
+  const weakDocsSurface =
+    wantsDocsSource(policy) &&
+    /\b(?:blog|news|course|academy|directory|skilljar)\b/.test(searchableText);
 
-  if (matchedDomain && matchedEntity && officialLanguage) return 5;
-  if (matchedDomain && matchedEntity) return 4;
+  if (matchedDomain && matchedEntity && docsSurface) return 7;
+  if (matchedDomain && matchedEntity && officialLanguage) {
+    return weakDocsSurface ? 2 : 5;
+  }
+  if (matchedDomain && matchedEntity) return weakDocsSurface ? 1 : 4;
   if (matchedDomain) return 3;
   if (matchedEntity && officialLanguage) return 1;
   return -2;
@@ -263,4 +341,80 @@ export function applyPromptSourcePolicyToTriageResult(
       result.suggested_action ??
       "Search/fetch the named entity's official domain instead of extracting this third-party page.",
   };
+}
+
+export function recordMatchesPromptSourcePolicy(
+  record: ExtractedRecord,
+  spec: DatasetSpec,
+  policy: PromptSourcePolicy,
+): boolean {
+  if (!policy.requiresOfficialSource) {
+    return true;
+  }
+
+  const entity = matchingPromptEntityForRecord(record, spec, policy);
+  if (!entity) {
+    return true;
+  }
+
+  const urls = urlsForRecordSourcePolicy(record, spec);
+  if (urls.length === 0) {
+    return false;
+  }
+
+  return urls.some((url) => urlMatchesEntitySourcePolicy(url, entity, policy));
+}
+
+function matchingPromptEntityForRecord(
+  record: ExtractedRecord,
+  spec: DatasetSpec,
+  policy: PromptSourcePolicy,
+): PromptSourceEntity | null {
+  const primaryColumn =
+    spec.dedupe_keys[0] ??
+    spec.columns.find((column) =>
+      /(name|title|company|organization|entity)/i.test(column.name),
+    )?.name;
+  const primaryValue = String(
+    primaryColumn ? record.row[primaryColumn] ?? "" : "",
+  ).toLowerCase();
+  const rowText = Object.values(record.row).join(" ").toLowerCase();
+
+  return (
+    policy.entities.find((entity) => {
+      const name = entity.name.toLowerCase();
+      return (
+        primaryValue.includes(name) ||
+        primaryValue.includes(entity.primaryToken) ||
+        rowText.includes(name)
+      );
+    }) ?? null
+  );
+}
+
+function urlsForRecordSourcePolicy(
+  record: ExtractedRecord,
+  spec: DatasetSpec,
+): string[] {
+  const urls = new Set<string>();
+  for (const url of record.source_urls) {
+    if (isHttpUrl(url)) urls.add(url.trim());
+  }
+  for (const column of spec.columns) {
+    if (!isUrlLikeColumnName(column.name)) continue;
+    const value = record.row[column.name];
+    if (isHttpUrl(value)) urls.add(value.trim());
+  }
+  return [...urls].sort((a, b) => {
+    return scoreDocsUrlForOfficialSource(b) - scoreDocsUrlForOfficialSource(a);
+  });
+}
+
+function isHttpUrl(value: unknown): value is string {
+  return typeof value === "string" && /^https?:\/\//i.test(value.trim());
+}
+
+function isUrlLikeColumnName(name: string): boolean {
+  const lower = name.toLowerCase();
+  return lower === "url" || lower.endsWith("_url") || lower.includes("url");
 }

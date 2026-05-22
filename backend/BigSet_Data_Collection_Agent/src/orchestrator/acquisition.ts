@@ -7,6 +7,7 @@ import { getPrimaryKeyValue } from "../merge/records.js";
 import { createFetchQueue, createSearchQueue } from "../queue/pools.js";
 import {
   derivePromptSourcePolicy,
+  recordMatchesPromptSourcePolicy,
   sourceCandidatePolicyBoost,
   type PromptSourcePolicy,
 } from "../agents/source-policy.js";
@@ -237,6 +238,18 @@ export async function runAcquisitionPhase(options: {
     memory: options.memory,
     log: options.log,
   });
+  const records = sourcePolicy.requiresOfficialSource
+    ? processed.records.filter((record) =>
+        recordMatchesPromptSourcePolicy(record, options.spec, sourcePolicy),
+      )
+    : processed.records;
+  const droppedRecords = processed.records.length - records.length;
+  if (droppedRecords > 0) {
+    options.log(
+      options.label,
+      `Dropped ${droppedRecords} record(s) that lacked entity-owned source URLs`,
+    );
+  }
 
   const allFetchedUrls = [
     ...new Set([
@@ -250,7 +263,7 @@ export async function runAcquisitionPhase(options: {
     fetchedUrls: allFetchedUrls,
     failedUrls,
     fetchedPages,
-    records: processed.records,
+    records,
     pagesFetched: fetchedPages.length,
     triage: processed.summary,
     triageResults: processed.triageResults,

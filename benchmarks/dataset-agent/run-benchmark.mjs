@@ -195,7 +195,7 @@ const answerKeysByPromptId = {
     verifiedAt,
     sourceUrls: [
       "https://developers.openai.com/api/docs/mcp",
-      "https://docs.anthropic.com/en/docs/agents-and-tools/mcp-connector",
+      "https://platform.claude.com/docs/en/agents-and-tools/mcp-connector",
       "https://developers.cloudflare.com/agents/model-context-protocol/",
     ],
     scoringNotes:
@@ -214,7 +214,7 @@ const answerKeysByPromptId = {
         id: "anthropic",
         label: "Anthropic",
         aliases: ["anthropic"],
-        allowedSourceDomains: ["docs.anthropic.com"],
+        allowedSourceDomains: ["docs.anthropic.com", "platform.claude.com"],
         requiredText: ["mcp"],
       },
       {
@@ -231,6 +231,7 @@ const answerKeysByPromptId = {
       "platform.openai.com",
       "openai.com",
       "docs.anthropic.com",
+      "platform.claude.com",
       "developers.cloudflare.com",
     ],
   },

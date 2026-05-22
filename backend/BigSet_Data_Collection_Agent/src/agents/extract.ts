@@ -13,6 +13,7 @@ import {
   type ExtractedRecord,
   type FetchedPage,
 } from "../models/schemas.js";
+import { deriveRecordSourceUrls } from "../records/source-urls.js";
 
 /**
  * Extraction is always one source per LLM call in process-pages.ts:
@@ -169,19 +170,6 @@ function provenanceUrlColumns(spec: DatasetSpec): ColumnDef[] {
   return spec.columns.filter(isProvenanceUrlColumn);
 }
 
-function collectSourceUrls(
-  pageUrl: string,
-  evidence: Array<{ url?: string }>,
-): string[] {
-  const urls = new Set<string>([pageUrl]);
-  for (const item of evidence) {
-    if (item.url?.startsWith("http")) {
-      urls.add(item.url);
-    }
-  }
-  return [...urls];
-}
-
 /** Attach evidence URLs and source_urls; keep LLM row and provenance values. */
 export function finalizeExtractedRecord(
   record: LlmExtractionRecord,
@@ -203,7 +191,12 @@ export function finalizeExtractedRecord(
     }
   }
 
-  const source_urls = collectSourceUrls(pageUrl, evidence);
+  const source_urls = deriveRecordSourceUrls({
+    spec,
+    row,
+    evidence,
+    fallbackUrls: [pageUrl],
+  });
 
   return extractedRecordSchema.parse({
     row,

@@ -6,11 +6,13 @@ import {
   applyPromptSourcePolicyToTriageResult,
   derivePromptSourcePolicy,
   promptSourceSearchQueries,
+  recordMatchesPromptSourcePolicy,
   sourceCandidatePolicyBoost,
   urlMatchesPromptSourcePolicy,
 } from "../BigSet_Data_Collection_Agent/src/agents/source-policy.js";
 import type {
   DatasetSpec,
+  ExtractedRecord,
   SourceCandidate,
   SourceTriageResult,
 } from "../BigSet_Data_Collection_Agent/src/models/schemas.js";
@@ -157,10 +159,10 @@ test("prompt source policy boosts official candidates", () => {
     ["Anthropic", "OpenAI", "Cloudflare"],
   );
   assert.deepEqual(promptSourceSearchQueries(policy).slice(0, 4), [
+    "Anthropic MCP connector docs site:platform.claude.com",
+    "OpenAI MCP connector docs site:developers.openai.com",
+    "Cloudflare MCP connector docs site:developers.cloudflare.com",
     "Anthropic MCP connector docs",
-    "Anthropic model context protocol docs",
-    "OpenAI MCP connector docs",
-    "OpenAI model context protocol docs",
   ]);
   const official: SourceCandidate = {
     url: "https://developers.cloudflare.com/agents/model-context-protocol/",
@@ -180,3 +182,131 @@ test("prompt source policy boosts official candidates", () => {
       sourceCandidatePolicyBoost(thirdParty, policy),
   );
 });
+
+test("prompt source policy prefers docs surfaces over blogs, courses, and directories", () => {
+  const policy = derivePromptSourcePolicy(
+    "I need official docs pages for setting up MCP servers from Anthropic, OpenAI, and Cloudflare.",
+  );
+  const docs: SourceCandidate = {
+    url: "https://platform.claude.com/docs/en/agents-and-tools/mcp-connector",
+    title: "Model Context Protocol connector",
+    snippet: "Official Anthropic documentation for MCP connector setup.",
+    query: "Anthropic MCP connector docs",
+  };
+  const course: SourceCandidate = {
+    url: "https://anthropic.skilljar.com/introduction-to-model-context-protocol",
+    title: "Introduction to Model Context Protocol",
+    snippet: "Anthropic course for learning MCP.",
+    query: "Anthropic MCP connector docs",
+  };
+  const blog: SourceCandidate = {
+    url: "https://blog.cloudflare.com/code-mode/",
+    title: "Code Mode: the better way to use MCP",
+    snippet: "Cloudflare blog post about MCP.",
+    query: "Cloudflare MCP connector docs",
+  };
+  const cloudflareDocs: SourceCandidate = {
+    url: "https://developers.cloudflare.com/agents/model-context-protocol/",
+    title: "Model Context Protocol",
+    snippet: "Official Cloudflare docs for MCP servers.",
+    query: "Cloudflare MCP connector docs",
+  };
+
+  assert.ok(
+    sourceCandidatePolicyBoost(docs, policy) >
+      sourceCandidatePolicyBoost(course, policy),
+  );
+  assert.equal(
+    urlMatchesPromptSourcePolicy(
+      "https://platform.claude.com/docs/en/agents-and-tools/mcp-connector",
+      policy,
+    ),
+    true,
+  );
+  assert.ok(
+    sourceCandidatePolicyBoost(cloudflareDocs, policy) >
+      sourceCandidatePolicyBoost(blog, policy),
+  );
+});
+
+test("prompt source policy rejects records sourced from another entity's docs", () => {
+  const policy = derivePromptSourcePolicy(
+    "I need official docs pages for setting up MCP servers from Anthropic, OpenAI, and Cloudflare.",
+  );
+  const spec: DatasetSpec = {
+    intent_summary: "Official MCP docs pages.",
+    target_row_count: 3,
+    row_grain: "one row per vendor",
+    columns: [
+      {
+        name: "entity_name",
+        type: "string",
+        description: "Vendor name.",
+        required: true,
+      },
+      {
+        name: "docs_url",
+        type: "string",
+        description: "Official docs page URL.",
+        required: true,
+      },
+    ],
+    dedupe_keys: ["entity_name"],
+    search_queries: [],
+    extraction_hints: "",
+  };
+
+  assert.equal(
+    recordMatchesPromptSourcePolicy(
+      record("Anthropic", "https://modelcontextprotocol.io/docs/develop/build-server"),
+      spec,
+      policy,
+    ),
+    false,
+  );
+  assert.equal(
+    recordMatchesPromptSourcePolicy(
+      record(
+        "Anthropic",
+        "https://platform.claude.com/docs/en/agents-and-tools/remote-mcp-servers",
+      ),
+      spec,
+      policy,
+    ),
+    true,
+  );
+  assert.equal(
+    recordMatchesPromptSourcePolicy(
+      record("OpenAI", "https://developers.openai.com/blog"),
+      spec,
+      policy,
+    ),
+    false,
+  );
+  assert.equal(
+    recordMatchesPromptSourcePolicy(
+      record("OpenAI", "https://developers.openai.com/api/docs/guides/tools-connectors-mcp"),
+      spec,
+      policy,
+    ),
+    true,
+  );
+});
+
+function record(entityName: string, docsUrl: string): ExtractedRecord {
+  return {
+    row: {
+      entity_name: entityName,
+      docs_url: docsUrl,
+    },
+    evidence: [
+      {
+        field: "docs_url",
+        url: docsUrl,
+        quote: docsUrl,
+      },
+    ],
+    source_urls: [docsUrl],
+    extraction_confidence: 0.8,
+  };
+}
