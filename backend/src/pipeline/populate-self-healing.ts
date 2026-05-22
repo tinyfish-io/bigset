@@ -167,30 +167,48 @@ export class MastraPopulateRecipeRuntime implements PopulateRecipeRuntime {
       result = emptyPopulateRuntimeResult([failureMessage]);
     }
 
-    const productionValidation = validatePopulateRuntimeResult({
-      result,
+    return populateRecipeRunResultFromRuntimeResult({
+      recipe: input.recipe,
       context: input.context,
-    });
-    const artifacts = artifactsForRun({
       result,
       failureMessage,
-      validationIssues: result.validationIssues,
-      productionValidation,
-    });
-    const completedAt = new Date().toISOString();
-
-    return {
-      ...result,
-      recipeId: input.recipe.recipeId,
-      recipeVersion: input.recipe.version,
-      runStatus: productionValidation.isValid ? "succeeded" : "failed",
       startedAt,
-      completedAt,
-      runtimeMs: Date.now() - startedAtMs,
-      productionValidation,
-      artifacts,
-    };
+      startedAtMs,
+    });
   }
+}
+
+export function populateRecipeRunResultFromRuntimeResult(input: {
+  recipe: PopulateRecipe;
+  context: DatasetContext;
+  result: PopulateRuntimeResult;
+  failureMessage?: string;
+  startedAt: string;
+  startedAtMs: number;
+}): PopulateRecipeRunResult {
+  const productionValidation = validatePopulateRuntimeResult({
+    result: input.result,
+    context: input.context,
+  });
+  const artifacts = artifactsForRun({
+    result: input.result,
+    failureMessage: input.failureMessage,
+    validationIssues: input.result.validationIssues,
+    productionValidation,
+  });
+  const completedAt = new Date().toISOString();
+
+  return {
+    ...input.result,
+    recipeId: input.recipe.recipeId,
+    recipeVersion: input.recipe.version,
+    runStatus: productionValidation.isValid ? "succeeded" : "failed",
+    startedAt: input.startedAt,
+    completedAt,
+    runtimeMs: Date.now() - input.startedAtMs,
+    productionValidation,
+    artifacts,
+  };
 }
 
 export class DefaultPopulateRecipeAuthor implements PopulateRecipeAuthor {
@@ -836,7 +854,7 @@ function artifactsForRun(input: {
   return artifacts;
 }
 
-function emptyPopulateRuntimeResult(validationIssues: string[]): PopulateRuntimeResult {
+export function emptyPopulateRuntimeResult(validationIssues: string[]): PopulateRuntimeResult {
   return {
     rows: [],
     validationIssues,
