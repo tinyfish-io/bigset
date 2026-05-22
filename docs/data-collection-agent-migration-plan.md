@@ -191,6 +191,10 @@ The current layer does not yet:
      enabled
    - confirm the canary emits explicit `agent_browser_actions` or equivalent
      fields in the collection report; source outcomes alone are not enough
+   - check `summary.json` for `playwrightCandidateStatus`,
+     `processTraceBrowserStepCount`, and
+     `playwrightCandidateBrowserStepCount` so the canary proves browser-action
+     provenance, not only row/evidence quality
    - full benchmark only after the 2-prompt run is not obviously broken
    - live `--dataset-id` dry-run only after Convex/env prerequisites are ready
    - `--commit` only on a throwaway dataset first

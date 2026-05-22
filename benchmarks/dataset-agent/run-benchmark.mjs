@@ -627,6 +627,18 @@ async function runSystemPrompt(input) {
     needsReviewCount: validation.needsReviewCount,
     validationIssueCount: normalized.validationIssues.length,
     validationIssues: normalized.validationIssues,
+    selfHealingAction: normalized.diagnostics.selfHealingAction,
+    selfHealingArtifactKinds: normalized.diagnostics.artifactKinds,
+    processTraceStepCount: normalized.diagnostics.processTrace?.stepCount,
+    processTraceBrowserStepCount:
+      normalized.diagnostics.processTrace?.browserStepCount,
+    playwrightCandidateStatus:
+      normalized.diagnostics.playwrightCandidateReadiness?.status,
+    playwrightCandidateBrowserStepCount:
+      normalized.diagnostics.playwrightCandidateReadiness?.browserStepCount,
+    playwrightCandidateSourceUrlCount:
+      normalized.diagnostics.playwrightCandidateReadiness?.sourceUrlCount,
+    diagnostics: normalized.diagnostics,
     usage,
     searchCallCount: normalized.metrics.searchCallCount,
     fetchCallCount: normalized.metrics.fetchCallCount,
@@ -930,7 +942,7 @@ function extractLastJsonObject(value) {
   return null;
 }
 
-function normalizePayload(payload) {
+export function normalizePayload(payload) {
   const rows = arrayValue(
     payload?.rows ??
       payload?.data ??
@@ -943,10 +955,12 @@ function normalizePayload(payload) {
   );
   const metrics = payload?.metrics ?? payload?.benchmarkMetrics ?? {};
   const usage = normalizeUsage(payload?.usage ?? metrics.usage ?? metrics);
+  const diagnostics = objectValue(payload?.diagnostics);
 
   return {
     rows,
     validationIssues,
+    diagnostics,
     usage,
     metrics: {
       searchCallCount: numberValue(metrics.searchCallCount ?? metrics.searchCalls),
@@ -1679,6 +1693,13 @@ function capabilityDiagnosticReason(validationIssues) {
 
 function arrayValue(value) {
   return Array.isArray(value) ? value : [];
+}
+
+function objectValue(value) {
+  if (!value || Array.isArray(value) || typeof value !== "object") {
+    return {};
+  }
+  return value;
 }
 
 function stringArrayValue(value) {

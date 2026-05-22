@@ -114,6 +114,38 @@ When TinyFish Agent result JSON includes explicit `browser_actions` or
 `actions` arrays are ignored because they are not browser-specific enough to
 replay honestly.
 
+The collection self-healing adapter also prints a compact `diagnostics` object
+to stdout so benchmark artifacts can answer the Playwright readiness question
+without committing raw run folders:
+
+```json
+{
+  "diagnostics": {
+    "selfHealingAction": "generated_initial_recipe",
+    "artifactKinds": ["process-trace", "playwright-candidate-readiness"],
+    "processTrace": {
+      "runtime": "collection",
+      "stepCount": 12,
+      "browserStepCount": 1,
+      "sourceUrlCount": 4
+    },
+    "playwrightCandidateReadiness": {
+      "status": "ready",
+      "browserStepCount": 1,
+      "sourceUrlCount": 4
+    }
+  }
+}
+```
+
+`summary.json` carries the same high-signal fields on each lane result:
+`selfHealingAction`, `selfHealingArtifactKinds`, `processTraceStepCount`,
+`processTraceBrowserStepCount`, `playwrightCandidateStatus`,
+`playwrightCandidateBrowserStepCount`, and
+`playwrightCandidateSourceUrlCount`. Use those fields to verify whether an
+Agent canary actually emitted browser actions before starting a Playwright
+compiler.
+
 ## Verify Self-Healing Stack
 
 Use this before asking someone else to migrate a new collection agent into the

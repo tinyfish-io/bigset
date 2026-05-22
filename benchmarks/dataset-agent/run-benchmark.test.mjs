@@ -4,8 +4,10 @@ import { test } from "node:test";
 import {
   failureReason,
   findInfrastructureBlockerReason,
+  normalizePayload,
   scoreBenchmarkRows,
 } from "./run-benchmark.mjs";
+import { selfHealingDiagnosticsFromTick } from "./adapters/self-healing-output.mjs";
 
 const passingValidation = {
   rowCount: 1,
@@ -176,4 +178,58 @@ test("domain scoring counts product, careers, and docs URL cells", () => {
     assert.equal(score.passed, true, `${item.label} should pass`);
     assert.equal(score.domainAccuracyRatio, 1, `${item.label} domain`);
   }
+});
+
+test("self-healing diagnostics summarize trace and readiness artifacts", () => {
+  const diagnostics = selfHealingDiagnosticsFromTick({
+    tick: { action: "generated_initial_recipe" },
+    run: {
+      recipeId: "recipe-v1",
+      artifacts: [
+        {
+          kind: "process-trace",
+          content: JSON.stringify({
+            runtime: "collection",
+            searchQueries: ["example"],
+            fetchedUrls: ["https://example.com"],
+            sourceArtifacts: [{
+              url: "https://example.com",
+              status: "succeeded",
+            }],
+            steps: [
+              { kind: "search" },
+              { kind: "browser" },
+            ],
+          }),
+        },
+        {
+          kind: "playwright-candidate-readiness",
+          content: JSON.stringify({
+            status: "ready",
+            reasons: [],
+            browserStepCount: 1,
+            sourceUrlCount: 1,
+          }),
+        },
+      ],
+    },
+  });
+  const normalized = normalizePayload({
+    rows: [],
+    validationIssues: [],
+    diagnostics,
+  });
+
+  assert.equal(normalized.diagnostics.selfHealingAction, "generated_initial_recipe");
+  assert.deepEqual(normalized.diagnostics.artifactKinds, [
+    "process-trace",
+    "playwright-candidate-readiness",
+  ]);
+  assert.equal(normalized.diagnostics.processTrace.runtime, "collection");
+  assert.equal(normalized.diagnostics.processTrace.stepCount, 2);
+  assert.equal(normalized.diagnostics.processTrace.browserStepCount, 1);
+  assert.equal(
+    normalized.diagnostics.playwrightCandidateReadiness.status,
+    "ready"
+  );
 });
