@@ -9,10 +9,12 @@ import {
 } from "@tanstack/react-table";
 import { FixedSizeList } from "react-window";
 import type { DatasetMeta, DatasetRow, DatasetColumn } from "./types";
-import { useSelection } from "./use-selection";
+import type { useSelection } from "./use-selection";
 import { usePersistedColumnWidths } from "./use-persisted-widths";
 import { TableHeader } from "./TableHeader";
 import { DataRow, type DataRowData } from "./DataRow";
+
+type Selection = ReturnType<typeof useSelection>;
 
 const CHECKBOX_COL_WIDTH = 40;
 const DEFAULT_COL_WIDTH = 180;
@@ -45,14 +47,24 @@ function buildColumns(
   return [selectCol, ...dataCols];
 }
 
+/**
+ * Renders the dataset's rows in a TanStack-Table + react-window grid.
+ *
+ * `selection` is owned by the parent page (so the page can export only
+ * selected rows). Without it, this component is a pure view of rows +
+ * columns; with it, header/row checkboxes drive selection through the
+ * parent.
+ */
 export function DatasetTable({
   dataset,
   rows,
   datasetId,
+  selection,
 }: {
   dataset: DatasetMeta;
   rows: DatasetRow[];
   datasetId: string;
+  selection: Selection;
 }) {
   const tableContainerRef = useRef<HTMLDivElement>(null);
   const [containerHeight, setContainerHeight] = useState(600);
@@ -69,8 +81,6 @@ export function DatasetTable({
     return () => observer.disconnect();
   }, []);
 
-  const rowIds = useMemo(() => rows.map((r) => r._id), [rows]);
-  const selection = useSelection(rowIds);
   const [storedWidths, setStoredWidths] = usePersistedColumnWidths(datasetId);
 
   const columns = useMemo(

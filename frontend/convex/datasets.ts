@@ -8,6 +8,7 @@ import {
   loadReadableDataset,
   requireIdentity,
 } from "./lib/authz.js";
+import { requireQuotaRemaining } from "./lib/quota.js";
 
 const columnValidator = v.object({
   name: v.string(),
@@ -92,6 +93,10 @@ export const create = mutation({
   handler: async (ctx, args) => {
     const identity = await requireIdentity(ctx);
     assertNotReservedOwner(identity.subject);
+    // Block dataset creation at full exhaustion — a dataset you can't
+    // populate is just clutter. Row generation later will re-check, so
+    // this is a UX safeguard, not the only line of defense.
+    await requireQuotaRemaining(ctx, identity.subject, 1);
 
     return await ctx.db.insert("datasets", {
       ...args,

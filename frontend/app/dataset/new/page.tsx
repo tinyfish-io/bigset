@@ -169,22 +169,36 @@ export default function NewDatasetPage() {
   async function handleConfirm() {
     if (isCreating) return;
     setIsCreating(true);
-    const datasetId = await createDataset({
-      name: datasetName,
-      description: prompt,
-      cadence: CADENCE_LABELS[cadence],
-      columns: columns.map((c) => ({
-        name: c.name,
-        type: c.type,
-        description: c.description || undefined,
-      })),
-    });
-    track(EVENTS.DATASET_CREATED, {
-      datasetId,
-      column_count: columns.length,
-      cadence: CADENCE_LABELS[cadence],
-    });
-    router.push(`/dataset/${datasetId}`);
+    setError(null);
+    try {
+      const datasetId = await createDataset({
+        name: datasetName,
+        description: prompt,
+        cadence: CADENCE_LABELS[cadence],
+        columns: columns.map((c) => ({
+          name: c.name,
+          type: c.type,
+          description: c.description || undefined,
+        })),
+      });
+      track(EVENTS.DATASET_CREATED, {
+        datasetId,
+        column_count: columns.length,
+        cadence: CADENCE_LABELS[cadence],
+      });
+      router.push(`/dataset/${datasetId}`);
+    } catch (err) {
+      // Most commonly: free-tier monthly quota exhausted. Convex returns
+      // "Monthly free-tier quota exceeded: 2500/2500 used this period, 1
+      // more requested" — we substitute a UX-friendly message.
+      const message = err instanceof Error ? err.message : "Failed to create dataset";
+      setError(
+        message.includes("quota exceeded")
+          ? "You've used all of this month's free-tier quota. New datasets will be available again at the start of next month."
+          : message,
+      );
+      setIsCreating(false);
+    }
   }
 
   return (
@@ -365,16 +379,24 @@ export default function NewDatasetPage() {
                 </div>
               </div>
 
+              {error && (
+                <div role="alert" className="rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-950/30 dark:text-red-300">
+                  {error}
+                </div>
+              )}
+
               <div className="flex items-center gap-3">
                 <button
                   onClick={handleConfirm}
-                  className="rounded-lg border border-accent bg-accent px-6 py-2.5 text-sm font-semibold text-accent-text transition-opacity hover:opacity-90"
+                  disabled={isCreating}
+                  className="rounded-lg border border-accent bg-accent px-6 py-2.5 text-sm font-semibold text-accent-text transition-opacity hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  Create Dataset
+                  {isCreating ? "Creating…" : "Create Dataset"}
                 </button>
                 <button
                   onClick={() => setStep("describe")}
-                  className="rounded-lg border border-border px-4 py-2.5 text-sm font-medium text-foreground hover:bg-foreground/[0.03] transition-colors"
+                  disabled={isCreating}
+                  className="rounded-lg border border-border px-4 py-2.5 text-sm font-medium text-foreground hover:bg-foreground/[0.03] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Back
                 </button>
