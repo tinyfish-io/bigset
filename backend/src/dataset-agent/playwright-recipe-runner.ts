@@ -137,6 +137,17 @@ export class PlaywrightRecipeRunner implements DatasetRecipeRuntime {
   }
 }
 
+export function validateDatasetRecipeScript(scriptText: string): void {
+  try {
+    compileRecipeScript(scriptText);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Recipe script must export runDatasetRecipe(context): ${message}`
+    );
+  }
+}
+
 async function runRecipeScriptWithTimeout(input: {
   scriptText: string;
   timeoutMs: number;

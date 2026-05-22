@@ -27,6 +27,9 @@ export {
   InMemoryDatasetRecipeStore,
 } from "./recipe-store.js";
 export {
+  AiSdkDatasetRecipeAuthor,
+} from "./recipe-author.js";
+export {
   SelfHealingRecipeService,
 } from "./self-healing-recipe-service.js";
 export type {
