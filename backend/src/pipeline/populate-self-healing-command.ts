@@ -13,6 +13,7 @@ import {
 } from "./populate-self-healing-runner.js";
 
 export interface PopulateSelfHealingCliOptions {
+  datasetId?: string;
   contextPath?: string;
   shouldReadStdin: boolean;
   shouldCommitRows: boolean;
@@ -28,6 +29,7 @@ export interface PopulateSelfHealingCliDependencies {
   writeStdout?: (text: string) => void;
   writeStderr?: (text: string) => void;
   runSelfHealing?: typeof runSelfHealingPopulate;
+  loadDatasetContextById?: (datasetId: string) => Promise<DatasetContext>;
   createRowWriter?: () => Promise<PopulateDatasetRowWriter>;
 }
 
@@ -40,7 +42,11 @@ export async function runPopulateSelfHealingCli(
   try {
     const options = parsePopulateSelfHealingCliArgs(input.argv);
     const prerequisiteError = populateRuntimePrerequisiteError(
-      prerequisitesFromEnv(input.env, options.shouldCommitRows)
+      prerequisitesFromEnv({
+        env: input.env,
+        shouldCommitRows: options.shouldCommitRows,
+        shouldLoadDatasetContext: Boolean(options.datasetId),
+      })
     );
     if (prerequisiteError) {
       writeStdout(JSON.stringify({
@@ -51,10 +57,13 @@ export async function runPopulateSelfHealingCli(
       return 1;
     }
 
-    const context = await readDatasetContext({
+    const context = await resolveDatasetContext({
       options,
       readFileText: input.readFileText ?? ((path) => readFile(path, "utf8")),
       readStdinText: input.readStdinText ?? readProcessStdin,
+      loadDatasetContextById:
+        input.loadDatasetContextById ??
+        ((datasetId) => defaultLoadDatasetContextById(datasetId, input.env)),
     });
     const rowWriter = options.shouldCommitRows
       ? await (input.createRowWriter ?? defaultCreateRowWriter)()
@@ -91,6 +100,7 @@ export function parsePopulateSelfHealingCliArgs(
     shouldReadStdin: false,
     shouldCommitRows: false,
   };
+  const contextSources: string[] = [];
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -101,10 +111,20 @@ export function parsePopulateSelfHealingCliArgs(
       }
       options.contextPath = value;
       options.shouldReadStdin = value === "-";
+      contextSources.push(arg);
       index += 1;
     } else if (arg === "--stdin") {
       options.shouldReadStdin = true;
       options.contextPath = "-";
+      contextSources.push(arg);
+    } else if (arg === "--dataset-id") {
+      const value = argv[index + 1];
+      if (!value) {
+        throw new Error("--dataset-id requires a dataset id.");
+      }
+      options.datasetId = value;
+      contextSources.push(arg);
+      index += 1;
     } else if (arg === "--commit") {
       options.shouldCommitRows = true;
     } else if (arg === "--recipe-store-dir") {
@@ -127,8 +147,13 @@ export function parsePopulateSelfHealingCliArgs(
     }
   }
 
-  if (!options.contextPath && !options.shouldReadStdin) {
-    throw new Error("Missing --context <file> or --stdin.");
+  if (contextSources.length === 0) {
+    throw new Error("Missing --dataset-id <id>, --context <file>, or --stdin.");
+  }
+  if (contextSources.length > 1) {
+    throw new Error(
+      `Choose exactly one context source: ${contextSources.join(", ")}.`
+    );
   }
   if (!options.shouldCommitRows && options.recipeStoreDirectory) {
     throw new Error("--recipe-store-dir requires --commit.");
@@ -136,27 +161,48 @@ export function parsePopulateSelfHealingCliArgs(
   return options;
 }
 
-async function readDatasetContext(input: {
+async function resolveDatasetContext(input: {
   options: PopulateSelfHealingCliOptions;
   readFileText: (path: string) => Promise<string>;
   readStdinText: () => Promise<string>;
+  loadDatasetContextById: (datasetId: string) => Promise<DatasetContext>;
 }): Promise<DatasetContext> {
+  if (input.options.datasetId) {
+    return input.loadDatasetContextById(input.options.datasetId);
+  }
   const text = input.options.shouldReadStdin
     ? await input.readStdinText()
     : await input.readFileText(input.options.contextPath!);
   return datasetContextSchema.parse(JSON.parse(text));
 }
 
-function prerequisitesFromEnv(
-  env: NodeJS.ProcessEnv,
-  shouldCommitRows: boolean
-): PopulateRuntimePrerequisites {
+function prerequisitesFromEnv(input: {
+  env: NodeJS.ProcessEnv;
+  shouldCommitRows: boolean;
+  shouldLoadDatasetContext: boolean;
+}): PopulateRuntimePrerequisites {
   return {
-    convexAdminKey: env.CONVEX_SELF_HOSTED_ADMIN_KEY,
-    openRouterApiKey: env.OPENROUTER_API_KEY,
-    tinyFishApiKey: env.TINYFISH_API_KEY,
-    shouldCommitRows,
+    convexUrl: input.env.CONVEX_URL,
+    convexAdminKey: input.env.CONVEX_SELF_HOSTED_ADMIN_KEY,
+    openRouterApiKey: input.env.OPENROUTER_API_KEY,
+    tinyFishApiKey: input.env.TINYFISH_API_KEY,
+    shouldCommitRows: input.shouldCommitRows,
+    shouldLoadDatasetContext: input.shouldLoadDatasetContext,
   };
+}
+
+async function defaultLoadDatasetContextById(
+  datasetId: string,
+  env: NodeJS.ProcessEnv
+): Promise<DatasetContext> {
+  const { createConvexPopulateDatasetContextLoader } = await import(
+    "./populate-dataset-context-loader.js"
+  );
+  const loader = createConvexPopulateDatasetContextLoader({
+    convexUrl: env.CONVEX_URL!,
+    convexAdminKey: env.CONVEX_SELF_HOSTED_ADMIN_KEY!,
+  });
+  return loader.loadContext(datasetId);
 }
 
 async function defaultCreateRowWriter(): Promise<PopulateDatasetRowWriter> {

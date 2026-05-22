@@ -27,9 +27,11 @@ The pipeline is a pure function (`inferSchema(prompt) → DatasetSchema`). It is
 
 `src/pipeline/populate-self-healing-runner.ts` — shared route/CLI runner. HTTP populate uses a durable filesystem store and `ConvexPopulateDatasetRowWriter`; benchmark/dry-run paths can inject an in-memory store and skip row commits.
 
-`npm --silent run populate:self-heal -- --context context.json` — operator/cron-friendly dry run. It emits one JSON summary to stdout and does not persist recipe history or commit rows.
+`npm --silent run populate:self-heal -- --dataset-id <datasetId>` — operator/cron-friendly dry run. It loads live dataset context with system Convex auth, emits one JSON summary to stdout, and does not persist recipe history or commit rows.
 
-`npm --silent run populate:self-heal -- --context context.json --commit` — commits validated rows through the atomic Convex replace mutation. Requires `CONVEX_SELF_HOSTED_ADMIN_KEY`, `OPENROUTER_API_KEY`, and `TINYFISH_API_KEY`.
+`npm --silent run populate:self-heal -- --dataset-id <datasetId> --commit` — commits validated rows through the atomic Convex replace mutation. Requires `CONVEX_URL`, `CONVEX_SELF_HOSTED_ADMIN_KEY`, `OPENROUTER_API_KEY`, and `TINYFISH_API_KEY`.
+
+`npm --silent run populate:self-heal -- --context context.json` — dev harness dry run for a pasted `DatasetContext`. It uses an isolated in-memory recipe store; `--recipe-store-dir` is rejected unless `--commit` is set.
 
 ## Mastra (Workflow Orchestration)
 

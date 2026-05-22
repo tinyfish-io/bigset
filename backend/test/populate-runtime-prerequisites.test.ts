@@ -8,6 +8,7 @@ import {
 
 test("populate runtime prerequisite check reports every missing key", () => {
   assert.deepEqual(missingPopulateRuntimePrerequisites({}), [
+    "CONVEX_URL",
     "CONVEX_SELF_HOSTED_ADMIN_KEY",
     "OPENROUTER_API_KEY",
     "TINYFISH_API_KEY",
@@ -27,6 +28,7 @@ test("populate runtime prerequisite check skips Convex admin key for dry runs", 
 
 test("populate runtime prerequisite check passes when all keys are configured", () => {
   const input = {
+    convexUrl: "http://convex:3210",
     convexAdminKey: "convex",
     openRouterApiKey: "openrouter",
     tinyFishApiKey: "tinyfish",
@@ -34,4 +36,16 @@ test("populate runtime prerequisite check passes when all keys are configured", 
 
   assert.deepEqual(missingPopulateRuntimePrerequisites(input), []);
   assert.equal(populateRuntimePrerequisiteError(input), undefined);
+});
+
+test("populate runtime prerequisite check requires Convex keys for dataset-id dry runs", () => {
+  assert.deepEqual(
+    missingPopulateRuntimePrerequisites({
+      openRouterApiKey: "openrouter",
+      tinyFishApiKey: "tinyfish",
+      shouldCommitRows: false,
+      shouldLoadDatasetContext: true,
+    }),
+    ["CONVEX_URL", "CONVEX_SELF_HOSTED_ADMIN_KEY"]
+  );
 });

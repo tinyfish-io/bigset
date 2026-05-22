@@ -76,6 +76,7 @@ await fastify.register(async (instance) => {
         return reply.code(403).send({ error: "Not authorized to populate this dataset" });
       }
       const prerequisiteError = populateRuntimePrerequisiteError({
+        convexUrl: env.CONVEX_URL,
         convexAdminKey: env.CONVEX_ADMIN_KEY,
         openRouterApiKey: env.OPENROUTER_API_KEY,
         tinyFishApiKey: env.TINYFISH_API_KEY,

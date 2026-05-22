@@ -1,4 +1,4 @@
-import { query, mutation } from "./_generated/server.js";
+import { query, mutation, internalQuery } from "./_generated/server.js";
 import type { QueryCtx } from "./_generated/server.js";
 import { v } from "convex/values";
 import type { Doc } from "./_generated/dataModel.js";
@@ -79,6 +79,13 @@ export const get = query({
   args: { id: v.id("datasets") },
   handler: async (ctx, args) => {
     return await loadReadableDataset(ctx, args.id);
+  },
+});
+
+export const getForSystemPopulate = internalQuery({
+  args: { id: v.id("datasets") },
+  handler: async (ctx, args) => {
+    return await ctx.db.get(args.id);
   },
 });
 

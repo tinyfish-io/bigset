@@ -33,6 +33,74 @@ test("self-healing CLI parses context and dry-run mode", () => {
   });
 });
 
+test("self-healing CLI parses dataset-id mode", () => {
+  assert.deepEqual(parsePopulateSelfHealingCliArgs([
+    "--dataset-id",
+    "dataset-ai-posts",
+    "--commit",
+  ]), {
+    datasetId: "dataset-ai-posts",
+    shouldReadStdin: false,
+    shouldCommitRows: true,
+  });
+});
+
+test("self-healing CLI rejects dataset-id mixed with context input", () => {
+  assert.throws(
+    () => parsePopulateSelfHealingCliArgs([
+      "--dataset-id",
+      "dataset-ai-posts",
+      "--context",
+      "context.json",
+    ]),
+    /Choose exactly one context source/
+  );
+  assert.throws(
+    () => parsePopulateSelfHealingCliArgs([
+      "--context",
+      "context.json",
+      "--dataset-id",
+      "dataset-ai-posts",
+    ]),
+    /Choose exactly one context source/
+  );
+  assert.throws(
+    () => parsePopulateSelfHealingCliArgs([
+      "--dataset-id",
+      "dataset-ai-posts",
+      "--stdin",
+    ]),
+    /Choose exactly one context source/
+  );
+  assert.throws(
+    () => parsePopulateSelfHealingCliArgs([
+      "--stdin",
+      "--dataset-id",
+      "dataset-ai-posts",
+    ]),
+    /Choose exactly one context source/
+  );
+});
+
+test("self-healing CLI rejects context and stdin mixed in any order", () => {
+  assert.throws(
+    () => parsePopulateSelfHealingCliArgs([
+      "--context",
+      "context.json",
+      "--stdin",
+    ]),
+    /Choose exactly one context source/
+  );
+  assert.throws(
+    () => parsePopulateSelfHealingCliArgs([
+      "--stdin",
+      "--context",
+      "context.json",
+    ]),
+    /Choose exactly one context source/
+  );
+});
+
 test("self-healing CLI dry run does not require Convex admin key or create writer", async () => {
   const stdout: string[] = [];
   let runCalls = 0;
@@ -68,6 +136,144 @@ test("self-healing CLI dry run does not require Convex admin key or create write
   assert.equal(output.success, true);
   assert.equal(output.dryRun, true);
   assert.equal(output.rowCount, 1);
+});
+
+test("self-healing CLI dataset-id dry run loads context before running", async () => {
+  const stdout: string[] = [];
+  let loadedDatasetId = "";
+  let didReadFile = false;
+  const exitCode = await runPopulateSelfHealingCli({
+    argv: ["--dataset-id", "dataset-ai-posts"],
+    env: {
+      CONVEX_URL: "http://convex:3210",
+      CONVEX_SELF_HOSTED_ADMIN_KEY: "convex-admin",
+      OPENROUTER_API_KEY: "openrouter",
+      TINYFISH_API_KEY: "tinyfish",
+    },
+    readFileText: async () => {
+      didReadFile = true;
+      return JSON.stringify(context);
+    },
+    loadDatasetContextById: async (datasetId) => {
+      loadedDatasetId = datasetId;
+      return context;
+    },
+    writeStdout: (text) => stdout.push(text),
+    writeStderr: () => undefined,
+    runSelfHealing: async (input) => {
+      assert.equal(input.context.datasetId, context.datasetId);
+      assert.equal(input.shouldCommitRows, false);
+      assert.ok(input.store);
+      assert.equal(input.rowWriter, undefined);
+      return successfulResult(input.context.datasetId);
+    },
+  });
+
+  assert.equal(exitCode, 0);
+  assert.equal(loadedDatasetId, "dataset-ai-posts");
+  assert.equal(didReadFile, false);
+  assert.equal(JSON.parse(stdout[0]!).success, true);
+});
+
+test("self-healing CLI dataset-id commit loads context and creates writer", async () => {
+  const stdout: string[] = [];
+  let writerCalls = 0;
+  const exitCode = await runPopulateSelfHealingCli({
+    argv: ["--dataset-id", "dataset-ai-posts", "--commit"],
+    env: {
+      CONVEX_URL: "http://convex:3210",
+      CONVEX_SELF_HOSTED_ADMIN_KEY: "convex-admin",
+      OPENROUTER_API_KEY: "openrouter",
+      TINYFISH_API_KEY: "tinyfish",
+      POPULATE_RECIPE_STORE_DIR: ".bigset/populate-recipes",
+    },
+    loadDatasetContextById: async (datasetId) => ({
+      ...context,
+      datasetId,
+    }),
+    createRowWriter: async () => {
+      writerCalls += 1;
+      return {
+        async replaceRows() {
+          return { insertedRowCount: 1 };
+        },
+      };
+    },
+    writeStdout: (text) => stdout.push(text),
+    writeStderr: () => undefined,
+    runSelfHealing: async (input) => {
+      assert.equal(input.context.datasetId, "dataset-ai-posts");
+      assert.equal(input.shouldCommitRows, true);
+      assert.equal(input.store, undefined);
+      assert.equal(input.recipeStoreDirectory, ".bigset/populate-recipes");
+      assert.ok(input.rowWriter);
+      return successfulResult(input.context.datasetId);
+    },
+  });
+
+  assert.equal(exitCode, 0);
+  assert.equal(writerCalls, 1);
+  assert.equal(JSON.parse(stdout[0]!).success, true);
+});
+
+test("self-healing CLI dataset-id mode preflights Convex keys before loading context", async () => {
+  const stdout: string[] = [];
+  let loadCalls = 0;
+  const exitCode = await runPopulateSelfHealingCli({
+    argv: ["--dataset-id", "dataset-ai-posts"],
+    env: {
+      OPENROUTER_API_KEY: "openrouter",
+      TINYFISH_API_KEY: "tinyfish",
+    },
+    loadDatasetContextById: async () => {
+      loadCalls += 1;
+      return context;
+    },
+    writeStdout: (text) => stdout.push(text),
+    writeStderr: () => undefined,
+  });
+
+  assert.equal(exitCode, 1);
+  assert.equal(loadCalls, 0);
+  assert.match(stdout[0]!, /CONVEX_URL/);
+  assert.match(stdout[0]!, /CONVEX_SELF_HOSTED_ADMIN_KEY/);
+});
+
+test("self-healing CLI dataset-id loader failures skip runtime and writer", async () => {
+  const stdout: string[] = [];
+  let runCalls = 0;
+  let writerCalls = 0;
+  const exitCode = await runPopulateSelfHealingCli({
+    argv: ["--dataset-id", "not-a-convex-id", "--commit"],
+    env: {
+      CONVEX_URL: "http://convex:3210",
+      CONVEX_SELF_HOSTED_ADMIN_KEY: "convex-admin",
+      OPENROUTER_API_KEY: "openrouter",
+      TINYFISH_API_KEY: "tinyfish",
+    },
+    loadDatasetContextById: async () => {
+      throw new Error("Invalid dataset id: not-a-convex-id.");
+    },
+    createRowWriter: async () => {
+      writerCalls += 1;
+      return {
+        async replaceRows() {
+          return { insertedRowCount: 0 };
+        },
+      };
+    },
+    writeStdout: (text) => stdout.push(text),
+    writeStderr: () => undefined,
+    runSelfHealing: async () => {
+      runCalls += 1;
+      throw new Error("runtime should not run");
+    },
+  });
+
+  assert.equal(exitCode, 1);
+  assert.equal(runCalls, 0);
+  assert.equal(writerCalls, 0);
+  assert.match(stdout[0]!, /Invalid dataset id/);
 });
 
 test("self-healing CLI rejects durable recipe store on dry run", async () => {
