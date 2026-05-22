@@ -81,6 +81,13 @@ Latest `mcp-docs-pages` Agent-enabled canary evidence:
 App and CLI collection-runtime runs use the same runner shape, but load it from
 `POPULATE_COLLECTION_RUNNER_MODULE` when `POPULATE_AGENT_RUNTIME=collection`.
 
+Self-healing run records now include a `process-trace` artifact when a runtime
+exposes trace data and a `playwright-candidate-readiness` artifact that says
+whether the trace is grounded enough for a future Playwright compiler. Search
+and fetch URLs alone are not enough. The readiness gate expects real browser
+actions such as URL transitions, selectors, target text, or redacted input
+descriptions before any `playwright-candidate-script` can be emitted.
+
 ## Verify Self-Healing Stack
 
 Use this before asking someone else to migrate a new collection agent into the

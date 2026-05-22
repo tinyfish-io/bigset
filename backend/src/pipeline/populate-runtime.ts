@@ -47,9 +47,28 @@ export type PopulateRuntimeTraceStepKind =
   | "fetch"
   | "insert_row"
   | "agent"
+  | "browser"
   | "extract"
   | "repair"
   | "validation";
+
+export type PopulateRuntimeBrowserActionKind =
+  | "navigate"
+  | "click"
+  | "type"
+  | "select"
+  | "wait"
+  | "extract"
+  | "screenshot"
+  | "unknown";
+
+export interface PopulateRuntimeBrowserAction {
+  action: PopulateRuntimeBrowserActionKind;
+  url?: string;
+  selector?: string;
+  targetText?: string;
+  valueDescription?: string;
+}
 
 export interface PopulateRuntimeTraceStep {
   kind: PopulateRuntimeTraceStepKind;
@@ -58,6 +77,7 @@ export interface PopulateRuntimeTraceStep {
   input?: Record<string, unknown>;
   output?: Record<string, unknown>;
   error?: string;
+  browserAction?: PopulateRuntimeBrowserAction;
 }
 
 export interface PopulateProcessTraceSourceArtifact {

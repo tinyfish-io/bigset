@@ -117,6 +117,17 @@ test("Mastra populate recipe runtime maps populate rows into a healthy recipe ru
   assert.deepEqual(trace.searchQueries, ["OpenAI latest blog"]);
   assert.deepEqual(trace.fetchedUrls, ["https://openai.com/news"]);
   assert.equal(trace.selectedRowSource, "insert_row");
+  const readinessArtifact = run.artifacts.find((artifact) =>
+    artifact.kind === "playwright-candidate-readiness"
+  );
+  assert.ok(readinessArtifact);
+  const readiness = JSON.parse(readinessArtifact.content);
+  assert.equal(readiness.status, "not_ready");
+  assert.match(readiness.reasons.join("\n"), /no actionable browser steps/i);
+  assert.equal(
+    run.artifacts.some((artifact) => artifact.kind === "playwright-candidate-script"),
+    false
+  );
 });
 
 test("Mastra populate recipe runtime keeps supplemental fetch misses non-blocking", async () => {

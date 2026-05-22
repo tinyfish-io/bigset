@@ -13,6 +13,10 @@ import {
   datasetContextSchema,
   type DatasetContext,
 } from "./populate.js";
+import {
+  playwrightCandidateReadinessForRun,
+  type PopulatePlaywrightCandidateReadiness,
+} from "./populate-playwright-readiness.js";
 
 export type PopulateRecipeStatus =
   | "active"
@@ -28,6 +32,7 @@ export type PopulateRecipeArtifactKind =
   | "source-transcript"
   | "captured-rows"
   | "process-trace"
+  | "playwright-candidate-readiness"
   | "playwright-candidate-script";
 
 const MAX_ARTIFACT_TEXT_LENGTH = 20_000;
@@ -884,8 +889,22 @@ function artifactsForRun(input: {
       label: "populate-process-trace",
       content: processTraceArtifactContent(processTrace),
     });
+    artifacts.push({
+      kind: "playwright-candidate-readiness",
+      label: "populate-playwright-candidate-readiness",
+      content: playwrightCandidateReadinessArtifactContent(
+        playwrightCandidateReadinessForRun({ result: input.result })
+      ),
+    });
   }
   return artifacts;
+}
+
+function playwrightCandidateReadinessArtifactContent(
+  readiness: PopulatePlaywrightCandidateReadiness
+): string {
+  return JSON.stringify(readiness, null, 2)
+    .slice(0, MAX_ARTIFACT_TEXT_LENGTH);
 }
 
 function processTraceArtifactContent(processTrace: PopulateProcessTrace): string {

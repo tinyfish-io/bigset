@@ -92,6 +92,11 @@ The current layer now can:
 - expose structured trace data for both Mastra and collection runs:
   `runtime`, `searchQueries`, `fetchedUrls`, `sourceArtifacts`,
   `selectedRowSource`, `notes`, and ordered `steps`
+- expose a `playwright-candidate-readiness` artifact that explains whether the
+  trace is grounded enough to compile a future Playwright script
+- represent browser actions in the trace contract when a future Agent/canary
+  records URL transitions, selectors, target text, or redacted input
+  descriptions
 - emit a capability diagnostic when no-Agent mode sees pages that need browser,
   form, or detail-page follow-up
 
@@ -103,6 +108,9 @@ The current layer does not yet:
 - run cron from compiled Playwright scripts
 - repair or promote Playwright scripts; repair still changes durable runtime
   instructions only
+- compile search/fetch-only traces into Playwright; traces must include
+  actionable browser steps before the script compiler is allowed to emit a
+  candidate
 - run a green live Convex canary in this local environment
 - prove Agent-enabled collection quality on a full real benchmark
 - prove the collection runtime should replace Mastra as the default app runtime
@@ -166,6 +174,9 @@ The current layer does not yet:
    - 2-prompt real benchmark
    - 1-prompt Agent-enabled capability canary for prompts that need browser or
      detail follow-up
+   - browser-step trace canary that records URL transitions, selectors/targets,
+     and redacted form-input descriptions before any Playwright compiler is
+     enabled
    - full benchmark only after the 2-prompt run is not obviously broken
    - live `--dataset-id` dry-run only after Convex/env prerequisites are ready
    - `--commit` only on a throwaway dataset first
