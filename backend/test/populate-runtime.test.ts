@@ -320,9 +320,10 @@ test("populate runtime uses structured recovery when insert_row rows lack eviden
   assert.equal(result.rows.length, 1);
   assert.equal(result.rows[0]?.evidence[0]?.quote, "Release notes from OpenAI");
   assert.match(
-    result.validationIssues.join("\n"),
+    result.debug?.notes.join("\n") ?? "",
     /Structured row recovery replaced insert_row rows/
   );
+  assert.deepEqual(result.validationIssues, []);
 });
 
 test("populate runtime enforces per-run row cap before inserting", async () => {

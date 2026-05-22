@@ -31,6 +31,23 @@ export interface PopulateRuntimeRow {
   needsReview: boolean;
 }
 
+export interface PopulateRuntimeCapturedInsertedRow {
+  datasetId: string;
+  data: Record<string, unknown>;
+}
+
+export interface PopulateRuntimeCapturedSource {
+  url: string;
+  text: string;
+}
+
+export interface PopulateRuntimeDebug {
+  capturedRows: PopulateRuntimeCapturedInsertedRow[];
+  capturedSources: PopulateRuntimeCapturedSource[];
+  selectedRowSource: "insert_row" | "structured_recovery" | "none";
+  notes: string[];
+}
+
 export interface PopulateRuntimeResult {
   rows: PopulateRuntimeRow[];
   validationIssues: string[];
@@ -46,6 +63,7 @@ export interface PopulateRuntimeResult {
     agentRuns: number;
     agentSteps: number;
   };
+  debug?: PopulateRuntimeDebug;
 }
 
 export interface PopulateWebSearchResult {
@@ -68,16 +86,6 @@ export type PopulateRuntimeAgentRunner = (input: {
   prompt: string;
   tools: Record<string, unknown>;
 }) => Promise<unknown>;
-
-interface CapturedInsertedRow {
-  datasetId: string;
-  data: Record<string, unknown>;
-}
-
-interface CapturedSource {
-  url: string;
-  text: string;
-}
 
 const structuredPopulateEvidenceSchema = z.object({
   columnName: z.string().optional(),
@@ -109,9 +117,10 @@ export async function runPopulateRuntime(input: {
     return clarificationResult;
   }
 
-  const capturedRows: CapturedInsertedRow[] = [];
-  const capturedSources: CapturedSource[] = [];
+  const capturedRows: PopulateRuntimeCapturedInsertedRow[] = [];
+  const capturedSources: PopulateRuntimeCapturedSource[] = [];
   const validationIssues: string[] = [];
+  const debugNotes: string[] = [];
   const metrics = emptyMetrics();
   const webTools = input.webTools ?? createTinyFishWebTools();
   const tools = createPopulateRuntimeTools({
@@ -180,6 +189,7 @@ export async function runPopulateRuntime(input: {
     requestedColumns: parsedContext.columns.map((column) => column.name),
     capturedSources,
     validationIssues,
+    debugNotes,
   });
   const structuredRowIssues = validateRuntimeRows(structuredRows);
   if (
@@ -197,7 +207,12 @@ export async function runPopulateRuntime(input: {
     insertedRowIssues,
     structuredRows,
     structuredRowIssues,
-    validationIssues,
+    debugNotes,
+  });
+  const selectedRowSource = selectedRowSourceForRows({
+    rows,
+    insertedRows,
+    structuredRows,
   });
   validationIssues.push(...validateRuntimeRows(rows));
 
@@ -206,6 +221,12 @@ export async function runPopulateRuntime(input: {
     validationIssues: Array.from(new Set(validationIssues)),
     usage: emptyUsage(),
     metrics,
+    debug: {
+      capturedRows,
+      capturedSources,
+      selectedRowSource,
+      notes: debugNotes,
+    },
   };
 }
 
@@ -255,18 +276,24 @@ function emptyClarificationResult(validationIssues: string[]): PopulateRuntimeRe
     validationIssues,
     usage: emptyUsage(),
     metrics: emptyMetrics(),
+    debug: {
+      capturedRows: [],
+      capturedSources: [],
+      selectedRowSource: "none",
+      notes: [],
+    },
   };
 }
 
 async function enrichCapturedSourcesForStructuredFallback(input: {
   context: DatasetContext;
-  capturedSources: CapturedSource[];
+  capturedSources: PopulateRuntimeCapturedSource[];
   validationIssues: string[];
   metrics: PopulateRuntimeResult["metrics"];
   webTools: PopulateRuntimeWebTools;
 }) {
   const entities = entityCandidatesFromDescription(input.context.description);
-  const newSources: CapturedSource[] = [];
+  const newSources: PopulateRuntimeCapturedSource[] = [];
   for (const entity of entities.slice(0, 4)) {
     let results: PopulateWebSearchResult[] = [];
     for (const query of searchQueriesForEntity(entity, input.context)) {
@@ -328,7 +355,7 @@ async function captureDirectOfficialSource(input: {
     metrics: PopulateRuntimeResult["metrics"];
     webTools: PopulateRuntimeWebTools;
   };
-  newSources: CapturedSource[];
+  newSources: PopulateRuntimeCapturedSource[];
 }) {
   input.newSources.push({
     url: input.url,
@@ -504,7 +531,7 @@ function searchResultScore(
 
 async function generateStructuredRowsFromCapturedSources(input: {
   context: DatasetContext;
-  capturedSources: CapturedSource[];
+  capturedSources: PopulateRuntimeCapturedSource[];
 }): Promise<StructuredPopulateOutput> {
   const openrouter = createOpenRouter({
     apiKey: requiredEnv("OPENROUTER_API_KEY"),
@@ -535,7 +562,7 @@ async function generateStructuredRowsFromCapturedSources(input: {
 
 function buildStructuredRowsPrompt(input: {
   context: DatasetContext;
-  capturedSources: CapturedSource[];
+  capturedSources: PopulateRuntimeCapturedSource[];
 }): string {
   const columnNames = input.context.columns.map((column) => column.name);
   const entities = entityCandidatesFromDescription(input.context.description);
@@ -631,15 +658,15 @@ function selectBestRuntimeRows(input: {
   insertedRowIssues: string[];
   structuredRows: PopulateRuntimeRow[];
   structuredRowIssues: string[];
-  validationIssues: string[];
+  debugNotes: string[];
 }): PopulateRuntimeRow[] {
   if (input.insertedRows.length > 0 && input.insertedRowIssues.length === 0) {
     return input.insertedRows;
   }
   if (input.structuredRows.length > 0 && input.structuredRowIssues.length === 0) {
     if (input.insertedRows.length > 0) {
-      input.validationIssues.push(
-        "Structured row recovery replaced insert_row rows that failed source/evidence validation."
+      input.debugNotes.push(
+        "Structured row recovery replaced insert_row rows without enough source/evidence support."
       );
     }
     return input.structuredRows;
@@ -647,10 +674,27 @@ function selectBestRuntimeRows(input: {
   return input.insertedRows.length > 0 ? input.insertedRows : input.structuredRows;
 }
 
+function selectedRowSourceForRows(input: {
+  rows: PopulateRuntimeRow[];
+  insertedRows: PopulateRuntimeRow[];
+  structuredRows: PopulateRuntimeRow[];
+}): PopulateRuntimeDebug["selectedRowSource"] {
+  if (input.rows.length === 0) {
+    return "none";
+  }
+  if (input.rows === input.insertedRows) {
+    return "insert_row";
+  }
+  if (input.rows === input.structuredRows) {
+    return "structured_recovery";
+  }
+  return "none";
+}
+
 function createPopulateRuntimeTools(input: {
   datasetId: string;
-  capturedRows: CapturedInsertedRow[];
-  capturedSources: CapturedSource[];
+  capturedRows: PopulateRuntimeCapturedInsertedRow[];
+  capturedSources: PopulateRuntimeCapturedSource[];
   validationIssues: string[];
   metrics: PopulateRuntimeResult["metrics"];
   webTools: PopulateRuntimeWebTools;
@@ -819,8 +863,9 @@ function benchmarkRowsFromStructuredOutput(input: {
   maxRows: number;
   context: DatasetContext;
   requestedColumns: string[];
-  capturedSources: CapturedSource[];
+  capturedSources: PopulateRuntimeCapturedSource[];
   validationIssues: string[];
+  debugNotes: string[];
 }): PopulateRuntimeRow[] {
   if (!input.output) {
     return [];
@@ -849,7 +894,7 @@ function benchmarkRowsFromStructuredOutput(input: {
       sourceUrls,
       capturedSources: input.capturedSources,
       context: input.context,
-      validationIssues: input.validationIssues,
+      debugNotes: input.debugNotes,
       rowNumber: index + 1,
     });
     if (sourceUrls.length === 0) {
@@ -913,9 +958,9 @@ function repairStructuredEvidence(input: {
   evidence: PopulateRuntimeRow["evidence"];
   cells: Record<string, PopulateCellValue>;
   sourceUrls: string[];
-  capturedSources: CapturedSource[];
+  capturedSources: PopulateRuntimeCapturedSource[];
   context: DatasetContext;
-  validationIssues: string[];
+  debugNotes: string[];
   rowNumber: number;
 }): PopulateRuntimeRow["evidence"] {
   return input.evidence.map((item) => {
@@ -931,7 +976,7 @@ function repairStructuredEvidence(input: {
     if (!repairedQuote) {
       return item;
     }
-    input.validationIssues.push(
+    input.debugNotes.push(
       `Structured row ${input.rowNumber}: replaced evidence quote with captured source text.`
     );
     return {
@@ -945,7 +990,7 @@ function repairStructuredEvidence(input: {
 function quoteFromCapturedSources(input: {
   cells: Record<string, PopulateCellValue>;
   sourceUrls: string[];
-  capturedSources: CapturedSource[];
+  capturedSources: PopulateRuntimeCapturedSource[];
   context: DatasetContext;
 }): { sourceUrl: string; quote: string } | undefined {
   const sourceUrlSet = new Set(input.sourceUrls);
@@ -1011,7 +1056,7 @@ function sourceQuoteForCandidate(sourceText: string, candidate: string): string 
 
 function isEvidenceBackedByCapturedSource(
   evidence: PopulateRuntimeRow["evidence"][number],
-  capturedSources: CapturedSource[]
+  capturedSources: PopulateRuntimeCapturedSource[]
 ): boolean {
   const normalizedQuote = normalizeEvidenceText(evidence.quote);
   return capturedSources.some((source) => {

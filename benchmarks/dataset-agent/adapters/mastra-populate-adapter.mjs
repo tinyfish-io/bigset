@@ -44,11 +44,13 @@ const result = await runPopulateRuntime({
 });
 
 console.log(JSON.stringify({
-  ...result,
+  rows: result.rows,
   validationIssues: [
     ...result.validationIssues,
     ...minimumColumnIssues(result.rows),
   ],
+  usage: result.usage,
+  metrics: result.metrics,
 }));
 
 function minimumColumnIssues(rows) {
