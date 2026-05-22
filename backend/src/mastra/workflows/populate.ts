@@ -1,6 +1,7 @@
 import { createStep, createWorkflow } from "@mastra/core/workflows";
 import { z } from "zod";
 import { datasetContextSchema } from "../../pipeline/populate.js";
+import { buildPopulatePrompt } from "../../pipeline/populate-prompt.js";
 import { convex, internal } from "../../convex.js";
 import { populateAgent } from "../agents/populate.js";
 
@@ -23,28 +24,7 @@ const buildPromptStep = createStep({
   inputSchema: datasetContextSchema,
   outputSchema: z.object({ prompt: z.string() }),
   execute: async ({ inputData }) => {
-    const columnNames = inputData.columns.map((c) => c.name);
-    const columnsDesc = inputData.columns
-      .map(
-        (c) =>
-          `- "${c.name}" (${c.type})${c.description ? `: ${c.description}` : ""}`,
-      )
-      .join("\n");
-
-    const prompt = `Dataset ID: ${inputData.datasetId}
-Dataset: ${inputData.datasetName}
-Description: ${inputData.description}
-
-Columns:
-${columnsDesc}
-
-When calling insert_row, the data object keys MUST be exactly these strings (no backticks, no extra quotes):
-${JSON.stringify(columnNames)}
-
-Example insert_row call:
-insert_row({ datasetId: "${inputData.datasetId}", data: { ${columnNames.map((n) => `"${n}": <value>`).join(", ")} } })
-
-Search the web for real data about this topic. Then call insert_row for up to 10 source-backed rows. Never invent rows or cell values. If sources only support fewer than 10 rows, insert only the verified rows and explain what was missing.`;
+    const prompt = buildPopulatePrompt(inputData);
 
     console.log(`[build-prompt] Built prompt for ${inputData.datasetName} (${inputData.columns.length} columns)`);
     return { prompt };
