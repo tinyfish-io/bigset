@@ -9,6 +9,16 @@ the collection pipeline is migrated into BigSet.
   intentionally stacked and should not be merged out of order.
 - PR #37 adds `make verify-self-healing`, which is the cheap local gate before
   touching live data or spending OpenRouter/TinyFish credits.
+- PR #38 adds this migration plan and keeps the target boundaries explicit.
+- PR #39 adds `CollectionPopulateRecipeRuntime`, an adapter boundary that can
+  run a collection pipeline through the same `PopulateRecipeRuntime` interface
+  as Mastra.
+- PR #40 adds `POPULATE_AGENT_RUNTIME=collection` selection through the real
+  HTTP and CLI entrypoints, but intentionally requires an injected collection
+  runner instead of pretending the vendored runner has already been ported.
+- PR #41 adds a `collection-self-heal` benchmark lane that wraps the collection
+  runtime inside `SelfHealingPopulateRecipeService`. This is the benchmark
+  socket Meteor can use once the real collection runner is available.
 - `feat/data-collection-agent-v14` vendors the collection pipeline under
   `backend/BigSet_Data_Collection_Agent` and includes the memory module.
 - Clean `feat/data-collection-agent-v14` tests pass once ignored backend
@@ -63,9 +73,14 @@ The current layer:
 Dry-run and benchmark paths intentionally use in-memory stores so they do not
 pollute durable recipe history.
 
+The current layer now can:
+
+- run an injected collection runner through the same self-healing runtime
+  boundary and benchmark harness as Mastra
+
 The current layer does not yet:
 
-- run the collection pipeline as its runtime
+- run the real vendored collection pipeline as its runtime in this stack
 - generate Playwright scripts as a durable production recipe
 - run a green live Convex canary in this local environment
 - prove quality on a full real benchmark for the collection runtime
@@ -88,6 +103,7 @@ The current layer does not yet:
    - Gate: `npm --prefix backend test` and `npm --prefix backend run build`.
 
 3. Add a collection runtime adapter.
+   - Status: done in PR #39.
    - Implement the existing `PopulateRecipeRuntime` interface.
    - Input: BigSet `DatasetContext`.
    - Transform `recipe.runtimeInstructions` into the collection pipeline
@@ -100,6 +116,7 @@ The current layer does not yet:
      behavior.
 
 4. Add runtime selection through the real entrypoints.
+   - Status: done in PR #40 for injected collection runners.
    - Add a runtime factory for the self-healing runner.
    - Add an env switch such as `POPULATE_AGENT_RUNTIME=collection`.
    - Wire both `POST /populate` and `populate:self-heal --dataset-id` through
@@ -108,6 +125,7 @@ The current layer does not yet:
      entrypoints use the selected runtime.
 
 5. Add a self-healing-wrapped benchmark adapter for the collection runtime.
+   - Status: done in PR #41 for injected collection runners.
    - Reuse `benchmarks/dataset-agent/run-benchmark.mjs`.
    - Exercise `SelfHealingPopulateRecipeService` with the collection runtime
      inside it, not the direct collection pipeline alone.
@@ -155,10 +173,51 @@ Before any merge:
 - live dataset commit is tested only on a throwaway dataset
 - backend build does not depend on `frontend/convex/_generated`
 
+## Meteor Handoff Shape
+
+Meteor does not need to rebuild the self-healing wrapper. The socket is now:
+
+```text
+runCollectionPopulatePipeline(CollectionPopulatePipelineInput)
+  -> Promise<PopulateRuntimeResult>
+```
+
+`CollectionPopulatePipelineInput.recipeInstructions` is the self-healing signal.
+If the collection runner ignores that field, repaired recipes cannot change
+future behavior.
+
+The real benchmark command after a runner module exists is:
+
+```bash
+BIGSET_COLLECTION_BENCHMARK_RUNNER_MODULE=./backend/src/pipeline/collection-agent-runner.ts \
+node benchmarks/dataset-agent/run-benchmark.mjs \
+  --prompt-ids latest-ai-blog-posts,saas-pricing-pages \
+  --system collection-self-heal='node --import ./backend/node_modules/tsx/dist/esm/index.mjs benchmarks/dataset-agent/adapters/collection-self-healing-adapter.mjs'
+```
+
 ## Next Engineering Move
 
-Create a fresh branch from `codex/self-healing-verification` and first implement
-the collection runtime adapter contract, including the
-`recipe.runtimeInstructions` bridge and its unit test. Do not wire it as the
-default runtime until the self-healing-wrapped benchmark adapter produces better
-evidence than the current Mastra path.
+Create a fresh branch from `codex/collection-self-healing-benchmark` and port the
+real collection runner behind the existing adapter boundary:
+
+1. Add a runner module, likely `backend/src/pipeline/collection-agent-runner.ts`,
+   that exports `runCollectionPopulatePipeline(input)`.
+2. Port only the collection pipeline files needed by that runner from
+   `feat/data-collection-agent-v14`.
+3. Convert `CollectionPopulatePipelineInput` into the collection pipeline's
+   prompt/spec. Include both `input.prompt` and `input.recipeInstructions`.
+4. Convert the collection pipeline output into `PopulateRuntimeResult`: rows,
+   source URLs, evidence quotes, usage, metrics, and debug captured sources.
+5. Keep Convex writes, auth, cron scheduling, and durable recipe storage outside
+   the collection runner.
+6. Fix build blockers while porting: TinyFish status typing, OpenRouter provider
+   declaration leak, backend dependency on generated frontend Convex API, and
+   AI SDK `maxTokens`.
+7. Gate in this order: `npm --prefix backend test`, `npm --prefix backend run
+   build`, `make verify-self-healing`, 2-prompt `collection-self-heal`
+   benchmark, then full benchmark only if the 2-prompt run is not obviously
+   broken.
+
+Do not switch the default runtime from Mastra to collection until the
+self-healing-wrapped collection benchmark has better evidence than the current
+Mastra lane.
