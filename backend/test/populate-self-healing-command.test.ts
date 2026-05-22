@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { DatasetContext } from "../src/pipeline/populate.js";
+import type { PopulateRecipeRuntime } from "../src/pipeline/populate-self-healing.js";
 import type { RunSelfHealingPopulateResult } from "../src/pipeline/populate-self-healing-runner.js";
 import {
   parsePopulateSelfHealingCliArgs,
@@ -136,6 +137,38 @@ test("self-healing CLI dry run does not require Convex admin key or create write
   assert.equal(output.success, true);
   assert.equal(output.dryRun, true);
   assert.equal(output.rowCount, 1);
+});
+
+test("self-healing CLI passes selected runtime into the runner", async () => {
+  const stdout: string[] = [];
+  const selectedRuntime = fakeRuntime();
+  let createRuntimeCalls = 0;
+  let didUseSelectedRuntime = false;
+  const exitCode = await runPopulateSelfHealingCli({
+    argv: ["--context", "context.json"],
+    env: {
+      OPENROUTER_API_KEY: "openrouter",
+      TINYFISH_API_KEY: "tinyfish",
+      POPULATE_AGENT_RUNTIME: "collection",
+    },
+    readFileText: async () => JSON.stringify(context),
+    writeStdout: (text) => stdout.push(text),
+    writeStderr: () => undefined,
+    createRuntime: async (input) => {
+      createRuntimeCalls += 1;
+      assert.equal(input.env.POPULATE_AGENT_RUNTIME, "collection");
+      return selectedRuntime;
+    },
+    runSelfHealing: async (input) => {
+      didUseSelectedRuntime = input.runtime === selectedRuntime;
+      return successfulResult(input.context.datasetId);
+    },
+  });
+
+  assert.equal(exitCode, 0);
+  assert.equal(createRuntimeCalls, 1);
+  assert.equal(didUseSelectedRuntime, true);
+  assert.equal(JSON.parse(stdout[0]!).success, true);
 });
 
 test("self-healing CLI dataset-id dry run loads context before running", async () => {
@@ -460,5 +493,13 @@ function baseRun(datasetId: string): RunSelfHealingPopulateResult["selectedRun"]
       warnings: [],
     },
     artifacts: [],
+  };
+}
+
+function fakeRuntime(): PopulateRecipeRuntime {
+  return {
+    async runRecipe() {
+      throw new Error("fake runtime should not execute in CLI unit tests");
+    },
   };
 }

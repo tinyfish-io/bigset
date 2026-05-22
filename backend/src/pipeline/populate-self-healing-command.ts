@@ -11,6 +11,10 @@ import {
   type PopulateDatasetRowWriter,
   type RunSelfHealingPopulateResult,
 } from "./populate-self-healing-runner.js";
+import {
+  createPopulateRecipeRuntime,
+  type CreatePopulateRecipeRuntimeInput,
+} from "./populate-runtime-selection.js";
 
 export interface PopulateSelfHealingCliOptions {
   datasetId?: string;
@@ -29,6 +33,9 @@ export interface PopulateSelfHealingCliDependencies {
   writeStdout?: (text: string) => void;
   writeStderr?: (text: string) => void;
   runSelfHealing?: typeof runSelfHealingPopulate;
+  createRuntime?: (
+    input: CreatePopulateRecipeRuntimeInput
+  ) => Promise<Awaited<ReturnType<typeof createPopulateRecipeRuntime>>>;
   loadDatasetContextById?: (datasetId: string) => Promise<DatasetContext>;
   createRowWriter?: () => Promise<PopulateDatasetRowWriter>;
 }
@@ -65,6 +72,10 @@ export async function runPopulateSelfHealingCli(
         input.loadDatasetContextById ??
         ((datasetId) => defaultLoadDatasetContextById(datasetId, input.env)),
     });
+    const runtime = await (input.createRuntime ?? createPopulateRecipeRuntime)({
+      env: input.env,
+      maxRows: options.maxRows,
+    });
     const rowWriter = options.shouldCommitRows
       ? await (input.createRowWriter ?? defaultCreateRowWriter)()
       : undefined;
@@ -78,9 +89,7 @@ export async function runPopulateSelfHealingCli(
         : undefined,
       rowWriter,
       shouldCommitRows: options.shouldCommitRows,
-      runtime: options.maxRows === undefined
-        ? undefined
-        : await runtimeWithMaxRows(options.maxRows),
+      runtime,
     });
 
     writeStdout(JSON.stringify(summaryForResult(result, !options.shouldCommitRows)));
@@ -210,13 +219,6 @@ async function defaultCreateRowWriter(): Promise<PopulateDatasetRowWriter> {
     "./populate-convex-writer.js"
   );
   return new ConvexPopulateDatasetRowWriter();
-}
-
-async function runtimeWithMaxRows(maxRows: number) {
-  const { MastraPopulateRecipeRuntime } = await import(
-    "./populate-self-healing.js"
-  );
-  return new MastraPopulateRecipeRuntime({ maxRows });
 }
 
 function summaryForResult(
