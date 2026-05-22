@@ -73,8 +73,7 @@ export interface UsageSnapshot {
 
 /**
  * First-millisecond of the UTC calendar month containing `ts`.
- * Pure function — exported only because tests would call it; not part of
- * the public contract.
+ * Pure function; internal helper.
  */
 function getMonthStartUTC(ts: number): number {
   const d = new Date(ts);
