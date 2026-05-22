@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import {
+  type PopulateProcessTrace,
   type PopulateRuntimeAgentRunner,
   type PopulateRuntimeResult,
   type PopulateRuntimeRow,
@@ -25,9 +26,17 @@ export type PopulateRecipeArtifactKind =
   | "text"
   | "stderr"
   | "source-transcript"
-  | "captured-rows";
+  | "captured-rows"
+  | "process-trace"
+  | "playwright-candidate-script";
 
 const MAX_ARTIFACT_TEXT_LENGTH = 20_000;
+const PROCESS_TRACE_ARTIFACT_LIMITS = [
+  { maxItems: 100, maxNestedItems: 25, maxStringLength: 500 },
+  { maxItems: 50, maxNestedItems: 10, maxStringLength: 240 },
+  { maxItems: 25, maxNestedItems: 8, maxStringLength: 120 },
+  { maxItems: 10, maxNestedItems: 5, maxStringLength: 80 },
+] as const;
 
 export interface PopulateRecipe {
   recipeId: string;
@@ -103,6 +112,7 @@ export interface StoredPopulateRecipeRunRecord {
   runStatus: PopulateRecipeRunStatus;
   completedAt: string;
   productionValidation: PopulateRecipeProductionValidation;
+  artifacts: PopulateRecipeArtifact[];
 }
 
 export interface PopulateRecipeStoreSnapshot {
@@ -454,7 +464,10 @@ export class FileSystemPopulateRecipeStore implements PopulateRecipeStore {
       return {
         datasetId,
         recipes: parsed.recipes ?? [],
-        runRecords: parsed.runRecords ?? [],
+        runRecords: (parsed.runRecords ?? []).map((record) => ({
+          ...record,
+          artifacts: record.artifacts ?? [],
+        })),
       };
     } catch (error) {
       if (isNodeError(error) && error.code === "ENOENT") {
@@ -828,6 +841,15 @@ function artifactsForRun(input: {
   }
   const capturedSources = input.result.debug?.capturedSources ?? [];
   const capturedRows = input.result.debug?.capturedRows ?? [];
+  const processTrace = input.result.debug?.processTrace ?? {
+    runtime: "unknown",
+    searchQueries: [],
+    fetchedUrls: [],
+    sourceArtifacts: [],
+    selectedRowSource: "none",
+    notes: [],
+    steps: [],
+  };
   if (capturedSources.length > 0) {
     artifacts.push({
       kind: "source-transcript",
@@ -851,7 +873,129 @@ function artifactsForRun(input: {
         .slice(0, MAX_ARTIFACT_TEXT_LENGTH),
     });
   }
+  if (
+    processTrace.steps.length > 0 ||
+    processTrace.searchQueries.length > 0 ||
+    processTrace.fetchedUrls.length > 0 ||
+    processTrace.sourceArtifacts.length > 0
+  ) {
+    artifacts.push({
+      kind: "process-trace",
+      label: "populate-process-trace",
+      content: processTraceArtifactContent(processTrace),
+    });
+  }
   return artifacts;
+}
+
+function processTraceArtifactContent(processTrace: PopulateProcessTrace): string {
+  let content = "";
+  for (const limits of PROCESS_TRACE_ARTIFACT_LIMITS) {
+    content = JSON.stringify(truncatedProcessTrace(processTrace, limits), null, 2);
+    if (content.length <= MAX_ARTIFACT_TEXT_LENGTH) {
+      return content;
+    }
+  }
+  return content;
+}
+
+function truncatedProcessTrace(
+  processTrace: PopulateProcessTrace,
+  limits: typeof PROCESS_TRACE_ARTIFACT_LIMITS[number]
+) {
+  return {
+    ...processTrace,
+    truncated: hasProcessTraceOverflow(processTrace, limits),
+    searchQueries: processTrace.searchQueries
+      .slice(0, limits.maxItems)
+      .map((query) => truncateArtifactString(query, limits)),
+    fetchedUrls: processTrace.fetchedUrls
+      .slice(0, limits.maxItems)
+      .map((url) => truncateArtifactString(url, limits)),
+    sourceArtifacts: processTrace.sourceArtifacts.slice(0, limits.maxItems).map((artifact) => ({
+      ...artifact,
+      url: truncateArtifactString(artifact.url, limits),
+      label: artifact.label
+        ? truncateArtifactString(artifact.label, limits)
+        : artifact.label,
+      error: artifact.error
+        ? truncateArtifactString(artifact.error, limits)
+        : artifact.error,
+    })),
+    notes: processTrace.notes
+      .slice(0, limits.maxItems)
+      .map((note) => truncateArtifactString(note, limits)),
+    steps: processTrace.steps.slice(0, limits.maxItems).map((step) => ({
+      ...step,
+      label: truncateArtifactString(step.label, limits),
+      input: truncateArtifactJson(step.input, limits),
+      output: truncateArtifactJson(step.output, limits),
+      error: step.error ? truncateArtifactString(step.error, limits) : step.error,
+    })),
+  };
+}
+
+function hasProcessTraceOverflow(
+  processTrace: PopulateProcessTrace,
+  limits: typeof PROCESS_TRACE_ARTIFACT_LIMITS[number]
+): boolean {
+  return (
+    processTrace.searchQueries.length > limits.maxItems ||
+    processTrace.fetchedUrls.length > limits.maxItems ||
+    processTrace.sourceArtifacts.length > limits.maxItems ||
+    processTrace.notes.length > limits.maxItems ||
+    processTrace.steps.length > limits.maxItems ||
+    processTrace.searchQueries.some((query) => query.length > limits.maxStringLength) ||
+    processTrace.fetchedUrls.some((url) => url.length > limits.maxStringLength) ||
+    processTrace.notes.some((note) => note.length > limits.maxStringLength) ||
+    processTrace.sourceArtifacts.some((artifact) =>
+      [
+        artifact.url,
+        artifact.label ?? "",
+        artifact.error ?? "",
+      ].some((value) => value.length > limits.maxStringLength)
+    ) ||
+    processTrace.steps.some((step) =>
+      [
+        step.label,
+        step.error ?? "",
+      ].some((value) => value.length > limits.maxStringLength)
+    )
+  );
+}
+
+function truncateArtifactJson(
+  value: unknown,
+  limits: typeof PROCESS_TRACE_ARTIFACT_LIMITS[number]
+): unknown {
+  if (typeof value === "string") {
+    return truncateArtifactString(value, limits);
+  }
+  if (Array.isArray(value)) {
+    return value
+      .slice(0, limits.maxNestedItems)
+      .map((nestedValue) => truncateArtifactJson(nestedValue, limits));
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .slice(0, limits.maxNestedItems)
+        .map(([key, nestedValue]) => [
+          key,
+          truncateArtifactJson(nestedValue, limits),
+        ])
+    );
+  }
+  return value;
+}
+
+function truncateArtifactString(
+  value: string,
+  limits: typeof PROCESS_TRACE_ARTIFACT_LIMITS[number]
+): string {
+  return value.length > limits.maxStringLength
+    ? `${value.slice(0, limits.maxStringLength)}\n[truncated]`
+    : value;
 }
 
 export function emptyPopulateRuntimeResult(validationIssues: string[]): PopulateRuntimeResult {
@@ -875,6 +1019,15 @@ export function emptyPopulateRuntimeResult(validationIssues: string[]): Populate
       capturedSources: [],
       selectedRowSource: "none",
       notes: [],
+      processTrace: {
+        runtime: "unknown",
+        searchQueries: [],
+        fetchedUrls: [],
+        sourceArtifacts: [],
+        selectedRowSource: "none",
+        notes: [],
+        steps: [],
+      },
     },
   };
 }
@@ -936,6 +1089,7 @@ function runRecordFromRunResult(
     runStatus: runResult.runStatus,
     completedAt: runResult.completedAt,
     productionValidation: runResult.productionValidation,
+    artifacts: runResult.artifacts,
   };
 }
 

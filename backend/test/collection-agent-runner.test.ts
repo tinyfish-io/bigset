@@ -36,6 +36,23 @@ test("collection agent runner maps vendored pipeline output into populate runtim
     assert.equal(result.metrics.browserCalls, 3);
     assert.equal(result.metrics.agentRuns, 3);
     assert.equal(result.metrics.agentSteps, 3);
+    assert.equal(result.debug?.selectedRowSource, "collection_pipeline");
+    assert.equal(result.debug?.processTrace.runtime, "collection");
+    assert.deepEqual(result.debug?.processTrace.searchQueries, [
+      "OpenAI latest AI blog posts",
+      "OpenAI release notes",
+    ]);
+    assert.deepEqual(result.debug?.processTrace.fetchedUrls, [
+      "https://openai.com/news",
+      "https://openai.com/research",
+    ]);
+    assert.equal(
+      result.debug?.processTrace.sourceArtifacts.some((artifact) =>
+        artifact.url === "https://openai.com/news" &&
+        artifact.status === "succeeded"
+      ),
+      true
+    );
   } finally {
     restoreEnv(previousEnv);
   }
@@ -202,6 +219,11 @@ function fakeCollectionPipelineModuleUrl(input: {
         throw new Error("required columns missing from benchmark context");
       }
       return {
+        runId: "fake-run-1",
+        paths: {
+          root: "/tmp/fake-run-1",
+          reportPath: "/tmp/fake-run-1/run_report.json",
+        },
         report: {
           errors: [],
           dataset_spec: {
@@ -218,6 +240,15 @@ function fakeCollectionPipelineModuleUrl(input: {
             },
           },
           initial: {
+            search_queries: [
+              "OpenAI latest AI blog posts",
+              "OpenAI release notes",
+            ],
+            fetched_urls: [
+              "https://openai.com/news",
+              "https://openai.com/research",
+            ],
+            failed_urls: [],
             triage: {
               agent_dispatched: 1,
               agent_succeeded: 1,
@@ -225,6 +256,10 @@ function fakeCollectionPipelineModuleUrl(input: {
             },
           },
           repair: {
+            loops: [{
+              loop_index: 1,
+              repair_queries: ["OpenAI blog official source_url evidence"],
+            }],
             stats: {
               triage: {
                 agent_dispatched: 2,
@@ -236,7 +271,24 @@ function fakeCollectionPipelineModuleUrl(input: {
           quality: {
             records: [{ record_id: "pk:openai", needs_review: true }],
           },
-          sources: ${JSON.stringify(input.sources ?? { outcomes: [] })},
+          search_queries: [
+            "OpenAI latest AI blog posts",
+            "OpenAI release notes",
+          ],
+          fetched_urls: [
+            "https://openai.com/news",
+            "https://openai.com/research",
+          ],
+          failed_urls: [],
+          sources: ${JSON.stringify(input.sources ?? {
+            outcomes: [{
+              url: "https://openai.com/news",
+              outcome: "success",
+              phase: "initial",
+              triage_status: "extract_now",
+              records_extracted: 1,
+            }],
+          })},
           llm_usage: {
             prompt_tokens: 1,
             completion_tokens: 1,

@@ -28,6 +28,9 @@ the collection pipeline is migrated into BigSet.
   without injecting answer-key URLs at runtime.
 - PR #46 surfaces no-Agent browser/form/detail follow-up as a safe capability
   diagnostic instead of hiding it as generic bad data or infra failure.
+- PR #47-#52 document and improve collection benchmark evidence, source
+  coherence, official-source support, and URL-like source evidence. PR #52 fixes
+  the `official_website` / `company_website` / `product_url` scoring class.
 - `feat/data-collection-agent-v14` is no longer the branch to build on directly.
   It was the source of the collection pipeline port. New work should branch on
   top of the current draft stack, not edit Meteor's branch or the dirty main
@@ -63,6 +66,8 @@ The current layer:
 
 - stores active recipes and run records in a filesystem recipe store on the
   durable app/commit path
+- persists each run's artifacts on the run record, including a structured
+  `process-trace` artifact when the runtime exposes one
 - reruns the active recipe when one exists
 - generates an initial recipe when no active recipe exists
 - repairs a failed active recipe through `DefaultPopulateRecipeAuthor`
@@ -84,12 +89,20 @@ The current layer now can:
 - run the real vendored collection pipeline through that same boundary
 - preserve `recipe.runtimeInstructions`, required columns, and benchmark
   metadata through the collection runner
+- expose structured trace data for both Mastra and collection runs:
+  `runtime`, `searchQueries`, `fetchedUrls`, `sourceArtifacts`,
+  `selectedRowSource`, `notes`, and ordered `steps`
 - emit a capability diagnostic when no-Agent mode sees pages that need browser,
   form, or detail-page follow-up
 
 The current layer does not yet:
 
 - generate Playwright scripts as a durable production recipe
+- emit `playwright-candidate-script`; that artifact kind is reserved for the
+  future compiler and is not produced yet
+- run cron from compiled Playwright scripts
+- repair or promote Playwright scripts; repair still changes durable runtime
+  instructions only
 - run a green live Convex canary in this local environment
 - prove Agent-enabled collection quality on a full real benchmark
 - prove the collection runtime should replace Mastra as the default app runtime

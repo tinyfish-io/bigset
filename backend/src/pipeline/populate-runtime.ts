@@ -39,13 +39,61 @@ export interface PopulateRuntimeCapturedInsertedRow {
 export interface PopulateRuntimeCapturedSource {
   url: string;
   text: string;
+  source: "search" | "fetch" | "synthetic";
+}
+
+export type PopulateRuntimeTraceStepKind =
+  | "search"
+  | "fetch"
+  | "insert_row"
+  | "agent"
+  | "extract"
+  | "repair"
+  | "validation";
+
+export interface PopulateRuntimeTraceStep {
+  kind: PopulateRuntimeTraceStepKind;
+  label: string;
+  status: "succeeded" | "failed" | "skipped";
+  input?: Record<string, unknown>;
+  output?: Record<string, unknown>;
+  error?: string;
+}
+
+export interface PopulateProcessTraceSourceArtifact {
+  url: string;
+  status: "succeeded" | "failed" | "skipped";
+  source: "search" | "fetch" | "agent" | "collection" | "unknown";
+  label?: string;
+  error?: string;
+}
+
+export interface PopulateProcessTrace {
+  runtime: "mastra" | "mastra-injected" | "collection" | "unknown";
+  searchQueries: string[];
+  fetchedUrls: string[];
+  sourceArtifacts: PopulateProcessTraceSourceArtifact[];
+  selectedRowSource:
+    | "insert_row"
+    | "structured_recovery"
+    | "collection_pipeline"
+    | "none";
+  notes: string[];
+  steps: PopulateRuntimeTraceStep[];
+  artifactRoot?: string;
+  runReportPath?: string;
 }
 
 export interface PopulateRuntimeDebug {
   capturedRows: PopulateRuntimeCapturedInsertedRow[];
   capturedSources: PopulateRuntimeCapturedSource[];
-  selectedRowSource: "insert_row" | "structured_recovery" | "none";
+  selectedRowSource:
+    | "insert_row"
+    | "structured_recovery"
+    | "collection_pipeline"
+    | "none";
   notes: string[];
+  processTrace: PopulateProcessTrace;
 }
 
 export interface PopulateRuntimeResult {
@@ -119,6 +167,7 @@ export async function runPopulateRuntime(input: {
 
   const capturedRows: PopulateRuntimeCapturedInsertedRow[] = [];
   const capturedSources: PopulateRuntimeCapturedSource[] = [];
+  const processTraceSteps: PopulateRuntimeTraceStep[] = [];
   const validationIssues: string[] = [];
   const debugNotes: string[] = [];
   const metrics = emptyMetrics();
@@ -131,6 +180,7 @@ export async function runPopulateRuntime(input: {
     metrics,
     webTools,
     maxRows: input.maxRows ?? 10,
+    processTraceSteps,
   });
   const prompt = buildPopulatePrompt(parsedContext);
   let agentOutput: unknown;
@@ -139,16 +189,64 @@ export async function runPopulateRuntime(input: {
     try {
       agentOutput = await input.agentRunner({ prompt, tools });
       metrics.agentRuns += 1;
+      processTraceSteps.push({
+        kind: "agent",
+        label: "populate-agent-injected",
+        status: "succeeded",
+        input: {
+          promptCharacters: prompt.length,
+          toolNames: Object.keys(tools),
+        },
+        output: {
+          capturedRowCount: capturedRows.length,
+          capturedSourceCount: capturedSources.length,
+        },
+      });
     } catch (error) {
-      validationIssues.push(populateAgentFailureMessage(error));
+      const message = populateAgentFailureMessage(error);
+      validationIssues.push(message);
+      processTraceSteps.push({
+        kind: "agent",
+        label: "populate-agent-injected",
+        status: "failed",
+        input: {
+          promptCharacters: prompt.length,
+          toolNames: Object.keys(tools),
+        },
+        error: message,
+      });
     }
   } else {
     try {
       const agent = createRuntimePopulateAgent({ tools });
       agentOutput = await agent.generate(prompt);
       metrics.agentRuns += 1;
+      processTraceSteps.push({
+        kind: "agent",
+        label: "populate-agent-mastra",
+        status: "succeeded",
+        input: {
+          promptCharacters: prompt.length,
+          toolNames: Object.keys(tools),
+        },
+        output: {
+          capturedRowCount: capturedRows.length,
+          capturedSourceCount: capturedSources.length,
+        },
+      });
     } catch (error) {
-      validationIssues.push(populateAgentFailureMessage(error));
+      const message = populateAgentFailureMessage(error);
+      validationIssues.push(message);
+      processTraceSteps.push({
+        kind: "agent",
+        label: "populate-agent-mastra",
+        status: "failed",
+        input: {
+          promptCharacters: prompt.length,
+          toolNames: Object.keys(tools),
+        },
+        error: message,
+      });
     }
 
   }
@@ -173,12 +271,28 @@ export async function runPopulateRuntime(input: {
         capturedSources,
       });
       metrics.agentRuns += 1;
+      processTraceSteps.push({
+        kind: "extract",
+        label: "structured-row-recovery",
+        status: "succeeded",
+        input: {
+          capturedSourceCount: capturedSources.length,
+        },
+      });
     } catch (error) {
-      validationIssues.push(
-        `Structured row generation failed: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      );
+      const message = `Structured row generation failed: ${
+        error instanceof Error ? error.message : String(error)
+      }`;
+      validationIssues.push(message);
+      processTraceSteps.push({
+        kind: "extract",
+        label: "structured-row-recovery",
+        status: "failed",
+        input: {
+          capturedSourceCount: capturedSources.length,
+        },
+        error: message,
+      });
     }
   }
 
@@ -214,6 +328,13 @@ export async function runPopulateRuntime(input: {
     insertedRows,
     structuredRows,
   });
+  const processTrace = populateProcessTraceFromSteps({
+    runtime: input.agentRunner ? "mastra-injected" : "mastra",
+    steps: processTraceSteps,
+    capturedSources,
+    selectedRowSource,
+    notes: debugNotes,
+  });
   validationIssues.push(...validateRuntimeRows(rows));
 
   return {
@@ -226,6 +347,7 @@ export async function runPopulateRuntime(input: {
       capturedSources,
       selectedRowSource,
       notes: debugNotes,
+      processTrace,
     },
   };
 }
@@ -281,6 +403,15 @@ function emptyClarificationResult(validationIssues: string[]): PopulateRuntimeRe
       capturedSources: [],
       selectedRowSource: "none",
       notes: [],
+      processTrace: {
+        runtime: "unknown",
+        searchQueries: [],
+        fetchedUrls: [],
+        sourceArtifacts: [],
+        selectedRowSource: "none",
+        notes: [],
+        steps: [],
+      },
     },
   };
 }
@@ -327,6 +458,7 @@ async function enrichCapturedSourcesForStructuredFallback(input: {
       newSources.push({
         url: result.url,
         text: [result.title, result.snippet].filter(Boolean).join("\n"),
+        source: "search",
       });
       input.metrics.fetchCalls += 1;
       try {
@@ -334,6 +466,7 @@ async function enrichCapturedSourcesForStructuredFallback(input: {
         newSources.push({
           url: result.url,
           text: [page.title, page.text].filter(Boolean).join("\n"),
+          source: "fetch",
         });
       } catch (error) {
         input.validationIssues.push(
@@ -360,6 +493,7 @@ async function captureDirectOfficialSource(input: {
   input.newSources.push({
     url: input.url,
     text: `${input.entity} official source\n${input.url}`,
+    source: "synthetic",
   });
   input.input.metrics.fetchCalls += 1;
   try {
@@ -367,6 +501,7 @@ async function captureDirectOfficialSource(input: {
     input.newSources.push({
       url: input.url,
       text: [page.title, page.text].filter(Boolean).join("\n"),
+      source: "fetch",
     });
   } catch (error) {
     input.input.validationIssues.push(
@@ -691,6 +826,107 @@ function selectedRowSourceForRows(input: {
   return "none";
 }
 
+export function populateProcessTraceFromSteps(input: {
+  runtime: PopulateProcessTrace["runtime"];
+  steps: PopulateRuntimeTraceStep[];
+  capturedSources?: PopulateRuntimeCapturedSource[];
+  selectedRowSource: PopulateProcessTrace["selectedRowSource"];
+  notes?: string[];
+  artifactRoot?: string;
+  runReportPath?: string;
+}): PopulateProcessTrace {
+  const searchQueries = input.steps.flatMap((step) => {
+    const query = step.kind === "search"
+      ? stringValue(step.input?.query)
+      : undefined;
+    return query ? [query] : [];
+  });
+  const fetchedUrls = input.steps.flatMap((step) => {
+    const url = step.kind === "fetch"
+      ? stringValue(step.input?.url)
+      : undefined;
+    return url ? [url] : [];
+  });
+  const sourceArtifacts: PopulateProcessTraceSourceArtifact[] = [
+    ...(input.capturedSources ?? []).map((source) => ({
+      url: source.url,
+      status: "succeeded" as const,
+      source: capturedSourceArtifactSource(source.source),
+      label: "captured-source",
+    })),
+    ...input.steps
+      .filter((step) => step.kind === "search" && Array.isArray(step.output?.urls))
+      .flatMap((step) =>
+        (step.output?.urls as unknown[]).flatMap((url) => {
+          const sourceUrl = stringValue(url);
+          return sourceUrl
+            ? [{
+              url: sourceUrl,
+              status: step.status,
+              source: "search" as const,
+              label: step.label,
+              error: step.error,
+            }]
+            : [];
+        })
+      ),
+    ...input.steps
+      .filter((step) => step.kind === "fetch")
+      .flatMap((step) => {
+        const sourceUrl = stringValue(step.input?.url);
+        return sourceUrl
+          ? [{
+            url: sourceUrl,
+            status: step.status,
+            source: "fetch" as const,
+            label: step.label,
+            error: step.error,
+          }]
+          : [];
+      }),
+  ];
+
+  return {
+    runtime: input.runtime,
+    searchQueries: Array.from(new Set(searchQueries)),
+    fetchedUrls: uniqueHttpUrls(fetchedUrls),
+    sourceArtifacts: dedupeProcessTraceSourceArtifacts(sourceArtifacts),
+    selectedRowSource: input.selectedRowSource,
+    notes: input.notes ?? [],
+    steps: input.steps,
+    artifactRoot: input.artifactRoot,
+    runReportPath: input.runReportPath,
+  };
+}
+
+function capturedSourceArtifactSource(
+  source: PopulateRuntimeCapturedSource["source"]
+): PopulateProcessTraceSourceArtifact["source"] {
+  if (source === "search" || source === "fetch") {
+    return source;
+  }
+  return "unknown";
+}
+
+function dedupeProcessTraceSourceArtifacts(
+  artifacts: PopulateProcessTraceSourceArtifact[]
+): PopulateProcessTraceSourceArtifact[] {
+  const seen = new Set<string>();
+  const uniqueArtifacts: PopulateProcessTraceSourceArtifact[] = [];
+  for (const artifact of artifacts) {
+    if (!/^https?:\/\//i.test(artifact.url)) {
+      continue;
+    }
+    const key = `${artifact.url}|${artifact.status}|${artifact.source}|${artifact.label ?? ""}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    uniqueArtifacts.push(artifact);
+  }
+  return uniqueArtifacts;
+}
+
 function createPopulateRuntimeTools(input: {
   datasetId: string;
   capturedRows: PopulateRuntimeCapturedInsertedRow[];
@@ -699,6 +935,7 @@ function createPopulateRuntimeTools(input: {
   metrics: PopulateRuntimeResult["metrics"];
   webTools: PopulateRuntimeWebTools;
   maxRows: number;
+  processTraceSteps: PopulateRuntimeTraceStep[];
 }) {
   return {
     insert_row: createTool({
@@ -714,18 +951,50 @@ function createPopulateRuntimeTools(input: {
       }),
       execute: async ({ datasetId, data }) => {
         if (datasetId !== input.datasetId) {
+          input.processTraceSteps.push({
+            kind: "insert_row",
+            label: "insert_row",
+            status: "failed",
+            input: {
+              datasetId,
+              columnNames: Object.keys(data),
+            },
+            error: `datasetId must be ${input.datasetId}.`,
+          });
           return {
             success: false,
             error: `datasetId must be ${input.datasetId}.`,
           };
         }
         if (input.capturedRows.length >= input.maxRows) {
+          input.processTraceSteps.push({
+            kind: "insert_row",
+            label: "insert_row",
+            status: "failed",
+            input: {
+              datasetId,
+              columnNames: Object.keys(data),
+            },
+            error: `Row cap reached for this benchmark run (${input.maxRows}).`,
+          });
           return {
             success: false,
             error: `Row cap reached for this benchmark run (${input.maxRows}).`,
           };
         }
         input.capturedRows.push({ datasetId, data });
+        input.processTraceSteps.push({
+          kind: "insert_row",
+          label: "insert_row",
+          status: "succeeded",
+          input: {
+            datasetId,
+            columnNames: Object.keys(data),
+          },
+          output: {
+            capturedRowCount: input.capturedRows.length,
+          },
+        });
         return { success: true };
       },
     }),
@@ -749,12 +1018,30 @@ function createPopulateRuntimeTools(input: {
             ...results.map((result) => ({
               url: result.url,
               text: [result.title, result.snippet].filter(Boolean).join("\n"),
+              source: "search" as const,
             }))
           );
+          input.processTraceSteps.push({
+            kind: "search",
+            label: "search_web",
+            status: "succeeded",
+            input: { query },
+            output: {
+              resultCount: results.length,
+              urls: results.map((result) => result.url).slice(0, 10),
+            },
+          });
           return { results };
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           input.validationIssues.push(`search_web failed: ${message}`);
+          input.processTraceSteps.push({
+            kind: "search",
+            label: "search_web",
+            status: "failed",
+            input: { query },
+            error: message,
+          });
           return { error: message };
         }
       },
@@ -775,11 +1062,29 @@ function createPopulateRuntimeTools(input: {
           input.capturedSources.push({
             url,
             text: [page.title, page.text].filter(Boolean).join("\n"),
+            source: "fetch",
+          });
+          input.processTraceSteps.push({
+            kind: "fetch",
+            label: "fetch_page",
+            status: "succeeded",
+            input: { url },
+            output: {
+              title: page.title,
+              textCharacters: page.text?.length ?? 0,
+            },
           });
           return page;
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           input.validationIssues.push(`fetch_page failed: ${message}`);
+          input.processTraceSteps.push({
+            kind: "fetch",
+            label: "fetch_page",
+            status: "failed",
+            input: { url },
+            error: message,
+          });
           return { error: message };
         }
       },

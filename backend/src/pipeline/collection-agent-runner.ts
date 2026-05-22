@@ -7,9 +7,11 @@ import type {
   CollectionPopulatePipelineInput,
   CollectionPopulatePipelineRunner,
 } from "./populate-collection-runtime.js";
-import type {
-  PopulateCellValue,
-  PopulateRuntimeResult,
+import {
+  populateProcessTraceFromSteps,
+  type PopulateCellValue,
+  type PopulateRuntimeResult,
+  type PopulateRuntimeTraceStep,
 } from "./populate-runtime.js";
 
 type CollectionPipelineModule = {
@@ -36,14 +38,27 @@ interface CollectionPipelineOptions {
 }
 
 interface CollectionPipelineResult {
+  runId?: string;
+  paths?: {
+    root?: string;
+    reportPath?: string;
+  };
   report: {
     errors?: string[];
     dataset_spec?: CollectionDatasetSpec;
     stats?: CollectionPhaseStats;
-    initial?: CollectionPhaseStats;
+    initial?: CollectionPhaseStats & {
+      search_queries?: string[];
+      fetched_urls?: string[];
+      failed_urls?: string[];
+    };
     repair?: {
       stats?: CollectionPhaseStats;
+      loops?: CollectionRepairLoopReport[];
     };
+    search_queries?: string[];
+    fetched_urls?: string[];
+    failed_urls?: string[];
     quality?: {
       records?: CollectionRecordQuality[];
     };
@@ -98,8 +113,18 @@ interface CollectionSourcesReport {
 }
 
 interface CollectionSourceOutcome {
+  url?: string;
+  phase?: string;
   outcome?: string;
   triage_status?: string;
+  error?: string;
+  records_extracted?: number;
+}
+
+interface CollectionRepairLoopReport {
+  loop_index?: number;
+  repair_queries?: string[];
+  stats?: CollectionPhaseStats;
 }
 
 const AGENT_REQUIRED_TRIAGE_STATUSES = new Set([
@@ -200,6 +225,16 @@ function collectionPipelineResultToPopulateRuntimeResult(input: {
     ],
     usage: usageFromPipeline(input.pipeline),
     metrics: metricsFromReport(input.pipeline.report),
+    debug: {
+      capturedRows: [],
+      capturedSources: [],
+      selectedRowSource: rows.length > 0 ? "collection_pipeline" : "none",
+      notes: collectionDebugNotes(input.pipeline.report),
+      processTrace: collectionProcessTrace({
+        pipeline: input.pipeline,
+        rows,
+      }),
+    },
   };
 }
 
@@ -229,6 +264,122 @@ function capabilityDiagnosticsFromReport(input: {
   return [
     `Capability diagnostic: TinyFish Agent disabled; triage requested browser/form/detail follow-up for ${agentRequiredOutcomes.length} page(s) (${statusSummary}). Enable COLLECTION_AGENT_ENABLE_AGENT=true for live navigation.`,
   ];
+}
+
+function collectionProcessTrace(input: {
+  pipeline: CollectionPipelineResult;
+  rows: Array<ReturnType<typeof collectionRecordToPopulateRow>>;
+}) {
+  const report = input.pipeline.report;
+  const steps: PopulateRuntimeTraceStep[] = [];
+
+  for (const query of report.search_queries ?? report.initial?.search_queries ?? []) {
+    steps.push({
+      kind: "search",
+      label: "collection-search-query",
+      status: "succeeded",
+      input: { query },
+    });
+  }
+
+  for (const url of report.fetched_urls ?? report.initial?.fetched_urls ?? []) {
+    steps.push({
+      kind: "fetch",
+      label: "collection-fetched-url",
+      status: "succeeded",
+      input: { url },
+    });
+  }
+
+  for (const url of report.failed_urls ?? report.initial?.failed_urls ?? []) {
+    steps.push({
+      kind: "fetch",
+      label: "collection-failed-url",
+      status: "failed",
+      input: { url },
+    });
+  }
+
+  for (const loop of report.repair?.loops ?? []) {
+    for (const query of loop.repair_queries ?? []) {
+      steps.push({
+        kind: "repair",
+        label: "collection-repair-query",
+        status: "succeeded",
+        input: {
+          loopIndex: loop.loop_index,
+          query,
+        },
+      });
+    }
+  }
+
+  for (const outcome of report.sources?.outcomes ?? []) {
+    if (!outcome.url) {
+      continue;
+    }
+    steps.push({
+      kind: sourceOutcomeTraceKind(outcome),
+      label: `collection-source-${outcome.outcome ?? "unknown"}`,
+      status: sourceOutcomeTraceStatus(outcome),
+      input: {
+        url: outcome.url,
+        phase: outcome.phase,
+        triageStatus: outcome.triage_status,
+      },
+      output: {
+        recordsExtracted: outcome.records_extracted,
+      },
+      error: outcome.error,
+    });
+  }
+
+  return populateProcessTraceFromSteps({
+    runtime: "collection",
+    steps,
+    selectedRowSource: input.rows.length > 0 ? "collection_pipeline" : "none",
+    notes: collectionDebugNotes(report),
+    artifactRoot: input.pipeline.paths?.root,
+    runReportPath: input.pipeline.paths?.reportPath,
+  });
+}
+
+function collectionDebugNotes(report: CollectionPipelineResult["report"]): string[] {
+  const notes = [];
+  if (report.stats) {
+    notes.push(
+      `collection stats: searches=${numberValue(report.stats.search_queries_executed)}, ` +
+        `fetches=${numberValue(report.stats.pages_fetched)}`
+    );
+  }
+  if (report.repair?.loops && report.repair.loops.length > 0) {
+    notes.push(`collection repair loops=${report.repair.loops.length}`);
+  }
+  return notes;
+}
+
+function sourceOutcomeTraceKind(outcome: CollectionSourceOutcome): PopulateRuntimeTraceStep["kind"] {
+  if (outcome.outcome?.startsWith("agent_")) {
+    return "agent";
+  }
+  if (outcome.outcome === "fetch_failed") {
+    return "fetch";
+  }
+  return "validation";
+}
+
+function sourceOutcomeTraceStatus(
+  outcome: CollectionSourceOutcome
+): PopulateRuntimeTraceStep["status"] {
+  if (
+    outcome.outcome &&
+    ["fetch_failed", "skipped", "agent_failed", "agent_deferred", "no_records"].includes(
+      outcome.outcome
+    )
+  ) {
+    return "failed";
+  }
+  return "succeeded";
 }
 
 function isAgentRequiredSourceOutcome(outcome: CollectionSourceOutcome): boolean {

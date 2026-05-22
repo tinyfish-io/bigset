@@ -108,6 +108,15 @@ test("Mastra populate recipe runtime maps populate rows into a healthy recipe ru
   assert.equal(run.debug?.selectedRowSource, "insert_row");
   assert.ok(run.artifacts.some((artifact) => artifact.kind === "source-transcript"));
   assert.ok(run.artifacts.some((artifact) => artifact.kind === "captured-rows"));
+  const traceArtifact = run.artifacts.find((artifact) =>
+    artifact.kind === "process-trace"
+  );
+  assert.ok(traceArtifact);
+  const trace = JSON.parse(traceArtifact.content);
+  assert.equal(trace.runtime, "mastra-injected");
+  assert.deepEqual(trace.searchQueries, ["OpenAI latest blog"]);
+  assert.deepEqual(trace.fetchedUrls, ["https://openai.com/news"]);
+  assert.equal(trace.selectedRowSource, "insert_row");
 });
 
 test("Mastra populate recipe runtime keeps supplemental fetch misses non-blocking", async () => {
@@ -131,6 +140,55 @@ test("Mastra populate recipe runtime keeps supplemental fetch misses non-blockin
   assert.equal(run.productionValidation.isValid, true);
   assert.deepEqual(run.productionValidation.criticalIssues, []);
   assert.match(run.productionValidation.warnings.join("\n"), /timeout/);
+});
+
+test("process trace artifacts stay parseable when trace content is large", async () => {
+  const runtime = new MastraPopulateRecipeRuntime({
+    runPopulate: async () => ({
+      rows: validRows(),
+      validationIssues: [],
+      usage: emptyUsage(),
+      metrics: emptyMetrics(),
+      debug: {
+        capturedRows: [],
+        capturedSources: [],
+        selectedRowSource: "collection_pipeline",
+        notes: [],
+        processTrace: {
+          runtime: "collection",
+          searchQueries: Array.from({ length: 125 }, (_, index) =>
+            `query-${index}-${"x".repeat(1_000)}`
+          ),
+          fetchedUrls: [],
+          sourceArtifacts: [],
+          selectedRowSource: "collection_pipeline",
+          notes: ["n".repeat(1_000)],
+          steps: Array.from({ length: 125 }, (_, index) => ({
+            kind: "search" as const,
+            label: `collection-search-query-${index}`,
+            status: "succeeded" as const,
+            input: { query: "x".repeat(1_000) },
+          })),
+        },
+      },
+    }),
+  });
+
+  const run = await runtime.runRecipe({
+    recipe: recipe({ recipeId: "recipe-v1" }),
+    context,
+  });
+  const traceArtifact = run.artifacts.find((artifact) =>
+    artifact.kind === "process-trace"
+  );
+
+  assert.ok(traceArtifact);
+  assert.ok(traceArtifact.content.length <= 20_000);
+  const parsedTrace = JSON.parse(traceArtifact.content);
+  assert.equal(parsedTrace.truncated, true);
+  assert.ok(parsedTrace.steps.length > 0);
+  assert.ok(parsedTrace.steps.length <= 100);
+  assert.match(parsedTrace.searchQueries[0], /\[truncated\]/);
 });
 
 test("Mastra populate recipe runtime blocks missing expected entities", async () => {
@@ -370,7 +428,7 @@ test("file store reloads populate recipes and run records", async () => {
   const service = new SelfHealingPopulateRecipeService({
     store,
     runtime: new FakePopulateRecipeRuntime({
-      "persisted-v1": validRun(generatedRecipe),
+      "persisted-v1": validRun(generatedRecipe, 1, [processTraceArtifact()]),
     }),
     author: new FakeRecipeAuthor({ generatedRecipe }),
   });
@@ -384,6 +442,11 @@ test("file store reloads populate recipes and run records", async () => {
   assert.equal(snapshot.recipes[0]?.status, "active");
   assert.equal(snapshot.runRecords.length, 1);
   assert.equal(snapshot.runRecords[0]?.runStatus, "succeeded");
+  assert.equal(snapshot.runRecords[0]?.artifacts[0]?.kind, "process-trace");
+  assert.match(
+    snapshot.runRecords[0]?.artifacts[0]?.content ?? "",
+    /collection-search-query/
+  );
 });
 
 interface ToolLike<TInput, TOutput> {
@@ -408,12 +471,17 @@ function recipe(input: {
   });
 }
 
-function validRun(recipe: PopulateRecipe, score = 1): PopulateRecipeRunResult {
+function validRun(
+  recipe: PopulateRecipe,
+  score = 1,
+  artifacts: PopulateRecipeRunResult["artifacts"] = []
+): PopulateRecipeRunResult {
   return runResult({
     recipe,
     rows: validRows(),
     isValid: true,
     score,
+    artifacts,
   });
 }
 
@@ -435,6 +503,7 @@ function runResult(input: {
   criticalIssues?: string[];
   isValid: boolean;
   score: number;
+  artifacts?: PopulateRecipeRunResult["artifacts"];
 }): PopulateRecipeRunResult {
   return {
     rows: input.rows,
@@ -470,7 +539,32 @@ function runResult(input: {
       criticalIssues: input.criticalIssues ?? [],
       warnings: input.validationIssues ?? [],
     },
-    artifacts: [],
+    artifacts: input.artifacts ?? [],
+  };
+}
+
+function processTraceArtifact(): PopulateRecipeRunResult["artifacts"][number] {
+  return {
+    kind: "process-trace",
+    label: "populate-process-trace",
+    content: JSON.stringify({
+      runtime: "collection",
+      searchQueries: ["OpenAI latest blog"],
+      fetchedUrls: ["https://openai.com/news"],
+      sourceArtifacts: [{
+        url: "https://openai.com/news",
+        status: "succeeded",
+        source: "collection",
+      }],
+      selectedRowSource: "collection_pipeline",
+      notes: [],
+      steps: [{
+        kind: "search",
+        label: "collection-search-query",
+        status: "succeeded",
+        input: { query: "OpenAI latest blog" },
+      }],
+    }),
   };
 }
 
