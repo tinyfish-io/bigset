@@ -534,6 +534,8 @@ async function runSystemPrompt(input) {
       BIGSET_BENCHMARK_PROMPT: input.promptDefinition.prompt,
       BIGSET_BENCHMARK_PROMPT_ID: input.promptDefinition.id,
       BIGSET_BENCHMARK_PROMPT_QUALITY: input.promptDefinition.quality,
+      BIGSET_BENCHMARK_PERSONA: input.promptDefinition.persona,
+      BIGSET_BENCHMARK_EXPECTED_STRESS: input.promptDefinition.expectedStress,
       BIGSET_BENCHMARK_REQUIRED_COLUMNS: input.promptDefinition.requiredColumns.join(","),
       BIGSET_BENCHMARK_MINIMUM_REQUIRED_COLUMNS: minimumRequiredColumns.join(","),
     },

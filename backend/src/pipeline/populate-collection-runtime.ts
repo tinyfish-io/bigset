@@ -14,7 +14,15 @@ export interface CollectionPopulatePipelineColumn {
   description?: string;
 }
 
-export interface CollectionPopulatePipelineInput {
+export interface CollectionPopulateBenchmarkMetadata {
+  promptId?: string;
+  promptQuality?: string;
+  persona?: string;
+  expectedStress?: string;
+}
+
+export interface CollectionPopulatePipelineInput
+  extends CollectionPopulateBenchmarkMetadata {
   datasetId: string;
   datasetName: string;
   description: string;
@@ -32,6 +40,7 @@ export type CollectionPopulatePipelineRunner = (
 export interface CollectionPopulateRecipeRuntimeOptions {
   runPipeline: CollectionPopulatePipelineRunner;
   targetRows?: number;
+  benchmarkMetadata?: CollectionPopulateBenchmarkMetadata;
 }
 
 export class CollectionPopulateRecipeRuntime implements PopulateRecipeRuntime {
@@ -52,6 +61,7 @@ export class CollectionPopulateRecipeRuntime implements PopulateRecipeRuntime {
           recipe: input.recipe,
           context: input.context,
           targetRows: this.input.targetRows ?? 10,
+          benchmarkMetadata: this.input.benchmarkMetadata,
         })
       );
     } catch (error) {
@@ -74,9 +84,11 @@ export function collectionPipelineInputFromRecipe(input: {
   recipe: PopulateRecipe;
   context: DatasetContext;
   targetRows: number;
+  benchmarkMetadata?: CollectionPopulateBenchmarkMetadata;
 }): CollectionPopulatePipelineInput {
   const recipeInstructions = input.recipe.runtimeInstructions.trim();
   return {
+    ...input.benchmarkMetadata,
     datasetId: input.context.datasetId,
     datasetName: input.context.datasetName,
     description: input.context.description,

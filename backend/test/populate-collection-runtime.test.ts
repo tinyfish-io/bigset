@@ -44,6 +44,12 @@ test("collection runtime threads recipe instructions into the collection prompt"
   let capturedInput: CollectionPopulatePipelineInput | undefined;
   const runtime = new CollectionPopulateRecipeRuntime({
     targetRows: 3,
+    benchmarkMetadata: {
+      promptId: "latest-ai-blog-posts",
+      promptQuality: "easy",
+      persona: "technical operator",
+      expectedStress: "Latest dated source pages; date precision matters.",
+    },
     runPipeline: async (input) => {
       capturedInput = input;
       return {
@@ -89,6 +95,13 @@ test("collection runtime threads recipe instructions into the collection prompt"
   assert.equal(capturedInput.datasetId, context.datasetId);
   assert.equal(capturedInput.datasetName, context.datasetName);
   assert.equal(capturedInput.targetRows, 3);
+  assert.equal(capturedInput.promptId, "latest-ai-blog-posts");
+  assert.equal(capturedInput.promptQuality, "easy");
+  assert.equal(capturedInput.persona, "technical operator");
+  assert.equal(
+    capturedInput.expectedStress,
+    "Latest dated source pages; date precision matters."
+  );
   assert.deepEqual(capturedInput.requiredColumns, [
     "entity_name",
     "latest_post_title",
@@ -117,6 +130,25 @@ test("collection pipeline input builder trims empty recipe instructions", () => 
 
   assert.equal(input.recipeInstructions, "");
   assert.doesNotMatch(input.prompt, /Durable recipe instructions/);
+});
+
+test("collection pipeline input builder carries benchmark metadata", () => {
+  const input = collectionPipelineInputFromRecipe({
+    recipe: collectionRecipe(),
+    context,
+    targetRows: 5,
+    benchmarkMetadata: {
+      promptId: "saas-pricing-pages",
+      promptQuality: "medium",
+      persona: "startup founder",
+      expectedStress: "Official pricing evidence.",
+    },
+  });
+
+  assert.equal(input.promptId, "saas-pricing-pages");
+  assert.equal(input.promptQuality, "medium");
+  assert.equal(input.persona, "startup founder");
+  assert.equal(input.expectedStress, "Official pricing evidence.");
 });
 
 function collectionRecipe(input: {

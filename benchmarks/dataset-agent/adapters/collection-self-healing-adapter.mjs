@@ -5,6 +5,8 @@ import { resolve } from "node:path";
 const prompt = requiredEnv("BIGSET_BENCHMARK_PROMPT");
 const promptId = process.env.BIGSET_BENCHMARK_PROMPT_ID ?? "benchmark-prompt";
 const promptQuality = process.env.BIGSET_BENCHMARK_PROMPT_QUALITY ?? "unknown";
+const persona = process.env.BIGSET_BENCHMARK_PERSONA;
+const expectedStress = process.env.BIGSET_BENCHMARK_EXPECTED_STRESS;
 const requiredColumns = columnList(
   requiredEnv("BIGSET_BENCHMARK_REQUIRED_COLUMNS")
 );
@@ -74,6 +76,12 @@ const service = new SelfHealingPopulateRecipeService({
   runtime: new CollectionPopulateRecipeRuntime({
     runPipeline: collectionRunner,
     targetRows: Number(process.env.BIGSET_COLLECTION_BENCHMARK_MAX_ROWS ?? "10"),
+    benchmarkMetadata: {
+      promptId,
+      promptQuality,
+      persona,
+      expectedStress,
+    },
   }),
   author: new DefaultPopulateRecipeAuthor(),
 });

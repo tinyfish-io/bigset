@@ -73,12 +73,17 @@ For each prompt the runner sets:
 - `BIGSET_BENCHMARK_PROMPT`
 - `BIGSET_BENCHMARK_PROMPT_ID`
 - `BIGSET_BENCHMARK_PROMPT_QUALITY`
+- `BIGSET_BENCHMARK_PERSONA`
+- `BIGSET_BENCHMARK_EXPECTED_STRESS`
 - `BIGSET_BENCHMARK_REQUIRED_COLUMNS`
 - `BIGSET_BENCHMARK_MINIMUM_REQUIRED_COLUMNS`
 
 `BIGSET_BENCHMARK_REQUIRED_COLUMNS` is the requested table shape.
 `BIGSET_BENCHMARK_MINIMUM_REQUIRED_COLUMNS` is the hard row identity minimum.
-Rows still need at least one source URL and evidence quote.
+Rows still need at least one source URL and evidence quote. Collection benchmark
+runners receive prompt id, quality, persona, expected stress, and required
+columns through `CollectionPopulatePipelineInput` so they can build the same
+benchmark/spec context that the direct collection lane expects.
 
 ## Agent Output Contract
 
