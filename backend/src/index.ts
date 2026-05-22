@@ -60,15 +60,15 @@ await fastify.register(async (instance) => {
       });
     }
 
-    const dataset = await convex.query(api.datasets.get, { id: parsed.data.datasetId });
-    if (!dataset) {
-      return reply.code(404).send({ error: "Dataset not found" });
-    }
-    if (dataset.ownerId !== req.auth.userId) {
-      return reply.code(403).send({ error: "Not authorized to populate this dataset" });
-    }
-
     try {
+      const dataset = await convex.query(api.datasets.get, { id: parsed.data.datasetId });
+      if (!dataset) {
+        return reply.code(404).send({ error: "Dataset not found" });
+      }
+      if (dataset.ownerId !== req.auth.userId) {
+        return reply.code(403).send({ error: "Not authorized to populate this dataset" });
+      }
+
       const run = await populateWorkflow.createRun();
       const result = await run.start({ inputData: parsed.data });
 
@@ -80,6 +80,10 @@ await fastify.register(async (instance) => {
 
       return { success: true, result: result.result };
     } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("validator") || msg.includes("Invalid")) {
+        return reply.code(400).send({ error: "Invalid datasetId" });
+      }
       req.log.error(err, "Populate failed");
       return reply.code(502).send({ error: "Failed to populate dataset. Please try again." });
     }
