@@ -21,6 +21,25 @@ Real Mastra benchmark runs require `OPENROUTER_API_KEY` and `TINYFISH_API_KEY`
 loaded execution-only. If either is missing, the adapter returns a blocked
 benchmark result instead of touching app data.
 
+## Run Collection Inside Self-Healing
+
+The collection adapter uses the same benchmark runner, but wraps
+`CollectionPopulateRecipeRuntime` inside `SelfHealingPopulateRecipeService`.
+That means collection results are scored after the same recipe generation,
+repair, validation, and promotion path as the app runtime.
+
+```bash
+node benchmarks/dataset-agent/run-benchmark.mjs \
+  --prompt-ids latest-ai-blog-posts,saas-pricing-pages \
+  --system collection-self-heal='node --import ./backend/node_modules/tsx/dist/esm/index.mjs benchmarks/dataset-agent/adapters/collection-self-healing-adapter.mjs'
+```
+
+Real collection benchmark runs require `OPENROUTER_API_KEY`,
+`TINYFISH_API_KEY`, and `BIGSET_COLLECTION_BENCHMARK_RUNNER_MODULE` loaded in
+the shell. The runner module must export `runCollectionPopulatePipeline(input)`
+or a default runner that accepts `CollectionPopulatePipelineInput` and returns a
+`PopulateRuntimeResult`.
+
 ## Verify Self-Healing Stack
 
 Use this before asking someone else to migrate a new collection agent into the
@@ -30,9 +49,9 @@ app path:
 make verify-self-healing
 ```
 
-That command runs backend tests, backend build, adapter syntax checks, and a
-no-key benchmark smoke that must produce a clean `blocked` result without
-spending OpenRouter or TinyFish credits.
+That command runs backend tests, backend build, adapter syntax checks, and
+Mastra + collection no-key benchmark smokes that must produce clean `blocked`
+results without spending OpenRouter or TinyFish credits.
 
 Live checks are explicit:
 

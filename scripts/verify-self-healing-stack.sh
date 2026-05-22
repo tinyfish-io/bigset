@@ -90,18 +90,20 @@ check_convex_ready() {
 }
 
 run_blocked_benchmark_smoke() {
-  local out_dir="benchmark-results/self-healing-blocked-smoke-$(date +%Y%m%d-%H%M%S)"
+  local system_name="$1"
+  local system_command="$2"
+  local out_dir="benchmark-results/${system_name}-blocked-smoke-$(date +%Y%m%d-%H%M%S)"
   local stdout_file="${out_dir}/runner-stdout.json"
 
   mkdir -p "$out_dir"
-  printf 'RUN   mastra benchmark no-key blocked smoke\n'
+  printf 'RUN   %s benchmark no-key blocked smoke\n' "$system_name"
   if ! env -u OPENROUTER_API_KEY -u TINYFISH_API_KEY node benchmarks/dataset-agent/run-benchmark.mjs \
     --prompt-ids latest-ai-blog-posts \
     --timeout-ms 60000 \
     --out "$out_dir" \
-    --system "mastra=node --import ./backend/node_modules/tsx/dist/esm/index.mjs benchmarks/dataset-agent/adapters/mastra-populate-adapter.mjs" \
+    --system "${system_name}=${system_command}" \
     > "$stdout_file"; then
-    mark_fail "mastra benchmark no-key blocked smoke"
+    mark_fail "${system_name} benchmark no-key blocked smoke"
     return
   fi
 
@@ -154,9 +156,9 @@ for (const result of summary.laneResults ?? []) {
   }
 }
 ' "${out_dir}/summary.json"; then
-    mark_pass "mastra benchmark no-key blocked smoke (${out_dir})"
+    mark_pass "${system_name} benchmark no-key blocked smoke (${out_dir})"
   else
-    mark_fail "mastra benchmark no-key blocked smoke"
+    mark_fail "${system_name} benchmark no-key blocked smoke"
   fi
 }
 
@@ -253,10 +255,16 @@ if [[ "$SHOULD_RUN_LOCAL_GATES" -eq 1 ]]; then
   run_required_step "backend tests" npm --prefix backend test
   run_required_step "backend build" npm --prefix backend run build
   run_required_step "mastra adapter syntax" node --check benchmarks/dataset-agent/adapters/mastra-populate-adapter.mjs
+  run_required_step "collection adapter syntax" node --check benchmarks/dataset-agent/adapters/collection-self-healing-adapter.mjs
 fi
 
 if [[ "$SHOULD_RUN_BLOCKED_BENCHMARK_SMOKE" -eq 1 ]]; then
-  run_blocked_benchmark_smoke
+  run_blocked_benchmark_smoke \
+    "mastra" \
+    "node --import ./backend/node_modules/tsx/dist/esm/index.mjs benchmarks/dataset-agent/adapters/mastra-populate-adapter.mjs"
+  run_blocked_benchmark_smoke \
+    "collection-self-heal" \
+    "node --import ./backend/node_modules/tsx/dist/esm/index.mjs benchmarks/dataset-agent/adapters/collection-self-healing-adapter.mjs"
 fi
 
 if [[ "$SHOULD_RUN_CONVEX_PUSH" -eq 1 ]]; then
