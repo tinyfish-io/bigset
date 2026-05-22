@@ -6,6 +6,7 @@ import clerkAuthPlugin, { requireAuth } from "./clerk-auth.js";
 import { inferSchema } from "./pipeline/schema-inference.js";
 import { datasetContextSchema } from "./pipeline/populate.js";
 import { populateWorkflow } from "./mastra/workflows/populate.js";
+import { convex, api } from "./convex.js";
 
 const fastify = Fastify({ logger: true });
 
@@ -57,6 +58,14 @@ await fastify.register(async (instance) => {
         error: "Invalid request",
         details: parsed.error.flatten().fieldErrors,
       });
+    }
+
+    const dataset = await convex.query(api.datasets.get, { id: parsed.data.datasetId });
+    if (!dataset) {
+      return reply.code(404).send({ error: "Dataset not found" });
+    }
+    if (dataset.ownerId !== req.auth.userId) {
+      return reply.code(403).send({ error: "Not authorized to populate this dataset" });
     }
 
     try {

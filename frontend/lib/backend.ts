@@ -25,7 +25,7 @@ export interface PopulateColumn {
 
 export interface PopulateResult {
   success: boolean;
-  rows: Record<string, unknown>[];
+  result: unknown;
 }
 
 const BACKEND_URL =

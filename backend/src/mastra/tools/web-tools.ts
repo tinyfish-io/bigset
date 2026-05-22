@@ -1,6 +1,8 @@
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 
+const FETCH_TIMEOUT_MS = 30_000;
+
 const searchResultSchema = z.object({
   title: z.string(),
   snippet: z.string(),
@@ -29,10 +31,14 @@ export const searchWebTool = createTool({
     const url = `https://api.search.tinyfish.ai?query=${encodeURIComponent(query)}`;
     console.log(`[search_web] Searching: "${query}"`);
 
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
     try {
       const res = await fetch(url, {
         headers: { "X-API-Key": apiKey },
+        signal: controller.signal,
       });
+      clearTimeout(timeout);
 
       if (!res.ok) {
         const body = await res.text();
@@ -56,6 +62,9 @@ export const searchWebTool = createTool({
         return { results: [], error: "No results found for this query. Try a broader search or use synthetic data." };
       return { results };
     } catch (err) {
+      clearTimeout(timeout);
+      if (err instanceof Error && err.name === "AbortError")
+        return { error: "Search timed out. Skip web search and use synthetic data." };
       const msg = err instanceof Error ? err.message : String(err);
       console.error(`[search_web] Failed:`, msg);
       return { error: `Search failed: ${msg}. Skip web search and use synthetic data.` };
@@ -87,6 +96,8 @@ export const fetchPageTool = createTool({
 
     console.log(`[fetch_page] Fetching: ${targetUrl}`);
 
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
     try {
       const res = await fetch("https://api.fetch.tinyfish.ai", {
         method: "POST",
@@ -95,7 +106,9 @@ export const fetchPageTool = createTool({
           "X-API-Key": apiKey,
         },
         body: JSON.stringify({ urls: [targetUrl], format: "markdown" }),
+        signal: controller.signal,
       });
+      clearTimeout(timeout);
 
       if (!res.ok) {
         const body = await res.text();
@@ -138,6 +151,9 @@ export const fetchPageTool = createTool({
         text,
       };
     } catch (err) {
+      clearTimeout(timeout);
+      if (err instanceof Error && err.name === "AbortError")
+        return { error: "Page fetch timed out. Try a different URL or use search snippet data." };
       const msg = err instanceof Error ? err.message : String(err);
       console.error(`[fetch_page] Failed:`, msg);
       return { error: `Fetch failed: ${msg}. Use data from search snippets instead.` };

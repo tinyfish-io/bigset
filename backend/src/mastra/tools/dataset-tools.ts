@@ -30,7 +30,7 @@ export const insertRowTool = createTool({
       return { success: false, error: "data is required and must have at least one key. Pass an object like { \"Column Name\": value }." };
 
     const cleanedData = cleanDataKeys(data);
-    console.log(`[insert_row] Inserting row into ${datasetId}:`, JSON.stringify(cleanedData).slice(0, 200));
+    console.log(`[insert_row] Inserting row into ${datasetId} (${Object.keys(cleanedData).length} columns)`);
     try {
       await convex.mutation(internal.datasetRows.insert, { datasetId, data: cleanedData });
       console.log(`[insert_row] Row inserted successfully`);
@@ -115,7 +115,7 @@ export const updateRowTool = createTool({
       return { success: false, error: "data is required. Pass the full updated row data object." };
 
     const cleanedData = cleanDataKeys(data);
-    console.log(`[update_row] Updating row ${rowId}:`, JSON.stringify(cleanedData).slice(0, 200));
+    console.log(`[update_row] Updating row ${rowId} (${Object.keys(cleanedData).length} columns)`);
     try {
       await convex.mutation(internal.datasetRows.update, { id: rowId, data: cleanedData });
       console.log(`[update_row] Row updated successfully`);
