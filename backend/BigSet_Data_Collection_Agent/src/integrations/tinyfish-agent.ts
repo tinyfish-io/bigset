@@ -37,6 +37,10 @@ export interface TinyfishAgentJob {
   goal: string;
 }
 
+export interface TinyfishAgentRunOptions {
+  pollTimeoutMs?: number;
+}
+
 function runToResult(run: Run): TinyfishAgentRunResult {
   const errorMessage =
     run.error?.message ??
@@ -114,8 +118,10 @@ export async function queueTinyfishAgent(
 /** Poll `runs.get` until the run reaches a terminal status or times out. */
 export async function pollTinyfishAgentUntilDone(
   runId: string,
+  options: TinyfishAgentRunOptions = {},
 ): Promise<TinyfishAgentRunResult> {
   const startedAt = Date.now();
+  const pollTimeoutMs = options.pollTimeoutMs ?? config.agentPollTimeoutMs;
   let lastStatus = RunStatus.PENDING;
 
   while (true) {
@@ -134,7 +140,7 @@ export async function pollTinyfishAgentUntilDone(
       return runToResult(run);
     }
 
-    if (Date.now() - startedAt >= config.agentPollTimeoutMs) {
+    if (Date.now() - startedAt >= pollTimeoutMs) {
       await cancelTinyfishAgentRun(runId);
 
       try {
@@ -146,7 +152,7 @@ export async function pollTinyfishAgentUntilDone(
               ...result,
               error:
                 result.error ??
-                `Agent run cancelled after ${config.agentPollTimeoutMs}ms (was ${lastStatus})`,
+                `Agent run cancelled after ${pollTimeoutMs}ms (was ${lastStatus})`,
             };
           }
           return result;
@@ -159,7 +165,7 @@ export async function pollTinyfishAgentUntilDone(
         run_id: runId,
         status: "TIMEOUT",
         result: null,
-        error: `Agent run timed out after ${config.agentPollTimeoutMs}ms (last status: ${lastStatus}); cancel requested`,
+        error: `Agent run timed out after ${pollTimeoutMs}ms (last status: ${lastStatus}); cancel requested`,
       };
     }
 
@@ -173,6 +179,7 @@ export async function pollTinyfishAgentUntilDone(
 export async function runTinyfishAgent(
   url: string,
   goal: string,
+  options: TinyfishAgentRunOptions = {},
 ): Promise<TinyfishAgentRunResult> {
   const queued = await queueTinyfishAgent(url, goal);
   if (queued.error || !queued.run_id) {
@@ -183,7 +190,7 @@ export async function runTinyfishAgent(
       error: queued.error ?? "Failed to queue agent run",
     };
   }
-  return pollTinyfishAgentUntilDone(queued.run_id);
+  return pollTinyfishAgentUntilDone(queued.run_id, options);
 }
 
 /**
@@ -191,6 +198,7 @@ export async function runTinyfishAgent(
  */
 export async function runTinyfishAgentsBatch(
   jobs: TinyfishAgentJob[],
+  options: TinyfishAgentRunOptions = {},
 ): Promise<TinyfishAgentRunResult[]> {
   if (jobs.length === 0) return [];
 
@@ -224,7 +232,7 @@ export async function runTinyfishAgentsBatch(
     pollTargets,
     config.agentPollConcurrency,
     async ({ index, run_id }) => {
-      results[index] = await pollTinyfishAgentUntilDone(run_id);
+      results[index] = await pollTinyfishAgentUntilDone(run_id, options);
     },
   );
 

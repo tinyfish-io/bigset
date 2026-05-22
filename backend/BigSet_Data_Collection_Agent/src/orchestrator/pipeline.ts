@@ -63,6 +63,8 @@ export interface PipelineOptions {
   refreshInPlace?: boolean;
   /** When refreshing, re-fetch URLs already seen in the source run. */
   refetchUrls?: boolean;
+  /** Per-run TinyFish Agent poll timeout. Defaults to vendored config. */
+  agentPollTimeoutMs?: number;
   /** Override pipeline logging (benchmark adapters should log to stderr). */
   onLog?: (stage: string, message: string) => void;
   /** Set when invoked from the dataset-agent benchmark harness. */
@@ -262,6 +264,7 @@ async function executeRunPipeline(
     pageIndexStart: pageIndex,
     enableTriage,
     enableTinyfishAgent,
+    agentPollTimeoutMs: options.agentPollTimeoutMs,
     memory: useMemory ? memory : undefined,
     log,
   });
@@ -366,6 +369,7 @@ async function executeRunPipeline(
         allFailedUrls,
         enableTriage,
         enableTinyfishAgent,
+        agentPollTimeoutMs: options.agentPollTimeoutMs,
         targetRowCap,
         log,
       },

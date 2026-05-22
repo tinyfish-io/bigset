@@ -14,7 +14,7 @@ test("collection agent runner maps vendored pipeline output into populate runtim
   delete process.env.COLLECTION_AGENT_ENABLE_AGENT;
   delete process.env.COLLECTION_AGENT_POLL_TIMEOUT_MS;
   process.env.COLLECTION_AGENT_PIPELINE_MODULE = fakeCollectionPipelineModuleUrl({
-    expectedAgentEnabled: false,
+    expectedCalls: [{ agentEnabled: false }],
   });
   try {
     const result = await runCollectionPopulatePipeline(collectionPipelineInput());
@@ -41,7 +41,7 @@ test("collection agent runner maps vendored pipeline output into populate runtim
   }
 });
 
-test("collection agent runner requires explicit Agent opt-in and caps poll timeout", async () => {
+test("collection agent runner requires explicit Agent opt-in and caps poll timeout per warm process call", async () => {
   const previousEnv = snapshotEnv([
     "AGENT_POLL_TIMEOUT_MS",
     "COLLECTION_AGENT_ENABLE_AGENT",
@@ -49,16 +49,35 @@ test("collection agent runner requires explicit Agent opt-in and caps poll timeo
     "COLLECTION_AGENT_POLL_TIMEOUT_MS",
   ]);
   delete process.env.AGENT_POLL_TIMEOUT_MS;
-  process.env.COLLECTION_AGENT_ENABLE_AGENT = "true";
-  process.env.COLLECTION_AGENT_POLL_TIMEOUT_MS = "12345";
+  delete process.env.COLLECTION_AGENT_ENABLE_AGENT;
+  delete process.env.COLLECTION_AGENT_POLL_TIMEOUT_MS;
   process.env.COLLECTION_AGENT_PIPELINE_MODULE = fakeCollectionPipelineModuleUrl({
-    expectedAgentEnabled: true,
-    expectedPollTimeoutMs: "12345",
+    expectedModuleLoadPollTimeoutMs: null,
+    expectedCalls: [
+      { agentEnabled: false },
+      { agentEnabled: true, pollTimeoutMs: 12345 },
+      { agentEnabled: true, pollTimeoutMs: 23456 },
+    ],
   });
 
   try {
-    const result = await runCollectionPopulatePipeline(collectionPipelineInput());
-    assert.equal(result.rows.length, 1);
+    assert.equal(
+      (await runCollectionPopulatePipeline(collectionPipelineInput())).rows.length,
+      1
+    );
+
+    process.env.COLLECTION_AGENT_ENABLE_AGENT = "true";
+    process.env.COLLECTION_AGENT_POLL_TIMEOUT_MS = "12345";
+    assert.equal(
+      (await runCollectionPopulatePipeline(collectionPipelineInput())).rows.length,
+      1
+    );
+
+    process.env.COLLECTION_AGENT_POLL_TIMEOUT_MS = "23456";
+    assert.equal(
+      (await runCollectionPopulatePipeline(collectionPipelineInput())).rows.length,
+      1
+    );
   } finally {
     restoreEnv(previousEnv);
   }
@@ -92,15 +111,30 @@ function collectionPipelineInput() {
 }
 
 function fakeCollectionPipelineModuleUrl(input: {
-  expectedAgentEnabled: boolean;
-  expectedPollTimeoutMs?: string;
+  expectedModuleLoadPollTimeoutMs?: string | null;
+  expectedCalls: Array<{
+    agentEnabled: boolean;
+    pollTimeoutMs?: number;
+  }>;
 }): string {
   const source = `
+    const moduleLoadPollTimeoutMs = process.env.AGENT_POLL_TIMEOUT_MS ?? null;
+    const expectedModuleLoadPollTimeoutMs = ${JSON.stringify(input.expectedModuleLoadPollTimeoutMs ?? null)};
+    const expectedCalls = ${JSON.stringify(input.expectedCalls)};
+    let callIndex = 0;
+
     export async function runPipeline(options) {
-      if (options.enableTinyfishAgent !== ${JSON.stringify(input.expectedAgentEnabled)}) {
+      if (moduleLoadPollTimeoutMs !== expectedModuleLoadPollTimeoutMs) {
+        throw new Error("unexpected module-load poll timeout");
+      }
+      const expected = expectedCalls[callIndex++];
+      if (!expected) {
+        throw new Error("unexpected extra pipeline call");
+      }
+      if (options.enableTinyfishAgent !== expected.agentEnabled) {
         throw new Error("unexpected TinyFish Agent setting");
       }
-      if (${JSON.stringify(input.expectedPollTimeoutMs ?? null)} !== null && process.env.AGENT_POLL_TIMEOUT_MS !== ${JSON.stringify(input.expectedPollTimeoutMs ?? null)}) {
+      if ((options.agentPollTimeoutMs ?? null) !== (expected.pollTimeoutMs ?? null)) {
         throw new Error("bounded agent poll timeout missing");
       }
       if (!options.prompt.includes("Durable recipe instructions")) {

@@ -41,6 +41,7 @@ export interface RepairLoopContext {
   allFailedUrls: string[];
   enableTriage: boolean;
   enableTinyfishAgent: boolean;
+  agentPollTimeoutMs?: number;
   targetRowCap: number;
   log: (stage: string, message: string) => void;
 }
@@ -162,6 +163,7 @@ export async function runRepairLoops(options: {
       knownEntityKeys: entityKeysFromRecords(ctx.spec, recordsBeforeLoop),
       enableTriage: ctx.enableTriage,
       enableTinyfishAgent: ctx.enableTinyfishAgent,
+      agentPollTimeoutMs: ctx.agentPollTimeoutMs,
       memory: ctx.memory,
       forceAgent: preferAgent,
       enableLinkFollow: config.enableRepairLinkFollow,

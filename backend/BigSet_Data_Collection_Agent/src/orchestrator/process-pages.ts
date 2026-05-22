@@ -71,6 +71,7 @@ export async function processFetchedPages(options: {
   knownEntityKeys?: string[];
   enableTriage?: boolean;
   enableTinyfishAgent?: boolean;
+  agentPollTimeoutMs?: number;
   memory?: WorkflowMemory;
   log: (stage: string, message: string) => void;
 }): Promise<ProcessPagesResult> {
@@ -319,7 +320,9 @@ export async function processFetchedPages(options: {
       queueJobIndices.push(index);
     }
 
-    const agentRunResults = await runTinyfishAgentsBatch(queueJobs);
+    const agentRunResults = await runTinyfishAgentsBatch(queueJobs, {
+      pollTimeoutMs: options.agentPollTimeoutMs,
+    });
 
     const jobsToExtract = queueJobIndices.map((jobIndex, batchIndex) => ({
       job: jobsWithGoals[jobIndex]!,

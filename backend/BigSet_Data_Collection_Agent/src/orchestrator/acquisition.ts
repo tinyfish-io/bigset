@@ -87,6 +87,7 @@ export async function runAcquisitionPhase(options: {
   knownEntityKeys?: string[];
   enableTriage?: boolean;
   enableTinyfishAgent?: boolean;
+  agentPollTimeoutMs?: number;
   memory?: WorkflowMemory;
   forceAgent?: boolean;
   /** Fetch outbound links from high-value pages (repair). */
@@ -222,6 +223,7 @@ export async function runAcquisitionPhase(options: {
     enableTinyfishAgent:
       options.enableTinyfishAgent ??
       (options.forceAgent ? true : config.enableTinyfishAgent),
+    agentPollTimeoutMs: options.agentPollTimeoutMs,
     memory: options.memory,
     log: options.log,
   });

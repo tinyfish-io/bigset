@@ -24,6 +24,7 @@ interface CollectionPipelineOptions {
   enableRepair?: boolean;
   enableTriage?: boolean;
   enableTinyfishAgent?: boolean;
+  agentPollTimeoutMs?: number;
   benchmark?: {
     promptId?: string;
     promptQuality?: string;
@@ -97,7 +98,6 @@ export const runCollectionPopulatePipeline: CollectionPopulatePipelineRunner =
   async (input) => {
     const outputDir = await mkdtemp(join(tmpdir(), "bigset-collection-"));
     const enableTinyfishAgent = boolEnv("COLLECTION_AGENT_ENABLE_AGENT", false);
-    applyCollectionAgentRuntimeDefaults({ enableTinyfishAgent });
     const pipeline = await loadCollectionPipelineModule();
     const result = await pipeline.runPipeline({
       prompt: input.prompt,
@@ -107,6 +107,9 @@ export const runCollectionPopulatePipeline: CollectionPopulatePipelineRunner =
       enableRepair: boolEnv("COLLECTION_AGENT_ENABLE_REPAIR", false),
       enableTriage: boolEnv("COLLECTION_AGENT_ENABLE_TRIAGE", true),
       enableTinyfishAgent,
+      agentPollTimeoutMs: enableTinyfishAgent
+        ? collectionAgentPollTimeoutMs()
+        : undefined,
       benchmark: benchmarkContextFromInput(input),
       onLog: (stage, message) => {
         console.error(`[collection:${stage}] ${message}`);
@@ -312,21 +315,6 @@ function boolEnv(name: string, fallback: boolean): boolean {
   return ["1", "true", "yes", "on"].includes(raw.toLowerCase());
 }
 
-function applyCollectionAgentRuntimeDefaults(input: {
-  enableTinyfishAgent: boolean;
-}): void {
-  if (!input.enableTinyfishAgent || process.env.AGENT_POLL_TIMEOUT_MS) {
-    return;
-  }
-
-  process.env.AGENT_POLL_TIMEOUT_MS = String(
-    intEnv(
-      "COLLECTION_AGENT_POLL_TIMEOUT_MS",
-      DEFAULT_COLLECTION_AGENT_POLL_TIMEOUT_MS
-    )
-  );
-}
-
 function intEnv(name: string, fallback: number): number {
   const raw = process.env[name];
   if (raw === undefined || raw === "") {
@@ -337,4 +325,24 @@ function intEnv(name: string, fallback: number): number {
     throw new Error(`Invalid ${name}: expected positive integer, got "${raw}"`);
   }
   return value;
+}
+
+function optionalIntEnv(name: string): number | undefined {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") {
+    return undefined;
+  }
+  const value = Number.parseInt(raw, 10);
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error(`Invalid ${name}: expected positive integer, got "${raw}"`);
+  }
+  return value;
+}
+
+function collectionAgentPollTimeoutMs(): number {
+  return optionalIntEnv("AGENT_POLL_TIMEOUT_MS") ??
+    intEnv(
+      "COLLECTION_AGENT_POLL_TIMEOUT_MS",
+      DEFAULT_COLLECTION_AGENT_POLL_TIMEOUT_MS
+    );
 }
