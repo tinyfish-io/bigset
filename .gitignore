@@ -14,6 +14,7 @@ Project_BigSet_brief.md
 *.log
 npm-debug.log*
 yarn-debug.log*
+/benchmark-results/
 
 # Local-only files
 *.bak
