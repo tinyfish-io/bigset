@@ -5,8 +5,8 @@ import { env } from "./env.js";
 import clerkAuthPlugin, { requireAuth } from "./clerk-auth.js";
 import { inferSchema } from "./pipeline/schema-inference.js";
 import { datasetContextSchema } from "./pipeline/populate.js";
-import { populateWorkflow } from "./mastra/workflows/populate.js";
-import { convex, api } from "./convex.js";
+import { mastra } from "./mastra/index.js";
+import { convex, api, internal } from "./convex.js";
 
 const fastify = Fastify({ logger: true });
 
@@ -61,7 +61,7 @@ await fastify.register(async (instance) => {
     }
 
     try {
-      const dataset = await convex.query(api.datasets.get, { id: parsed.data.datasetId });
+      const dataset = await convex.query(internal.datasets.getInternal, { id: parsed.data.datasetId });
       if (!dataset) {
         return reply.code(404).send({ error: "Dataset not found" });
       }
@@ -69,8 +69,10 @@ await fastify.register(async (instance) => {
         return reply.code(403).send({ error: "Not authorized to populate this dataset" });
       }
 
-      const run = await populateWorkflow.createRun();
+      const workflow = mastra.getWorkflow("populateWorkflow");
+      const run = await workflow.createRun();
       const result = await run.start({ inputData: parsed.data });
+      await mastra.observability.getDefaultInstance()?.flush();
 
       req.log.info({ workflowStatus: result.status, steps: JSON.stringify(result.steps).slice(0, 2000) }, "Populate workflow completed");
 
@@ -80,6 +82,7 @@ await fastify.register(async (instance) => {
 
       return { success: true, result: result.result };
     } catch (err) {
+      await mastra.observability.getDefaultInstance()?.flush();
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes("validator") || msg.includes("Invalid")) {
         return reply.code(400).send({ error: "Invalid datasetId" });
