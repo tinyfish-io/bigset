@@ -12,27 +12,17 @@ import { useSelection } from "@/components/table/use-selection";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { StatusBadge } from "@/components/dataset/StatusBadge";
 import { downloadCSV, downloadXLSX } from "@/lib/export";
+import { populate } from "@/lib/backend";
 import { EVENTS, captureException, track } from "@/lib/analytics";
 
 export default function DatasetPage() {
   const params = useParams();
   const { isLoading: authLoading } = useConvexAuth();
-  const { userId } = useAuth();
+  const { userId, getToken } = useAuth();
   const [exporting, setExporting] = useState<"csv" | "xlsx" | null>(null);
+  const [populating, setPopulating] = useState(false);
 
   const datasetId = params.id as Id<"datasets">;
-
-  // ── Auth-readiness gate (Part 2 fix) ──────────────────────────────────
-  // Both queries here are "optionally authed" — they allow anon callers
-  // when the dataset is public, and require ownership for private ones.
-  // Convex doesn't auto-wait for auth on optionally-authed queries, so on
-  // a hard refresh the query can fire BEFORE Clerk's JWT has propagated
-  // to the Convex client. The server then sees no identity, can't match
-  // the owner, and throws "Dataset not found" — the dreaded false-404.
-  //
-  // We skip the query until `authLoading` flips to false. By then, Convex
-  // either has the JWT (signed-in user) or definitively has no JWT
-  // (anonymous viewer). Either way the result is correct.
   const dataset = useQuery(
     api.datasets.get,
     authLoading ? "skip" : { id: datasetId },
@@ -42,8 +32,6 @@ export default function DatasetPage() {
     authLoading ? "skip" : { datasetId },
   );
 
-  // ── Row selection (lifted from DatasetTable so the page can read it
-  // for selected-row exports) ───────────────────────────────────────────
   const rowIds = useMemo(() => (rows ?? []).map((r) => r._id), [rows]);
   const selection = useSelection(rowIds);
   const selectedCount = selection.selected.size;
@@ -100,6 +88,35 @@ export default function DatasetPage() {
       });
     } finally {
       setExporting(null);
+    }
+  }
+
+  async function handlePopulate() {
+    if (!dataset || populating) return;
+    setPopulating(true);
+    try {
+      const token = await getToken();
+      if (!token) throw new Error("Not authenticated");
+
+      await populate(
+        dataset._id,
+        dataset.name,
+        dataset.description,
+        dataset.columns,
+        token,
+      );
+      track(EVENTS.DATASET_POPULATED, {
+        datasetId: dataset._id,
+        column_count: dataset.columns.length,
+      });
+    } catch (err) {
+      console.error("[populate] failed", err);
+      captureException(err, {
+        operation: "dataset_populate",
+        datasetId: dataset._id,
+      });
+    } finally {
+      setPopulating(false);
     }
   }
 
@@ -170,6 +187,13 @@ export default function DatasetPage() {
             className="border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-foreground/[0.03] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {xlsxLabel}
+          </button>
+          <button
+            onClick={handlePopulate}
+            disabled={populating}
+            className="border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-foreground/[0.03] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {populating ? "Populating…" : "Clear & Populate"}
           </button>
           <div className="w-px h-4 bg-border mx-1" />
           <ThemeToggle />

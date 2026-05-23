@@ -1,4 +1,4 @@
-import { query, internalMutation } from "./_generated/server.js";
+import { query, internalMutation, internalQuery } from "./_generated/server.js";
 import { v } from "convex/values";
 import { loadReadableDataset } from "./lib/authz.js";
 import {
@@ -83,6 +83,34 @@ export const update = internalMutation({
   },
 });
 
+export const clearByDataset = internalMutation({
+  args: { datasetId: v.id("datasets") },
+  handler: async (ctx, args) => {
+    const rows = await ctx.db
+      .query("datasetRows")
+      .withIndex("by_dataset", (q) => q.eq("datasetId", args.datasetId))
+      .collect();
+    for (const row of rows) {
+      await ctx.db.delete(row._id);
+    }
+    return rows.length;
+  },
+});
+
+export const get = internalQuery({
+  args: { id: v.id("datasetRows") },
+  handler: async (ctx, args) => {
+    return await ctx.db.get(args.id);
+  },
+});
+
+export const remove = internalMutation({
+  args: { id: v.id("datasetRows") },
+  handler: async (ctx, args) => {
+    await ctx.db.delete(args.id);
+  },
+});
+
 /**
  * Insert N rows in one transaction.
  *
@@ -92,11 +120,6 @@ export const update = internalMutation({
  *     see `remaining`, then call insertBatch with at most that many.
  *   - Partial accept would push policy decisions ("which rows survived?")
  *     into the quota layer, which has no business making them.
- *
- * Callers expected to do the right thing:
- *   const { remaining } = await convex.query(api.quota.getMy);
- *   const head = rows.slice(0, remaining);
- *   if (head.length > 0) await convex.mutation(internal.datasetRows.insertBatch, ...);
  */
 export const insertBatch = internalMutation({
   args: {

@@ -32,6 +32,7 @@ services:
       CLERK_SECRET_KEY: ${CLERK_SECRET_KEY:-}
       CLERK_PUBLISHABLE_KEY: ${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      TINYFISH_API_KEY: ${TINYFISH_API_KEY:-}
     depends_on:
       convex:
         condition: service_healthy
@@ -50,6 +51,7 @@ services:
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       CONVEX_URL: http://convex:3210
       CONVEX_SELF_HOSTED_ADMIN_KEY: ${CONVEX_SELF_HOSTED_ADMIN_KEY:-}
+      TINYFISH_API_KEY: ${TINYFISH_API_KEY:-}
     depends_on:
       convex:
         condition: service_healthy

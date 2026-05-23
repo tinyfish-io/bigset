@@ -1,4 +1,5 @@
 import { ConvexHttpClient } from "convex/browser";
+import { anyApi } from "convex/server";
 
 import { env } from "./env.js";
 
@@ -16,11 +17,12 @@ import { env } from "./env.js";
  *   ✗ NEVER use this to act "on behalf of a user". For user-initiated work,
  *     the frontend should call Convex directly with the user's Clerk JWT.
  *
- * If admin key is missing, this client can still call PUBLIC functions but
- * will fail closed on internal ones (which is the desired behavior — better
- * to error than to silently degrade).
+ * `anyApi` is an untyped proxy that resolves function references at runtime.
+ * Full types come from the frontend's generated code (included via tsconfig)
+ * and are available in the IDE, but the Docker container doesn't need them.
  */
-export { api, internal } from "../../frontend/convex/_generated/api.js";
+export const api = anyApi;
+export const internal = anyApi;
 
 export const convex = new ConvexHttpClient(env.CONVEX_URL);
 
