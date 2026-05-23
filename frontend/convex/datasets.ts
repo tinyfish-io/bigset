@@ -1,4 +1,9 @@
-import { query, mutation } from "./_generated/server.js";
+import {
+  query,
+  mutation,
+  internalMutation,
+  internalQuery,
+} from "./_generated/server.js";
 import type { QueryCtx } from "./_generated/server.js";
 import { v } from "convex/values";
 import type { Doc } from "./_generated/dataModel.js";
@@ -80,6 +85,58 @@ export const get = query({
   args: { id: v.id("datasets") },
   handler: async (ctx, args) => {
     return await loadReadableDataset(ctx, args.id);
+  },
+});
+
+/**
+ * Admin-only fetch by id. No authz — returns the raw doc or null. Used
+ * by the backend after a populate workflow completes to verify the
+ * dataset still exists (delete-race protection) and read its CURRENT
+ * name for the email subject (rename protection — the name in the
+ * request body could be stale by the time the workflow finishes).
+ */
+export const getInternal = internalQuery({
+  args: { id: v.id("datasets") },
+  handler: async (ctx, args) => {
+    return await ctx.db.get(args.id);
+  },
+});
+
+/**
+ * Admin-only status transition. Used by the backend orchestration layer
+ * to move a dataset between lifecycle states after a workflow completes.
+ *
+ * No authz check — the backend has already verified ownership before
+ * reaching here (or is acting as the system on behalf of a scheduled
+ * run). This mutation is purely a controlled patch on the `status` field.
+ *
+ * Lifecycle today:
+ *   - "building" : set by `datasets.create`, before any rows exist
+ *   - "live"     : set by /populate handler after successful population
+ *   - "paused"   : reserved for the future user-facing Pause/Resume UI
+ *
+ * Future statuses (extend the schema's `status` union when they land —
+ * the validator below auto-picks up new values since it points at the
+ * same union):
+ *   - "refreshing"      : scheduled refresh in progress (Inngest / cron)
+ *   - "failed"          : last populate / refresh failed
+ *   - "quota_exceeded"  : last attempt blocked by quota
+ *
+ * NOTE: the public `datasets.updateStatus` mutation still exists for
+ * user-initiated transitions (Pause/Resume) — that one goes through
+ * ownership authz. Use this internal version for system writes.
+ */
+export const setStatusInternal = internalMutation({
+  args: {
+    id: v.id("datasets"),
+    status: v.union(
+      v.literal("live"),
+      v.literal("paused"),
+      v.literal("building"),
+    ),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.id, { status: args.status });
   },
 });
 

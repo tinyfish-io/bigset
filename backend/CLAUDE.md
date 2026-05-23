@@ -23,14 +23,14 @@ The pipeline is a pure function (`inferSchema(prompt) → DatasetSchema`). It is
 
 `src/mastra/` — wraps pipelines into Mastra workflows. Runs as a separate Docker service on :4111 with `mastra dev`, which provides a Studio UI for inspecting and testing workflows.
 
-- `src/mastra/index.ts` — registers agents and workflows with the `Mastra` instance
+- `src/mastra/index.ts` — registers workflows with the `Mastra` instance (the populate agent is built per-run, not registered as a singleton)
 - `src/mastra/workflows/infer-schema.ts` — `inferSchemaWorkflow`, a single-step workflow wrapping `inferSchema()`
 - `src/mastra/workflows/populate.ts` — `populateWorkflow`, 3-step workflow: clear rows → build prompt → run populate agent
-- `src/mastra/agents/populate.ts` — `populateAgent`, an AI agent (Claude Sonnet 4.6 via OpenRouter) with 7 tools for database CRUD and web access
-- `src/mastra/tools/dataset-tools.ts` — 5 Convex-backed tools: `insert_row`, `list_rows`, `get_row`, `update_row`, `delete_row`
+- `src/mastra/agents/populate.ts` — `buildPopulateAgent(authorizedDatasetId, authContext)`, a factory that builds a dataset-scoped Claude Sonnet 4.6 agent with 7 tools for database CRUD and web access
+- `src/mastra/tools/dataset-tools.ts` — `buildPopulateTools(authorizedDatasetId, authContext)` factory returning 5 Convex-backed tools: `insert_row`, `list_rows`, `get_row`, `update_row`, `delete_row`. The dataset id is captured by closure so the LLM cannot redirect writes to other datasets; `authContext` (Clerk userId + workflow run id) is captured for caller-attribution in security logs and the `CAPABILITY_VIOLATION` PostHog event. See the security note at the top of the file.
 - `src/mastra/tools/web-tools.ts` — 2 TinyFish API tools: `search_web`, `fetch_page`
 
-The populate agent uses `createStep(agent, { maxSteps: 80 })` to allow enough tool-call rounds for web research + row insertion.
+The populate workflow builds a fresh agent per run via `buildPopulateAgent(...)` and calls `.generate(prompt, { maxSteps: 80 })` to allow enough tool-call rounds for web research + row insertion. Per-run construction is required by the capability-scoping security model (closure-bound dataset id); do not cache or share agents across runs.
 
 All tools return structured error messages (not thrown exceptions) so the agent can self-correct.
 

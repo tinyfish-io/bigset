@@ -112,7 +112,7 @@ Open [localhost:3500](http://localhost:3500) and click **Get started** to sign i
 | Auth | [Clerk](https://clerk.com) |
 | Database | [Convex](https://convex.dev) (self-hosted) |
 | Data Collection | [TinyFish](https://tinyfish.ai) APIs (Search, Fetch, Browser) |
-| Schema inference | [Mastra](https://mastra.ai) workflows + [Vercel AI SDK](https://sdk.vercel.ai) + [OpenRouter](https://openrouter.ai) → Claude Sonnet |
+| AI orchestration | [Mastra](https://mastra.ai) workflows + [Vercel AI SDK](https://sdk.vercel.ai) + [OpenRouter](https://openrouter.ai) → Claude Sonnet (schema inference + populate agent) |
 | Table view | [TanStack Table](https://tanstack.com/table) + [react-window](https://github.com/bvaughn/react-window) virtualization |
 | Exports | CSV (built-in) + XLSX ([SheetJS](https://sheetjs.com), dynamic-imported) |
 | Analytics | [PostHog](https://posthog.com) — events, session replay, error tracking (optional) |
@@ -124,9 +124,11 @@ bigset/
 ├── frontend/            Next.js 16 — UI + Convex schema & functions
 │   ├── convex/          Convex functions, schema, authz + quota helpers
 │   └── .env.local       Clerk + Convex keys (not committed)
-├── backend/             Fastify + Mastra — schema inference + (future) agents
-│   ├── src/pipeline/    Pure schema-inference fn (called by Fastify + Mastra)
-│   └── src/mastra/      Mastra workflows (Studio at :4111 in dev)
+├── backend/             Fastify + Mastra — schema inference + populate agent
+│   ├── src/pipeline/    Pure pipelines: schema inference + populate context
+│   ├── src/mastra/      Mastra workflows, agents, and tools (Studio at :4111 in dev)
+│   ├── src/email/       Transactional email (Resend) — sends "dataset ready" notifications
+│   └── src/analytics/   Server-side PostHog wrapper for backend-only events
 ├── scripts/             One-off scripts (e.g. verify-authz.sh)
 ├── .env                 Clerk keys for docker-compose (not committed)
 ├── docker-compose.dev.yml
