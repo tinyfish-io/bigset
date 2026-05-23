@@ -1,10 +1,17 @@
 import assert from "node:assert/strict";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 
 import {
+  benchmarkStatusForOutcome,
+  failureCategoryForOutcome,
   failureReason,
   findInfrastructureBlockerReason,
   normalizePayload,
+  playwrightReadinessGateReason,
+  rescoreBenchmarkRun,
   scoreBenchmarkRows,
 } from "./run-benchmark.mjs";
 import { selfHealingDiagnosticsFromTick } from "./adapters/self-healing-output.mjs";
@@ -233,3 +240,146 @@ test("self-healing diagnostics summarize trace and readiness artifacts", () => {
     "ready"
   );
 });
+
+test("Playwright readiness gate fails otherwise passing benchmark output", () => {
+  const capabilityGateReason = playwrightReadinessGateReason({
+    requirePlaywrightReady: true,
+    diagnostics: notReadyDiagnostics(),
+  });
+  const answerKeyScore = { passed: true, failureCategory: undefined };
+  const status = benchmarkStatusForOutcome({
+    execution: { exitCode: 0 },
+    parsedPayload: { rows: passingRows() },
+    answerKeyScore,
+    infraBlockerReason: null,
+    capabilityGateReason,
+  });
+
+  assert.equal(status, "failed");
+  assert.match(capabilityGateReason, /no actionable browser steps/i);
+  assert.equal(failureCategoryForOutcome({
+    status,
+    infraBlockerReason: null,
+    capabilityGateReason,
+    answerKeyScore,
+  }), "capability_gate");
+  assert.equal(failureReason({
+    execution: { exitCode: 0, timedOut: false },
+    parsedPayload: { rows: passingRows() },
+    validation: passingValidation,
+    answerKeyScore,
+    infraBlockerReason: null,
+    capabilityGateReason,
+    minRequiredCompleteness: 0.75,
+  }), capabilityGateReason);
+});
+
+test("Playwright readiness gate does not override infrastructure blockers", () => {
+  const infraBlockerReason = "Infrastructure/auth/credits blocker.";
+  const capabilityGateReason = null;
+  const answerKeyScore = { passed: true, failureCategory: undefined };
+  const status = benchmarkStatusForOutcome({
+    execution: { exitCode: 0 },
+    parsedPayload: null,
+    answerKeyScore,
+    infraBlockerReason,
+    capabilityGateReason,
+  });
+
+  assert.equal(status, "blocked");
+  assert.equal(failureCategoryForOutcome({
+    status,
+    infraBlockerReason,
+    capabilityGateReason,
+    answerKeyScore,
+  }), "infra");
+});
+
+test("rescore applies Playwright readiness gate semantics", async () => {
+  const runDirectory = await mkdtemp(join(tmpdir(), "bigset-benchmark-rescore-"));
+  const artifactDirectory = join(runDirectory, "collection-self-heal", "01-gate-prompt");
+  await mkdir(artifactDirectory, { recursive: true });
+
+  const parsedPayload = {
+    rows: passingRows(),
+    validationIssues: [],
+    diagnostics: notReadyDiagnostics(),
+  };
+  await writeFile(
+    join(runDirectory, "summary.json"),
+    JSON.stringify({
+      laneResults: [{
+        system: "collection-self-heal",
+        promptId: "gate-prompt",
+        promptQuality: "good",
+        artifactDirectory,
+        exitCode: 0,
+        timedOut: false,
+      }],
+    })
+  );
+  await writeFile(
+    join(artifactDirectory, "parsed-output.json"),
+    JSON.stringify(parsedPayload)
+  );
+  await writeFile(join(artifactDirectory, "stdout.txt"), JSON.stringify(parsedPayload));
+  await writeFile(join(artifactDirectory, "stderr.txt"), "");
+
+  const rescored = await rescoreBenchmarkRun({
+    runDirectory,
+    prompts: [{
+      id: "gate-prompt",
+      quality: "good",
+      persona: "developer",
+      prompt: "Find official docs.",
+      expectedStress: "Browser action gate.",
+      requiredColumns: ["entity_name", "source_url"],
+    }],
+    config: {
+      promptIds: null,
+      minRequiredCompleteness: 0.75,
+      minFactualAccuracy: 0.75,
+      requirePlaywrightReady: true,
+      inputUsdPer1M: 0.05,
+      outputUsdPer1M: 0.5,
+      tinyFishAgentStepUsd: 0.015,
+    },
+  });
+
+  assert.equal(rescored.laneResults[0].status, "failed");
+  assert.equal(rescored.laneResults[0].failureCategory, "capability_gate");
+  assert.match(rescored.laneResults[0].errorMessage, /no actionable browser steps/i);
+  assert.equal(rescored.laneResults[0].playwrightCandidateStatus, "not_ready");
+});
+
+function passingRows() {
+  return [{
+    cells: {
+      entity_name: "Example",
+      source_url: "https://example.com/docs",
+    },
+    sourceUrls: ["https://example.com/docs"],
+    evidence: [{
+      columnName: "entity_name",
+      sourceUrl: "https://example.com/docs",
+      quote: "Example docs",
+    }],
+  }];
+}
+
+function notReadyDiagnostics() {
+  return {
+    playwrightCandidateReadiness: {
+      status: "not_ready",
+      reasons: ["Trace has no actionable browser steps with URL/selector/target data."],
+      browserStepCount: 0,
+      sourceUrlCount: 1,
+    },
+    processTrace: {
+      runtime: "collection",
+      stepCount: 3,
+      browserStepCount: 0,
+      sourceUrlCount: 1,
+    },
+  };
+}

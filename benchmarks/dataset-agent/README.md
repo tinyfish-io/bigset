@@ -146,6 +146,24 @@ without committing raw run folders:
 Agent canary actually emitted browser actions before starting a Playwright
 compiler.
 
+For browser-action canaries, add `--require-playwright-ready` to make the
+benchmark fail with `failureCategory: "capability_gate"` unless the
+`playwright-candidate-readiness` artifact is `ready`. This gate uses the
+readiness artifact, not raw browser step counts, so it still requires
+actionable browser steps, source anchors, and no Agent-disabled diagnostic.
+
+```bash
+COLLECTION_AGENT_ENABLE_AGENT=true \
+COLLECTION_AGENT_POLL_TIMEOUT_MS=480000 \
+COLLECTION_AGENT_PIPELINE_MODULE=./backend/BigSet_Data_Collection_Agent/src/orchestrator/pipeline.ts \
+BIGSET_COLLECTION_BENCHMARK_RUNNER_MODULE=./backend/src/pipeline/collection-agent-runner.ts \
+node benchmarks/dataset-agent/run-benchmark.mjs \
+  --require-playwright-ready \
+  --prompt-ids mcp-docs-pages \
+  --timeout-ms 900000 \
+  --system collection-self-heal='node --import ./backend/node_modules/tsx/dist/esm/index.mjs benchmarks/dataset-agent/adapters/collection-self-healing-adapter.mjs'
+```
+
 ## Verify Self-Healing Stack
 
 Use this before asking someone else to migrate a new collection agent into the

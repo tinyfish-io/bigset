@@ -195,6 +195,8 @@ The current layer does not yet:
      `processTraceBrowserStepCount`, and
      `playwrightCandidateBrowserStepCount` so the canary proves browser-action
      provenance, not only row/evidence quality
+   - run browser-action canaries with `--require-playwright-ready` so row
+     quality cannot hide missing replayable browser-action provenance
    - full benchmark only after the 2-prompt run is not obviously broken
    - live `--dataset-id` dry-run only after Convex/env prerequisites are ready
    - `--commit` only on a throwaway dataset first

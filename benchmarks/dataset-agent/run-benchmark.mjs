@@ -567,11 +567,19 @@ async function runSystemPrompt(input) {
     parsedPayload,
     normalized,
   });
-  const status = infraBlockerReason
-    ? "blocked"
-    : execution.exitCode === 0 && parsedPayload && answerKeyScore.passed
-      ? "ok"
-      : "failed";
+  const capabilityGateReason = infraBlockerReason
+    ? null
+    : playwrightReadinessGateReason({
+      diagnostics: normalized.diagnostics,
+      requirePlaywrightReady: input.config.requirePlaywrightReady,
+    });
+  const status = benchmarkStatusForOutcome({
+    execution,
+    parsedPayload,
+    answerKeyScore,
+    infraBlockerReason,
+    capabilityGateReason,
+  });
 
   const promptRunDirectory = join(
     input.runDirectory,
@@ -597,9 +605,12 @@ async function runSystemPrompt(input) {
     expectedStress: input.promptDefinition.expectedStress,
     answerKey: answerKeyForPrompt(input.promptDefinition),
     status,
-    failureCategory: status === "ok" ? undefined : (
-      infraBlockerReason ? "infra" : answerKeyScore.failureCategory
-    ),
+    failureCategory: failureCategoryForOutcome({
+      status,
+      infraBlockerReason,
+      capabilityGateReason,
+      answerKeyScore,
+    }),
     factualAccuracyScore: answerKeyScore.factualAccuracyScore,
     entityCoverageRatio: answerKeyScore.entityCoverageRatio,
     domainAccuracyRatio: answerKeyScore.domainAccuracyRatio,
@@ -657,6 +668,7 @@ async function runSystemPrompt(input) {
         validation,
         answerKeyScore,
         infraBlockerReason,
+        capabilityGateReason,
         minRequiredCompleteness: input.config.minRequiredCompleteness,
         validationIssues: normalized.validationIssues,
       }),
@@ -758,6 +770,7 @@ function parseArgs(args) {
     tinyFishAgentStepUsd: 0.015,
     minRequiredCompleteness: 0.75,
     minFactualAccuracy: defaultMinimumFactualAccuracy,
+    requirePlaywrightReady: false,
   };
 
   for (let index = 0; index < args.length; index += 1) {
@@ -797,6 +810,8 @@ function parseArgs(args) {
     } else if (arg === "--min-factual-accuracy") {
       config.minFactualAccuracy = nonNegativeNumber(value, config.minFactualAccuracy);
       index += 1;
+    } else if (arg === "--require-playwright-ready") {
+      config.requirePlaywrightReady = true;
     } else if (arg === "--help" || arg === "-h") {
       printHelpAndExit();
     } else {
@@ -972,6 +987,71 @@ export function normalizePayload(payload) {
   };
 }
 
+export function playwrightReadinessGateReason({
+  diagnostics,
+  requirePlaywrightReady,
+}) {
+  if (!requirePlaywrightReady) {
+    return null;
+  }
+  const readiness = diagnostics?.playwrightCandidateReadiness;
+  if (!readiness || typeof readiness !== "object") {
+    return "Playwright readiness gate failed: missing playwrightCandidateReadiness diagnostics.";
+  }
+  const reasons = stringArrayValue(readiness.reasons);
+  if (readiness.status !== "ready") {
+    return [
+      "Playwright readiness gate failed:",
+      reasons.length > 0
+        ? reasons.join("; ")
+        : `status is ${String(readiness.status ?? "missing")}.`,
+    ].join(" ");
+  }
+  if (numberValue(readiness.browserStepCount) <= 0) {
+    return "Playwright readiness gate failed: no actionable browser steps.";
+  }
+  if (numberValue(readiness.sourceUrlCount) <= 0) {
+    return "Playwright readiness gate failed: no source URLs to anchor replay.";
+  }
+  return null;
+}
+
+export function benchmarkStatusForOutcome({
+  execution,
+  parsedPayload,
+  answerKeyScore,
+  infraBlockerReason,
+  capabilityGateReason,
+}) {
+  if (infraBlockerReason) {
+    return "blocked";
+  }
+  if (capabilityGateReason) {
+    return "failed";
+  }
+  return execution.exitCode === 0 && parsedPayload && answerKeyScore.passed
+    ? "ok"
+    : "failed";
+}
+
+export function failureCategoryForOutcome({
+  status,
+  infraBlockerReason,
+  capabilityGateReason,
+  answerKeyScore,
+}) {
+  if (status === "ok") {
+    return undefined;
+  }
+  if (infraBlockerReason) {
+    return "infra";
+  }
+  if (capabilityGateReason) {
+    return "capability_gate";
+  }
+  return answerKeyScore.failureCategory;
+}
+
 function normalizeUsage(value) {
   return {
     promptTokens: numberValue(value?.promptTokens ?? value?.inputTokens ?? value?.prompt_tokens),
@@ -1041,7 +1121,7 @@ function evaluateRows({ rows, promptDefinition }) {
   };
 }
 
-async function rescoreBenchmarkRun({ runDirectory, prompts, config }) {
+export async function rescoreBenchmarkRun({ runDirectory, prompts, config }) {
   const previousSummary = JSON.parse(await readFile(join(runDirectory, "summary.json"), "utf8"));
   const promptsById = new Map(prompts.map((promptDefinition) => [
     promptDefinition.id,
@@ -1089,11 +1169,19 @@ async function rescoreBenchmarkRun({ runDirectory, prompts, config }) {
       parsedPayload: usablePayload,
       normalized,
     });
-    const status = infraBlockerReason
-      ? "blocked"
-      : execution.exitCode === 0 && usablePayload && answerKeyScore.passed
-        ? "ok"
-        : "failed";
+    const capabilityGateReason = infraBlockerReason
+      ? null
+      : playwrightReadinessGateReason({
+        diagnostics: normalized.diagnostics,
+        requirePlaywrightReady: config.requirePlaywrightReady,
+      });
+    const status = benchmarkStatusForOutcome({
+      execution,
+      parsedPayload: usablePayload,
+      answerKeyScore,
+      infraBlockerReason,
+      capabilityGateReason,
+    });
 
     rescoredLaneResults.push({
       ...laneResult,
@@ -1103,9 +1191,12 @@ async function rescoreBenchmarkRun({ runDirectory, prompts, config }) {
       expectedStress: promptDefinition.expectedStress,
       answerKey: answerKeyForPrompt(promptDefinition),
       status,
-      failureCategory: status === "ok" ? undefined : (
-        infraBlockerReason ? "infra" : answerKeyScore.failureCategory
-      ),
+      failureCategory: failureCategoryForOutcome({
+        status,
+        infraBlockerReason,
+        capabilityGateReason,
+        answerKeyScore,
+      }),
       factualAccuracyScore: answerKeyScore.factualAccuracyScore,
       entityCoverageRatio: answerKeyScore.entityCoverageRatio,
       domainAccuracyRatio: answerKeyScore.domainAccuracyRatio,
@@ -1130,6 +1221,32 @@ async function rescoreBenchmarkRun({ runDirectory, prompts, config }) {
       needsReviewCount: validation.needsReviewCount,
       validationIssueCount: normalized.validationIssues.length,
       validationIssues: normalized.validationIssues,
+      selfHealingAction: normalized.diagnostics.selfHealingAction,
+      selfHealingArtifactKinds: normalized.diagnostics.artifactKinds,
+      processTraceStepCount: normalized.diagnostics.processTrace?.stepCount,
+      processTraceBrowserStepCount:
+        normalized.diagnostics.processTrace?.browserStepCount,
+      playwrightCandidateStatus:
+        normalized.diagnostics.playwrightCandidateReadiness?.status,
+      playwrightCandidateBrowserStepCount:
+        normalized.diagnostics.playwrightCandidateReadiness?.browserStepCount,
+      playwrightCandidateSourceUrlCount:
+        normalized.diagnostics.playwrightCandidateReadiness?.sourceUrlCount,
+      diagnostics: normalized.diagnostics,
+      usage: normalized.usage,
+      searchCallCount: normalized.metrics.searchCallCount,
+      fetchCallCount: normalized.metrics.fetchCallCount,
+      browserCallCount: normalized.metrics.browserCallCount,
+      agentRunCount: normalized.metrics.agentRunCount,
+      agentStepCount: normalized.metrics.agentStepCount,
+      estimatedModelCostUsd: estimateModelCostUsd(normalized.usage, config),
+      estimatedTinyFishAgentCostUsd: roundUsd(
+        normalized.metrics.agentStepCount * config.tinyFishAgentStepUsd
+      ),
+      estimatedTotalCostUsd: roundUsd(
+        estimateModelCostUsd(normalized.usage, config) +
+          normalized.metrics.agentStepCount * config.tinyFishAgentStepUsd
+      ),
       errorMessage: status === "ok"
         ? undefined
         : failureReason({
@@ -1138,6 +1255,7 @@ async function rescoreBenchmarkRun({ runDirectory, prompts, config }) {
           validation,
           answerKeyScore,
           infraBlockerReason,
+          capabilityGateReason,
           minRequiredCompleteness: config.minRequiredCompleteness,
           validationIssues: normalized.validationIssues,
         }),
@@ -1652,6 +1770,7 @@ export function failureReason({
   validation,
   answerKeyScore,
   infraBlockerReason,
+  capabilityGateReason,
   minRequiredCompleteness,
   validationIssues = [],
 }) {
@@ -1659,6 +1778,7 @@ export function failureReason({
   if (execution.timedOut) return "Command timed out.";
   if (execution.exitCode !== 0) return `Command exited ${execution.exitCode}.`;
   if (!parsedPayload) return "No parseable JSON object found in stdout.";
+  if (capabilityGateReason) return capabilityGateReason;
   const capabilityDiagnostic = capabilityDiagnosticReason(validationIssues);
   if (capabilityDiagnostic) return capabilityDiagnostic;
   if (answerKeyScore?.failureCategory === "clarification") {
@@ -1806,6 +1926,12 @@ node benchmarks/dataset-agent/run-benchmark.mjs \\
 
 Rescore existing artifacts without spending credits:
 node benchmarks/dataset-agent/run-benchmark.mjs --rescore-dir benchmark-results/<run>
+
+Require self-healing Playwright readiness for browser-action canaries:
+node benchmarks/dataset-agent/run-benchmark.mjs \\
+  --require-playwright-ready \\
+  --prompt-ids mcp-docs-pages \\
+  --system collection-self-heal='node --import ./backend/node_modules/tsx/dist/esm/index.mjs benchmarks/dataset-agent/adapters/collection-self-healing-adapter.mjs'
 
 Agent command contract:
 - stdout should contain a JSON object.
