@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { ClerkProvider } from "@clerk/nextjs";
 import { ConvexClientProvider } from "./convex-provider";
+import { BigSetToaster } from "@/components/Toaster";
 import { AnalyticsProvider } from "@/lib/analytics-provider";
 import "./globals.css";
 
@@ -52,6 +53,7 @@ export default function RootLayout({
         >
           <ConvexClientProvider>
             <AnalyticsProvider>{children}</AnalyticsProvider>
+            <BigSetToaster />
           </ConvexClientProvider>
         </ClerkProvider>
       </body>
