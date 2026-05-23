@@ -10,6 +10,8 @@ Goal: one app-integrated system where a user can type a dataset request in BigSe
 
 Tomorrow demo goal: one draft PR that a teammate can check out, run with `make dev`, open in the BigSet frontend, create a dataset from a prompt, run populate, and inspect rows plus source/evidence behavior. If any part is still blocked, the PR must say the exact blocker instead of implying the flow is fully done.
 
+Product path: use Mastra inside the BigSet app. The older standalone collection agent is not a separate demo path; its useful ideas can be ported behind the app's adapter boundary.
+
 ## Plain-English Image
 
 Use the SVG first because it has fewer words and renders cleanly in GitHub and most editor sidebars.
@@ -102,7 +104,7 @@ Mastra: app-integrated agent framework. This is the path the team wants to use a
 
 Data collection workflow: the whole process that searches, fetches, uses browser navigation when needed, and fills table rows.
 
-Standalone data-collection-agent: stronger older pipeline. Current plan is not to run it as a separate product forever; current plan is to move its good ideas into Mastra.
+Standalone data-collection-agent: older pipeline used as an implementation reference. Current plan is not to run it as a separate product path; current plan is to move its useful ideas into Mastra.
 
 Search/prioritize agent: first agent. It finds possible sources and chooses which sources are worth fetching.
 
@@ -151,7 +153,7 @@ Built now:
 
 Not done yet:
 
-- Mastra is not fully the one final integrated path.
+- Mastra still needs the final quality/integration pass for the one app path.
 - Browser/Playwright stage is not fully proven end to end inside Mastra.
 - Scheduled browser replay is still future.
 - Browser script auto-repair is still future.
@@ -174,7 +176,7 @@ Use this file for comments/annotations. Do not annotate or share raw meeting not
 
 ## Comment Anchors
 
-Q1. Is Mastra now the only intended app path, or do we still keep standalone data-collection-agent runtime as fallback?
+Q1. What remaining collection-pipeline ideas should be ported into the Mastra app path?
 
 Q2. Should Playwright be a separate stage after source fetch, or should it be inside the core Mastra collection flow?
 
