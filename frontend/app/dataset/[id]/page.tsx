@@ -13,6 +13,7 @@ import { useSelection } from "@/components/table/use-selection";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { StatusBadge } from "@/components/dataset/StatusBadge";
 import { SideSheet, CellDetail } from "@/components/SideSheet";
+import { FilterPopover, ActiveFilter } from "@/components/dataset/FilterPopover";
 import { downloadCSV, downloadXLSX } from "@/lib/export";
 import { populate } from "@/lib/backend";
 import { EVENTS, captureException, track } from "@/lib/analytics";
@@ -35,15 +36,42 @@ export default function DatasetPage() {
 
   const updateDetails = useMutation(api.datasets.updateDetails);
 
+  /**
+   * Single active column filter, or null when no filter is applied.
+   * Supports "contains" (case-insensitive substring) and "exact" match modes.
+   */
+  const [filter, setFilter] = useState<{
+    column: string;
+    value: string;
+    matchType: "contains" | "exact";
+  } | null>(null);
+
   const datasetId = params.id as Id<"datasets">;
   const dataset = useQuery(
     api.datasets.get,
     authLoading ? "skip" : { id: datasetId },
   );
-  const rows = useQuery(
+
+  /**
+   * Two query variants:
+   * - `listByDataset`           — all rows, used when `filter === null`
+   * - `listByDatasetFiltered`   — server-side filtered rows, used when filter is set
+   *
+   * Convex reactively swaps between them as `filter` changes, so the
+   * component always reads from exactly one stable source of truth.
+   */
+  const allRows = useQuery(
     api.datasetRows.listByDataset,
-    authLoading ? "skip" : { datasetId },
+    authLoading || filter !== null ? "skip" : { datasetId },
   );
+  const filteredRows = useQuery(
+    api.datasetRows.listByDatasetFiltered,
+    authLoading || filter === null
+      ? "skip"
+      : { datasetId, filter },
+  );
+
+  const rows = filter === null ? allRows : filteredRows;
 
   const rowIds = useMemo(() => (rows ?? []).map((r) => r._id), [rows]);
   const selection = useSelection(rowIds);
@@ -172,6 +200,20 @@ export default function DatasetPage() {
     setSideSheet({ column, value, rowId });
   }
 
+  /** Set a single filter — called by FilterPopover when user clicks Apply. */
+  function handleAddFilter(
+    column: string,
+    value: string,
+    matchType: "contains" | "exact",
+  ) {
+    setFilter({ column, value, matchType });
+  }
+
+  /** Clear the active filter — called by ActiveFilter pill ×. */
+  function handleClearFilter() {
+    setFilter(null);
+  }
+
   if (authLoading || dataset === undefined || rows === undefined) {
     return (
       <div className="flex flex-1 items-center justify-center">
@@ -281,10 +323,36 @@ export default function DatasetPage() {
         </div>
       </header>
 
-      <div className="border-b border-border px-5 py-2.5 flex items-center gap-4 bg-surface/50 shrink-0">
+      <div className="border-b border-border px-5 py-2.5 flex items-center gap-3 bg-surface/50 shrink-0 flex-wrap">
         <p className="text-xs text-muted truncate max-w-2xl">
           {dataset.description}
         </p>
+
+        <FilterPopover
+          columns={dataset.columns}
+          rows={allRows ?? []}
+          onFilter={handleAddFilter}
+        />
+
+        {filter && (
+          <ActiveFilter
+            column={filter.column}
+            value={filter.value}
+            matchType={filter.matchType}
+            onClear={handleClearFilter}
+          />
+        )}
+
+        {filter && (
+          <button
+            type="button"
+            onClick={handleClearFilter}
+            className="text-[11px] text-muted hover:text-foreground transition-colors underline underline-offset-2"
+          >
+            Clear
+          </button>
+        )}
+
         <div className="ml-auto flex items-center gap-4 text-[11px] text-muted shrink-0">
           {selectedCount > 0 && (
             <>
