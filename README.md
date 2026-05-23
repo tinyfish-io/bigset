@@ -49,7 +49,8 @@ Create a Clerk application at [dashboard.clerk.com](https://dashboard.clerk.com)
 ```bash
 # Root .env — used by Docker for the frontend container
 cp .env.example .env
-# Fill in NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY and CLERK_SECRET_KEY
+# Fill in NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY, CLERK_SECRET_KEY,
+# OPENROUTER_API_KEY, and TINYFISH_API_KEY
 
 # Frontend .env.local — used by Next.js and Convex CLI
 cp frontend/.env.example frontend/.env.local
@@ -65,6 +66,9 @@ make dev
 ```
 
 This starts all Docker services, waits for Convex to be healthy, and deploys Convex functions automatically.
+`make dev` checks that root `.env` and `frontend/.env.local` contain real
+Clerk/OpenRouter/TinyFish values before it starts Docker. If it reports a
+placeholder key, replace that value first.
 
 ### 4. Generate Convex admin key (first time only)
 
@@ -72,7 +76,12 @@ This starts all Docker services, waits for Convex to be healthy, and deploys Con
 docker compose exec convex ./generate_admin_key.sh
 ```
 
-Paste the output into `frontend/.env.local` as `CONVEX_SELF_HOSTED_ADMIN_KEY`, then re-run `make dev`.
+Paste the output into both `.env` and `frontend/.env.local` as
+`CONVEX_SELF_HOSTED_ADMIN_KEY`, then re-run `make dev`.
+
+If `make dev` stops at `CONVEX_SELF_HOSTED_ADMIN_KEY is missing`, that means
+Docker/Convex is up far enough for you to run the command above. Generate the
+key, paste it into both env files, and run `make dev` again.
 
 ### 5. Load curated public datasets
 
