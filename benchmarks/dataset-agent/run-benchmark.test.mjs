@@ -5,6 +5,7 @@ import {
   failureReason,
   findInfrastructureBlockerReason,
   scoreBenchmarkRows,
+  scoreOpenEndedBenchmarkRows,
 } from "./run-benchmark.mjs";
 
 const passingValidation = {
@@ -66,6 +67,34 @@ test("infrastructure blocker detection ignores ordinary API-key documentation te
   assert.equal(reason, null);
 });
 
+test("benchmark failure reason surfaces setup validation issues for zero-row runs", () => {
+  const setupIssue =
+    "Collection self-healing benchmark runner is not configured. Set BIGSET_COLLECTION_BENCHMARK_RUNNER_MODULE to a module exporting runCollectionPopulatePipeline(input).";
+
+  const reason = failureReason({
+    execution: {
+      timedOut: false,
+      exitCode: 0,
+    },
+    parsedPayload: {
+      rows: [],
+      validationIssues: [setupIssue],
+    },
+    validation: {
+      rowCount: 0,
+      sourceUrlCount: 0,
+      evidenceQuoteCount: 0,
+      requiredCellCompletenessRatio: 0,
+    },
+    answerKeyScore: null,
+    infraBlockerReason: null,
+    minRequiredCompleteness: 0.75,
+    validationIssues: [setupIssue],
+  });
+
+  assert.equal(reason, setupIssue);
+});
+
 test("infrastructure blocker detection still catches missing API key configuration", () => {
   const reason = findInfrastructureBlockerReason({
     execution: {
@@ -80,6 +109,65 @@ test("infrastructure blocker detection still catches missing API key configurati
   });
 
   assert.equal(reason, "Infrastructure/auth/credits blocker.");
+});
+
+test("failureReason does not require evidence when requireEvidence is false", () => {
+  const reason = failureReason({
+    execution: { timedOut: false, exitCode: 0 },
+    parsedPayload: { rows: [{ cells: { entity_name: "A" }, sourceUrls: ["https://a.com"] }] },
+    validation: {
+      rowCount: 1,
+      sourceUrlCount: 1,
+      evidenceQuoteCount: 0,
+      requiredCellCompletenessRatio: 1,
+    },
+    answerKeyScore: { passed: false, failureCategory: "row_target" },
+    infraBlockerReason: null,
+    minRequiredCompleteness: 0.6,
+    requireEvidence: false,
+    validationIssues: [],
+  });
+
+  assert.doesNotMatch(reason, /evidence quotes/);
+});
+
+test("open-ended scoring passes without evidence quotes when requireEvidence is false", () => {
+  const score = scoreOpenEndedBenchmarkRows({
+    rows: Array.from({ length: 60 }, (_, index) => ({
+      cells: {
+        entity_name: `Entity ${index}`,
+        website: `https://example-${index}.com`,
+        description: "Example",
+        source_url: `https://example-${index}.com`,
+      },
+      sourceUrls: [`https://example-${index}.com`],
+    })),
+    validation: {
+      rowCount: 60,
+      sourceUrlCount: 60,
+      evidenceQuoteCount: 0,
+      requiredCellCompletenessRatio: 1,
+      missingRequiredCellCount: 0,
+    },
+    validationIssues: [],
+    targetContract: {
+      targetRows: 100,
+      minRowCount: 50,
+      minRequiredCompleteness: 0.6,
+      minFactualAccuracy: 0.5,
+      minEvidenceCoverage: 0.95,
+      requireEvidence: false,
+    },
+    promptDefinition: {
+      id: "yc-recent-batch-companies",
+      scoringMode: "open_ended",
+      requiredColumns: ["entity_name", "website", "description", "source_url"],
+    },
+  });
+
+  assert.equal(score.passed, true);
+  assert.equal(score.evidenceSupportRatio, 0);
+  assert.equal(score.rowTargetRatio, 0.6);
 });
 
 test("domain scoring counts official website cells as source evidence", () => {

@@ -97,7 +97,7 @@ run_blocked_benchmark_smoke() {
 
   mkdir -p "$out_dir"
   printf 'RUN   %s benchmark no-key blocked smoke\n' "$system_name"
-  if ! env -u OPENROUTER_API_KEY -u TINYFISH_API_KEY node benchmarks/dataset-agent/run-benchmark.mjs \
+  if ! env -u OPENROUTER_API_KEY -u TINYFISH_API_KEY BIGSET_BENCHMARK_SKIP_ENV_FILES=1 node benchmarks/dataset-agent/run-benchmark.mjs \
     --prompt-ids latest-ai-blog-posts \
     --timeout-ms 60000 \
     --out "$out_dir" \

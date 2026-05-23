@@ -1,5 +1,16 @@
 node_modules/
 dist/
 .env
+.env.local
 *.tsbuildinfo
 drizzle/
+
+# Local populate / collection runtime (see POPULATE_RECIPE_STORE_DIR, POPULATE_COLLECTION_MEMORY_DIR).
+# Root .gitignore also ignores .bigset/ when those dirs live there.
+
+# BigSet_Data_Collection_Agent CLI output (default: runs/{run_id}/ under cwd).
+runs/
+memory/
+
+# Mastra local dev output
+.mastra/

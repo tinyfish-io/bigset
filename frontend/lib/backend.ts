@@ -3,8 +3,7 @@ export interface InferredSchema {
   description: string;
   columns: InferredColumn[];
   primary_key: string;
-  retrieval_strategy: "search_fetch" | "browser" | "hybrid";
-  source_hint: string;
+  search_queries?: string[];
 }
 
 export interface InferredColumn {
@@ -13,7 +12,7 @@ export interface InferredColumn {
   type: "string" | "url" | "date" | "number" | "boolean" | "enum";
   is_primary_key: boolean;
   is_enumerable: boolean;
-  retrieval_hint: string;
+  description: string;
   nullable: boolean;
 }
 

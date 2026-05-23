@@ -13,16 +13,12 @@ import {
   type ExtractedRecord,
   type FetchedPage,
 } from "../models/schemas.js";
-import {
-  deriveRecordSourceUrls,
-  isHttpUrl,
-  isUrlLikeColumnName,
-} from "../records/source-urls.js";
 
 /**
- * Extraction is always one source per LLM call in process-pages.ts:
- * - extractFromPage: one fetched page's markdown per call (parallelized per page).
- * - extractFromAgentResult: one Tinyfish agent JSON payload per call (separate module).
+ * Extraction paths in process-pages.ts:
+ * - triageAndExtractPage (v1.5.2 default): combined triage + inline extract for extract_now.
+ * - extractFromPage: triage disabled, agent-disabled fallback, combined failure fallback, legacy mode.
+ * - extractFromAgentResult: Tinyfish agent JSON payload per call (separate module).
  *
  * LLM returns row + sparse evidence + extraction_confidence; code attaches evidence URLs
  * and source_urls. Provenance URL columns come from the LLM row values per record.
@@ -174,29 +170,17 @@ function provenanceUrlColumns(spec: DatasetSpec): ColumnDef[] {
   return spec.columns.filter(isProvenanceUrlColumn);
 }
 
-function isUrlLikeColumn(column: ColumnDef): boolean {
-  return isUrlLikeColumnName(column.name);
-}
-
-function addUrlCellEvidence(
-  row: Record<string, string | number | boolean | null>,
-  evidence: ExtractedRecord["evidence"],
-  spec: DatasetSpec,
-): void {
-  const fieldsWithEvidence = new Set(evidence.map((item) => item.field));
-  for (const column of spec.columns) {
-    if (!isUrlLikeColumn(column) || fieldsWithEvidence.has(column.name)) {
-      continue;
+function collectSourceUrls(
+  pageUrl: string,
+  evidence: Array<{ url?: string }>,
+): string[] {
+  const urls = new Set<string>([pageUrl]);
+  for (const item of evidence) {
+    if (item.url?.startsWith("http")) {
+      urls.add(item.url);
     }
-    const value = row[column.name];
-    if (!isHttpUrl(value)) continue;
-    evidence.push({
-      field: column.name,
-      url: value.trim(),
-      quote: value.trim(),
-    });
-    fieldsWithEvidence.add(column.name);
   }
+  return [...urls];
 }
 
 /** Attach evidence URLs and source_urls; keep LLM row and provenance values. */
@@ -219,14 +203,8 @@ export function finalizeExtractedRecord(
       row[column.name] = pageUrl;
     }
   }
-  addUrlCellEvidence(row, evidence, spec);
 
-  const source_urls = deriveRecordSourceUrls({
-    spec,
-    row,
-    evidence,
-    fallbackUrls: [pageUrl],
-  });
+  const source_urls = collectSourceUrls(pageUrl, evidence);
 
   return extractedRecordSchema.parse({
     row,

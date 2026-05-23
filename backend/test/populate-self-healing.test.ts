@@ -17,7 +17,11 @@ import type {
   PopulateRecipeRunResult,
   PopulateRecipeRuntime,
 } from "../src/pipeline/populate-self-healing.js";
+import type { PopulateAcquisitionResult } from "../src/pipeline/populate-acquisition.js";
+import { buildPopulateExtractionSpec } from "../src/pipeline/populate-extraction-spec.js";
 import type { DatasetContext } from "../src/pipeline/populate.js";
+import { normalizeSearchResultUrl } from "../src/pipeline/populate-search-prioritization.js";
+import { buildMockRow, mockTriageExtractHooks } from "./populate-test-hooks.js";
 
 const context: DatasetContext = {
   datasetId: "dataset-ai-posts",
@@ -48,47 +52,79 @@ const context: DatasetContext = {
 };
 
 test("Mastra populate recipe runtime maps populate rows into a healthy recipe run", async () => {
-  let promptText = "";
-  const runtime = new MastraPopulateRecipeRuntime({
-    webTools: {
-      search: async () => [
+  const newsUrl = "https://openai.com/news";
+  const extractionSpec = buildPopulateExtractionSpec({
+    context,
+    dataSpec: {
+      dataset_name: "ai_posts",
+      description: context.description,
+      primary_key: "entity_name",
+      search_queries: ["openai blog"],
+      columns: [
         {
-          title: "OpenAI news",
-          snippet: "Release notes from OpenAI",
-          url: "https://openai.com/news",
+          name: "entity_name",
+          display_name: "Company",
+          type: "string",
+          is_primary_key: true,
+          is_enumerable: true,
+          description: "Company name.",
+          nullable: false,
+        },
+        {
+          name: "latest_post_title",
+          display_name: "Post",
+          type: "string",
+          is_primary_key: false,
+          is_enumerable: false,
+          description: "Post title.",
+          nullable: true,
+        },
+        {
+          name: "source_url",
+          display_name: "Source",
+          type: "url",
+          is_primary_key: false,
+          is_enumerable: false,
+          description: "Source URL.",
+          nullable: true,
+        },
+        {
+          name: "evidence_quote",
+          display_name: "Evidence",
+          type: "string",
+          is_primary_key: false,
+          is_enumerable: false,
+          description: "Evidence quote.",
+          nullable: true,
         },
       ],
+    },
+  });
+  const runtime = new MastraPopulateRecipeRuntime({
+    acquisition: selfHealingAcquisition(),
+    webTools: {
+      search: async () => [],
       fetch: async () => ({
         title: "OpenAI news",
         text: "Release notes from OpenAI",
       }),
     },
-    agentRunner: async ({ prompt, tools }) => {
-      promptText = prompt;
-      const searchWeb = tools.search_web as ToolLike<
-        { query: string },
-        { results?: unknown[] }
-      >;
-      const fetchPage = tools.fetch_page as ToolLike<
-        { url: string },
-        { text?: string }
-      >;
-      const insertRow = tools.insert_row as ToolLike<
-        { datasetId: string; data: Record<string, unknown> },
-        { success: boolean }
-      >;
-      await searchWeb.execute({ query: "OpenAI latest blog" });
-      await fetchPage.execute({ url: "https://openai.com/news" });
-      await insertRow.execute({
-        datasetId: context.datasetId,
-        data: {
-          entity_name: "OpenAI",
-          latest_post_title: "Release notes from OpenAI",
-          source_url: "https://openai.com/news",
-          evidence_quote: "Release notes from OpenAI",
-        },
-      });
-    },
+    populateHooks: mockTriageExtractHooks({
+      recordsByUrl: {
+        [newsUrl]: [
+          buildMockRow({
+            spec: extractionSpec,
+            entityName: "OpenAI",
+            sourceUrl: newsUrl,
+            extraCells: {
+              latest_post_title: "Release notes from OpenAI",
+              evidence_quote: "Release notes from OpenAI",
+            },
+            quote: "Release notes from OpenAI",
+          }),
+        ],
+      },
+    }),
   });
 
   const run = await runtime.runRecipe({
@@ -99,13 +135,12 @@ test("Mastra populate recipe runtime maps populate rows into a healthy recipe ru
     context,
   });
 
-  assert.match(promptText, /Durable recipe instructions/);
   assert.equal(run.runStatus, "succeeded");
   assert.equal(run.productionValidation.isValid, true);
   assert.equal(run.productionValidation.score, 1);
   assert.equal(run.recipeId, "recipe-v1");
   assert.equal(run.rows[0]?.cells.entity_name, "OpenAI");
-  assert.equal(run.debug?.selectedRowSource, "insert_row");
+  assert.equal(run.debug?.selectedRowSource, "structured_recovery");
   assert.ok(run.artifacts.some((artifact) => artifact.kind === "source-transcript"));
   assert.ok(run.artifacts.some((artifact) => artifact.kind === "captured-rows"));
 });
@@ -511,6 +546,22 @@ function emptyMetrics(): PopulateRecipeRunResult["metrics"] {
     browserCalls: 0,
     agentRuns: 0,
     agentSteps: 0,
+  };
+}
+
+function selfHealingAcquisition(): PopulateAcquisitionResult {
+  const url = "https://openai.com/news";
+  return {
+    prioritizedUrls: [normalizeSearchResultUrl(url)],
+    scoredUrls: [
+      {
+        url,
+        expectation_score: 5,
+        search_query: "OpenAI official blog latest post",
+      },
+    ],
+    initialQueries: ["OpenAI official blog latest post"],
+    validationIssues: [],
   };
 }
 

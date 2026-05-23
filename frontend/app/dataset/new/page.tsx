@@ -60,7 +60,7 @@ function mapBackendColumn(col: InferredColumn, index: number): ProposedColumn {
     id: String(index + 1),
     name: col.display_name,
     type: BACKEND_TYPE_MAP[col.type],
-    description: col.retrieval_hint,
+    description: col.description,
   };
 }
 

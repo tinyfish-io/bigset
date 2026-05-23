@@ -17,6 +17,10 @@ To add a new protected route, register it inside the scoped plugin in `src/index
 
 `src/pipeline/schema-inference.ts` — takes a natural language prompt and returns a structured `DatasetSchema` (Zod-validated, defined in `src/pipeline/types.ts`). Uses Claude Sonnet 4.6 via OpenRouter (`@openrouter/ai-sdk-provider` + Vercel AI SDK). Auto-retries once on validation failure by feeding the error back to the model.
 
+OpenRouter model defaults live in `src/openrouter-models.ts`: schema inference keeps Claude Sonnet 4.6; populate (`runPopulateRuntime`, Mastra `populateAgent`, structured row recovery, search prioritization) defaults to `google/gemini-3.1-flash-lite`. Override with `OPENROUTER_MODEL` or `OPENROUTER_POPULATE_MODEL`.
+
+`runPopulateRuntime` is a two-agent Mastra flow: (1) `populate-search-acquisition-agent` in `src/pipeline/populate-acquisition.ts` calls `inferSchema` via `resolvePopulateDataSpec` in `schema-inference.ts` for columns and seed `search_queries`, runs TinyFish search, and returns `scored_urls` (heuristic scores fill any gaps); (2) `populate-agent` fetches only prioritized URLs and inserts rows. Agent structured-output schemas live in `src/pipeline/types.ts`. Caps live in `populate-runtime-limits.ts` (`POPULATE_MAX_ROWS`, `POPULATE_MAX_SEARCH_CALLS`, `POPULATE_MAX_FETCH_CALLS` default 50). `POPULATE_MAX_FETCH_CALLS` only caps prioritized source URLs for populate — it is not exposed to agents as a fetch budget. Studio `populateWorkflow` mirrors the same acquire → populate steps.
+
 The pipeline is a pure function (`inferSchema(prompt) → DatasetSchema`). It is called by both Fastify (for the HTTP API) and Mastra (for workflow orchestration).
 
 ## Populate And Self-Healing

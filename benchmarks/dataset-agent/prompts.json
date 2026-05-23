@@ -1,8 +1,54 @@
 [
   {
+    "id": "yc-recent-batch-companies",
+    "quality": "open",
+    "persona": "founder",
+    "scoringMode": "open_ended",
+    "prompt": "Build a large dataset of companies from the most recent Y Combinator batch. For each company include company name, official website, a short description of what they do, and a source URL where you found it.",
+    "requiredColumns": ["entity_name", "website", "description", "source_url"],
+    "expectedStress": "Open-ended list building; should discover many distinct companies with official sites."
+  },
+  {
+    "id": "b2b-saas-free-tier",
+    "quality": "open",
+    "persona": "startup operator",
+    "scoringMode": "open_ended",
+    "prompt": "Collect B2B SaaS products that advertise a free tier or free plan. Include product or company name, pricing page URL, what the free tier includes, and a source URL.",
+    "requiredColumns": ["entity_name", "pricing_page_url", "free_tier_summary", "source_url"],
+    "expectedStress": "Broad market scan; many rows from varied vendors and pricing pages."
+  },
+  {
+    "id": "us-national-parks",
+    "quality": "open",
+    "persona": "travel planner",
+    "scoringMode": "open_ended",
+    "prompt": "List US National Parks with park name, primary state, official NPS or government page URL, and the year the park was established.",
+    "requiredColumns": ["entity_name", "state", "official_page_url", "established_year"],
+    "expectedStress": "Enumerable public dataset; should reach high row counts from official sources."
+  },
+  {
+    "id": "ai-research-labs",
+    "quality": "open",
+    "persona": "research coordinator",
+    "scoringMode": "open_ended",
+    "prompt": "Catalog university AI and machine learning research labs in the United States. For each lab include lab name, university, lab website URL, and a one-line research focus.",
+    "requiredColumns": ["entity_name", "university", "lab_website_url", "research_focus"],
+    "expectedStress": "Many labs across universities; official lab pages preferred."
+  },
+  {
+    "id": "public-company-investor-relations",
+    "quality": "open",
+    "persona": "finance analyst",
+    "scoringMode": "open_ended",
+    "prompt": "Build a table of S&P 500 companies with company name, ticker symbol, investor relations page URL, and headquarters city.",
+    "requiredColumns": ["entity_name", "ticker", "investor_relations_url", "headquarters_city"],
+    "expectedStress": "Large-cap universe; should scale toward ~100 rows of IR pages and HQ facts."
+  },
+  {
     "id": "latest-ai-blog-posts",
     "quality": "good",
     "persona": "technical operator",
+    "scoringMode": "entity",
     "prompt": "Can you make me a table of the latest blog posts from OpenAI, Anthropic, and Google DeepMind? I need title, publish date, and URL.",
     "requiredColumns": ["entity_name", "latest_post_title", "latest_post_date", "source_url"],
     "expectedStress": "Clear entities and fields; tests current web facts with low ambiguity."
@@ -11,6 +57,7 @@
     "id": "saas-pricing-pages",
     "quality": "good",
     "persona": "startup founder",
+    "scoringMode": "entity",
     "prompt": "For Stripe, Paddle, and Chargebee, collect the official pricing page URL and the plan names or starting prices shown on the page.",
     "requiredColumns": ["entity_name", "pricing_page_url", "plan_or_price", "source_url"],
     "expectedStress": "Official pricing evidence; should not require a browser agent unless pricing is hidden."
@@ -19,6 +66,7 @@
     "id": "earnings-release-pages",
     "quality": "good",
     "persona": "finance analyst",
+    "scoringMode": "entity",
     "prompt": "Find the latest investor relations earnings release page for Apple, Microsoft, and Nvidia. Include release date, fiscal quarter, and source URL.",
     "requiredColumns": ["entity_name", "release_date", "fiscal_quarter", "source_url"],
     "expectedStress": "Latest dated source pages; date precision matters."
@@ -27,6 +75,7 @@
     "id": "mcp-docs-pages",
     "quality": "good",
     "persona": "developer",
+    "scoringMode": "entity",
     "prompt": "I need official docs pages for setting up MCP servers from Anthropic, OpenAI, and Cloudflare. Give me title, URL, and what each page covers.",
     "requiredColumns": ["entity_name", "docs_title", "docs_url", "summary"],
     "expectedStress": "Official docs discovery; should avoid random blog posts."
@@ -35,6 +84,7 @@
     "id": "menlo-park-coca-cola",
     "quality": "average",
     "persona": "local researcher",
+    "scoringMode": "entity",
     "prompt": "restaurants in Menlo Park that serve Coca-Cola",
     "requiredColumns": ["entity_name", "address", "serves_requested_item", "source_url"],
     "expectedStress": "Short but understandable; menu evidence may require deeper page checks."
@@ -43,6 +93,7 @@
     "id": "hcmc-bakery-products",
     "quality": "average",
     "persona": "food blogger",
+    "scoringMode": "entity",
     "prompt": "bakeries in Ho Chi Minh City with pastry product pages, product name, product URL, and bakery name",
     "requiredColumns": ["bakery_name", "product_name", "product_url", "source_url"],
     "expectedStress": "Product-page proof and local business search."
@@ -51,6 +102,7 @@
     "id": "ny-ai-startup-careers",
     "quality": "average",
     "persona": "job seeker",
+    "scoringMode": "entity",
     "prompt": "AI startups in New York that have careers pages. I want company name, website, and whether they look like they are hiring.",
     "requiredColumns": ["entity_name", "company_website", "careers_page_url", "is_hiring"],
     "expectedStress": "Careers-page verification with partial data accepted."
@@ -59,6 +111,7 @@
     "id": "vietnam-fintech-sites",
     "quality": "average",
     "persona": "market researcher",
+    "scoringMode": "entity",
     "prompt": "Vietnamese fintech startups with official websites, short description, and source URL",
     "requiredColumns": ["entity_name", "official_website", "description", "source_url"],
     "expectedStress": "Company discovery with official-source preference."
@@ -67,6 +120,7 @@
     "id": "district-one-coffee-sites",
     "quality": "average",
     "persona": "tourist",
+    "scoringMode": "entity",
     "prompt": "coffee shops in District 1 Ho Chi Minh City that have their own website or online menu",
     "requiredColumns": ["entity_name", "website_or_menu_url", "address", "source_url"],
     "expectedStress": "Local search plus website/menu disambiguation."
@@ -75,6 +129,7 @@
     "id": "amazon-starbucks-products",
     "quality": "average",
     "persona": "ecommerce operator",
+    "scoringMode": "entity",
     "prompt": "I saw there is a Starbucks shop on Amazon. Can you scrape the Starbucks products with name, price, image, and whether each item is in stock?",
     "requiredColumns": ["product_name", "price", "image_url", "in_stock"],
     "expectedStress": "Ecommerce listing freshness; likely needs browser-style verification."
@@ -83,6 +138,7 @@
     "id": "california-insurance-prices",
     "quality": "bad",
     "persona": "consumer",
+    "scoringMode": "entity",
     "prompt": "find me the best car insurance prices in California so I can pick the best bang for my buck",
     "requiredColumns": ["provider_name", "quote_page_url", "missing_inputs", "source_url"],
     "expectedStress": "Missing driver, vehicle, ZIP, coverage, deductible; should ask clarifying questions."
@@ -91,6 +147,7 @@
     "id": "la-coke-menu-lol",
     "quality": "bad",
     "persona": "casual user",
+    "scoringMode": "entity",
     "prompt": "i need places in LA with coke on the menu lol",
     "requiredColumns": ["entity_name", "menu_url", "serves_requested_item", "source_url"],
     "expectedStress": "Ambiguous location and entity type; should still infer restaurants but require menu evidence."
@@ -99,6 +156,7 @@
     "id": "sf-ml-hiring-rn",
     "quality": "bad",
     "persona": "job seeker",
+    "scoringMode": "entity",
     "prompt": "who's hiring ML engineers around sf rn",
     "requiredColumns": ["entity_name", "careers_page_url", "open_role_title", "source_url"],
     "expectedStress": "Casual wording and broad geography; should find careers pages without over-claiming."
@@ -107,6 +165,7 @@
     "id": "latest-ai-company-stuff",
     "quality": "bad",
     "persona": "busy founder",
+    "scoringMode": "entity",
     "prompt": "get me the latest stuff from the big AI companies",
     "requiredColumns": ["entity_name", "latest_item_title", "latest_item_url", "source_url"],
     "expectedStress": "Underspecified entities, source type, and columns; should expose weak plan/questions."
@@ -115,6 +174,7 @@
     "id": "pastry-things-menlo",
     "quality": "bad",
     "persona": "casual food search",
+    "scoringMode": "entity",
     "prompt": "good pastry things near Menlo Park with websites",
     "requiredColumns": ["entity_name", "product_or_business_name", "website_url", "source_url"],
     "expectedStress": "Vague quality word and entity boundary; should return product/business evidence only."
@@ -123,6 +183,7 @@
     "id": "perplexity-like-companies",
     "quality": "bad",
     "persona": "founder",
+    "scoringMode": "entity",
     "prompt": "make a table of companies like Perplexity but with useful info",
     "requiredColumns": ["entity_name", "official_website", "why_similar", "source_url"],
     "expectedStress": "Vague comparator and columns; should avoid inventing what useful info means."

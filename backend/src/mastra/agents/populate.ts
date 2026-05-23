@@ -1,14 +1,19 @@
 import { Agent } from "@mastra/core/agent";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
+
 import {
+  DEFAULT_OPENROUTER_MODEL_ID,
+  requiredOpenRouterApiKey,
+} from "../../openrouter-models.js";
+import { populateAgentInstructions } from "../../pipeline/populate-prompt.js";
+import {
+  getRowTool,
   insertRowTool,
   listRowsTool,
-  getRowTool,
   updateRowTool,
   deleteRowTool,
 } from "../tools/dataset-tools.js";
-import { searchWebTool, fetchPageTool } from "../tools/web-tools.js";
-import { populateAgentInstructions } from "../../pipeline/populate-prompt.js";
+import { createFetchPageTool } from "../tools/web-tools.js";
 
 type PopulateAgentOptions = ConstructorParameters<typeof Agent>[0];
 
@@ -18,8 +23,7 @@ const defaultPopulateTools = {
   get_row: getRowTool,
   update_row: updateRowTool,
   delete_row: deleteRowTool,
-  search_web: searchWebTool,
-  fetch_page: fetchPageTool,
+  fetch_page: createFetchPageTool(),
 };
 
 export function createPopulateAgent(input: {
@@ -38,8 +42,6 @@ export function createPopulateAgent(input: {
 export const populateAgent = createPopulateAgent();
 
 function defaultPopulateModel(): PopulateAgentOptions["model"] {
-  const openrouter = createOpenRouter({
-    apiKey: process.env.OPENROUTER_API_KEY!,
-  });
-  return openrouter("anthropic/claude-sonnet-4-6");
+  const openrouter = createOpenRouter({ apiKey: requiredOpenRouterApiKey() });
+  return openrouter(DEFAULT_OPENROUTER_MODEL_ID);
 }

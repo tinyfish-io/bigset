@@ -72,19 +72,49 @@ export const searchWebTool = createTool({
   },
 });
 
-export const fetchPageTool = createTool({
-  id: "fetch_page",
-  description:
-    "Fetch a web page and extract its content as clean markdown text. Use this after search_web to read the full content of a page.",
-  inputSchema: z.object({
-    url: z.string().describe("The URL to fetch"),
-  }),
-  outputSchema: z.object({
-    title: z.string().optional(),
-    text: z.string().optional(),
-    error: z.string().optional(),
-  }),
-  execute: async ({ url: targetUrl }) => {
+export function createFetchPageTool(input?: {
+  allowedUrls?: Set<string>;
+  normalizeUrl?: (url: string) => string;
+  onFetchAttempt?: () => string | undefined;
+}) {
+  const normalizeUrl = input?.normalizeUrl ?? ((url: string) => url.trim());
+
+  return createTool({
+    id: "fetch_page",
+    description:
+      "Fetch a web page and extract its content as clean markdown text. Use only on source URLs listed in the prompt.",
+    inputSchema: z.object({
+      url: z.string().describe("The URL to fetch"),
+    }),
+    outputSchema: z.object({
+      title: z.string().optional(),
+      text: z.string().optional(),
+      error: z.string().optional(),
+    }),
+    execute: async ({ url: targetUrl }) => {
+      const limitMessage = input?.onFetchAttempt?.();
+      if (limitMessage) {
+        return { error: limitMessage };
+      }
+
+      if (input?.allowedUrls && input.allowedUrls.size > 0) {
+        const normalized = normalizeUrl(targetUrl);
+        if (!input.allowedUrls.has(normalized)) {
+          return {
+            error:
+              "URL is not in the source URL list for this run. Use fetch_page only on URLs listed in the prompt.",
+          };
+        }
+      }
+
+      return executeFetchPage(targetUrl);
+    },
+  });
+}
+
+export const fetchPageTool = createFetchPageTool();
+
+async function executeFetchPage(targetUrl: string) {
     if (!targetUrl?.trim())
       return { error: "url is required and cannot be empty." };
     if (!targetUrl.startsWith("http://") && !targetUrl.startsWith("https://"))
@@ -158,5 +188,4 @@ export const fetchPageTool = createTool({
       console.error(`[fetch_page] Failed:`, msg);
       return { error: `Fetch failed: ${msg}. Use data from search snippets instead.` };
     }
-  },
-});
+}

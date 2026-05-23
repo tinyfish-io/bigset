@@ -53,7 +53,7 @@ const context = {
 const service = new SelfHealingPopulateRecipeService({
   store: new InMemoryPopulateRecipeStore(),
   runtime: new MastraPopulateRecipeRuntime({
-    maxRows: Number(process.env.BIGSET_MASTRA_BENCHMARK_MAX_ROWS ?? "10"),
+    maxRows: Number(process.env.BIGSET_MASTRA_BENCHMARK_MAX_ROWS ?? "100"),
   }),
   author: new DefaultPopulateRecipeAuthor(),
 });

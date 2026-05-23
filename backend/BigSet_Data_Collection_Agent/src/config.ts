@@ -1,3 +1,5 @@
+import "dotenv/config";
+
 function readBool(name: string, fallback: boolean): boolean {
   const raw = process.env[name];
   if (raw === undefined || raw === "") return fallback;
@@ -34,6 +36,11 @@ function readInt(name: string, fallback: number): number {
   return value;
 }
 
+const maxPageChars = readInt("MAX_PAGE_CHARS", 12000);
+const triageExtractMaxPageChars = process.env.TRIAGE_EXTRACT_MAX_PAGE_CHARS
+  ? readInt("TRIAGE_EXTRACT_MAX_PAGE_CHARS", maxPageChars * 2)
+  : maxPageChars * 2;
+
 export const config = {
   tinyfishApiKey: process.env.TINYFISH_API_KEY ?? "",
   openRouterApiKey: process.env.OPENROUTER_API_KEY ?? "",
@@ -48,7 +55,11 @@ export const config = {
   maxSearchQueries: readInt("MAX_SEARCH_QUERIES", 6),
   maxResultsPerQuery: readInt("MAX_RESULTS_PER_QUERY", 5),
   maxUrlsToFetch: readInt("MAX_URLS_TO_FETCH", 20),
-  maxPageChars: readInt("MAX_PAGE_CHARS", 12000),
+  maxPageChars,
+  /** v1.5.2: combined triage+extract agent page budget (default 2× maxPageChars). */
+  triageExtractMaxPageChars,
+  /** v1.5.2: one LLM call for triage + inline extract (default). Set false for v1.4 two-call path. */
+  enableCombinedTriageExtract: readBool("ENABLE_COMBINED_TRIAGE_EXTRACT", true),
   extractionConcurrency: readInt("EXTRACTION_CONCURRENCY", 5),
   fetchBatchSize: readInt("FETCH_BATCH_SIZE", 10),
   fetchConcurrency: readInt("FETCH_CONCURRENCY", 4),
@@ -86,7 +97,8 @@ export const config = {
   agentPollConcurrency: readInt("AGENT_POLL_CONCURRENCY", 10),
   agentPollIntervalMs: readInt("AGENT_POLL_INTERVAL_MS", 3000),
   agentPollTimeoutMs: readInt("AGENT_POLL_TIMEOUT_MS", 1_200_000),
-  triageConcurrency: readInt("TRIAGE_CONCURRENCY", 5),
+  /** v1.5.2: more parallel combined agents (fewer pages per worker). */
+  triageConcurrency: readInt("TRIAGE_CONCURRENCY", 10),
   enableQualityScoring: readBool("ENABLE_QUALITY_SCORING", true),
   /** results.csv only includes rows with all required fields, ranked by quality. */
   enableSelectiveResults: readBool("ENABLE_SELECTIVE_RESULTS", true),

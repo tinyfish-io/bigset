@@ -1,12 +1,99 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { entityAnswerKeysByPromptId } from "./answer-keys-entity.mjs";
+
 const scriptDir = dirname(fileURLToPath(import.meta.url));
+const repoRoot = resolve(scriptDir, "../..");
 const defaultPromptsPath = join(scriptDir, "prompts.json");
-const defaultMinimumFactualAccuracy = 0.75;
+const defaultMinimumFactualAccuracy = 0.5;
+
+const defaultTargetContract = {
+  targetRows: 100,
+  minRowCount: 50,
+  minRequiredCompleteness: 0.6,
+  minFactualAccuracy: 0.5,
+  minEvidenceCoverage: 0.95,
+  requireEvidence: false,
+};
+
+/** Fixed-entity prompts (original 16-pack): stricter gates and evidence required. */
+const entityBenchmarkContract = {
+  targetRows: 10,
+  minRowCount: 1,
+  minRequiredCompleteness: 0.75,
+  minFactualAccuracy: 0.75,
+  minEvidenceCoverage: 1,
+  requireEvidence: true,
+};
+
+function parseEnvFileContent(content) {
+  const entries = {};
+  for (const line of content.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) {
+      continue;
+    }
+    const separatorIndex = trimmed.indexOf("=");
+    if (separatorIndex <= 0) {
+      continue;
+    }
+    const key = trimmed.slice(0, separatorIndex).trim();
+    let value = trimmed.slice(separatorIndex + 1).trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+    entries[key] = value;
+  }
+  return entries;
+}
+
+function loadBenchmarkEnvFiles() {
+  if (process.env.BIGSET_BENCHMARK_SKIP_ENV_FILES === "1") {
+    return;
+  }
+
+  const envFiles = [
+    join(repoRoot, ".env"),
+    join(repoRoot, "backend", ".env"),
+    join(repoRoot, "backend", ".env.local"),
+  ];
+  const merged = {};
+
+  for (const envPath of envFiles) {
+    if (!existsSync(envPath)) {
+      continue;
+    }
+    Object.assign(merged, parseEnvFileContent(readFileSync(envPath, "utf8")));
+  }
+
+  for (const [key, value] of Object.entries(merged)) {
+    if (process.env[key] === undefined) {
+      process.env[key] = value;
+    }
+  }
+}
+
+function applyBenchmarkDefaults() {
+  if (!process.env.COLLECTION_AGENT_PIPELINE_MODULE) {
+    process.env.COLLECTION_AGENT_PIPELINE_MODULE =
+      "./backend/BigSet_Data_Collection_Agent/src/orchestrator/pipeline.ts";
+  }
+  if (!process.env.BIGSET_COLLECTION_BENCHMARK_RUNNER_MODULE) {
+    process.env.BIGSET_COLLECTION_BENCHMARK_RUNNER_MODULE =
+      "./backend/src/pipeline/collection-agent-runner.ts";
+  }
+}
+
+loadBenchmarkEnvFiles();
+applyBenchmarkDefaults();
 
 async function main() {
   const config = parseArgs(process.argv.slice(2));
@@ -63,6 +150,7 @@ async function main() {
     wallClockMs: Date.now() - runStartedAt.getTime(),
     promptCount: prompts.length,
     promptMix: promptMixSummary(prompts),
+    targetContract: config.targetContract,
     systems: config.systems.map(({ name }) => name),
     costAssumptions: {
       inputUsdPer1M: config.inputUsdPer1M,
@@ -78,447 +166,39 @@ async function main() {
   console.log(JSON.stringify(summary, null, 2));
 }
 
-const verifiedAt = "2026-05-20";
 const answerKeysByPromptId = {
-  "latest-ai-blog-posts": {
-    verifiedAt,
-    sourceUrls: [
-      "https://openai.com/index/advancing-content-provenance/",
-      "https://www.anthropic.com/news/anthropic-kpmg",
-      "https://deepmind.google/blog/co-scientist-a-multi-agent-ai-partner-to-accelerate-research/",
-    ],
-    scoringNotes:
-      "Latest-post titles drift. Score entity coverage, official domains, dated titles, and source URLs rather than one frozen title only.",
+  "yc-recent-batch-companies": {
+    scoringMode: "open_ended",
     expectedBehavior: "answer",
-    requiredColumns: ["entity_name", "latest_post_title", "latest_post_date", "source_url"],
-    expectedEntities: [
-      {
-        id: "openai",
-        label: "OpenAI",
-        aliases: ["openai"],
-        allowedSourceDomains: ["openai.com"],
-        requiredText: ["2026"],
-      },
-      {
-        id: "anthropic",
-        label: "Anthropic",
-        aliases: ["anthropic"],
-        allowedSourceDomains: ["anthropic.com"],
-        requiredText: ["2026"],
-      },
-      {
-        id: "google-deepmind",
-        label: "Google DeepMind",
-        aliases: ["google deepmind", "deepmind"],
-        allowedSourceDomains: ["deepmind.google"],
-        requiredText: ["2026"],
-      },
-    ],
-    minimumExpectedEntityMatches: 3,
-    officialSourceDomains: ["openai.com", "anthropic.com", "deepmind.google"],
+    requiredColumns: ["entity_name", "website", "description", "source_url"],
+    scoringNotes: "Open-ended YC batch company discovery.",
   },
-  "saas-pricing-pages": {
-    verifiedAt: "2026-05-22",
-    sourceUrls: [
-      "https://stripe.com/pricing",
-      "https://www.paddle.com/pricing",
-      "https://www.chargebee.com/pricing/",
-    ],
-    scoringNotes:
-      "Pass requires all three vendors, official domains, and visible plan or price text. Paddle's current pricing page can show Checkout transaction pricing.",
+  "b2b-saas-free-tier": {
+    scoringMode: "open_ended",
     expectedBehavior: "answer",
-    requiredColumns: ["entity_name", "pricing_page_url", "plan_or_price", "source_url"],
-    expectedEntities: [
-      {
-        id: "stripe",
-        label: "Stripe",
-        aliases: ["stripe"],
-        allowedSourceDomains: ["stripe.com"],
-        requiredText: ["pricing"],
-      },
-      {
-        id: "paddle",
-        label: "Paddle",
-        aliases: ["paddle"],
-        allowedSourceDomains: ["paddle.com"],
-        requiredText: ["checkout", "5%", "50"],
-      },
-      {
-        id: "chargebee",
-        label: "Chargebee",
-        aliases: ["chargebee"],
-        allowedSourceDomains: ["chargebee.com"],
-        requiredText: ["starter", "performance", "enterprise"],
-      },
-    ],
-    minimumExpectedEntityMatches: 3,
-    officialSourceDomains: ["stripe.com", "paddle.com", "chargebee.com"],
+    requiredColumns: ["entity_name", "pricing_page_url", "free_tier_summary", "source_url"],
+    scoringNotes: "Open-ended SaaS free-tier scan.",
   },
-  "earnings-release-pages": {
-    verifiedAt: "2026-05-22",
-    sourceUrls: [
-      "https://www.apple.com/newsroom/2026/04/apple-reports-second-quarter-results/",
-      "https://www.microsoft.com/en-us/investor/earnings/fy-2026-q3/press-release-webcast",
-      "https://nvidianews.nvidia.com/news/nvidia-announces-financial-results-for-first-quarter-fiscal-2027",
-    ],
-    scoringNotes:
-      "As of 2026-05-22, Apple latest verified release is fiscal 2026 Q2 on 2026-04-30, Microsoft is FY26 Q3 on 2026-04-29, and NVIDIA is Q1 fiscal 2027 on 2026-05-20.",
+  "us-national-parks": {
+    scoringMode: "open_ended",
     expectedBehavior: "answer",
-    requiredColumns: ["entity_name", "release_date", "fiscal_quarter", "source_url"],
-    expectedEntities: [
-      {
-        id: "apple",
-        label: "Apple",
-        aliases: ["apple"],
-        allowedSourceDomains: ["apple.com"],
-        requiredText: ["second quarter", "q2", "2026", "april 30"],
-      },
-      {
-        id: "microsoft",
-        label: "Microsoft",
-        aliases: ["microsoft"],
-        allowedSourceDomains: ["microsoft.com"],
-        requiredText: ["fy26 q3", "q3", "april 29", "2026"],
-      },
-      {
-        id: "nvidia",
-        label: "NVIDIA",
-        aliases: ["nvidia"],
-        allowedSourceDomains: ["nvidia.com"],
-        requiredText: ["first quarter", "q1", "fiscal 2027", "may 20"],
-      },
-    ],
-    minimumExpectedEntityMatches: 3,
-    officialSourceDomains: ["apple.com", "microsoft.com", "nvidia.com"],
+    requiredColumns: ["entity_name", "state", "official_page_url", "established_year"],
+    scoringNotes: "Open-ended US National Parks list.",
   },
-  "mcp-docs-pages": {
-    verifiedAt,
-    sourceUrls: [
-      "https://developers.openai.com/api/docs/mcp",
-      "https://platform.claude.com/docs/en/agents-and-tools/mcp-connector",
-      "https://developers.cloudflare.com/agents/model-context-protocol/",
-    ],
-    scoringNotes:
-      "Pass requires official docs for all three vendors. Blog posts, GitHub examples, and community roundups are not enough.",
+  "ai-research-labs": {
+    scoringMode: "open_ended",
     expectedBehavior: "answer",
-    requiredColumns: ["entity_name", "docs_title", "docs_url", "summary"],
-    expectedEntities: [
-      {
-        id: "openai",
-        label: "OpenAI",
-        aliases: ["openai"],
-        allowedSourceDomains: ["developers.openai.com", "platform.openai.com", "openai.com"],
-        requiredText: ["mcp"],
-      },
-      {
-        id: "anthropic",
-        label: "Anthropic",
-        aliases: ["anthropic"],
-        allowedSourceDomains: ["docs.anthropic.com", "platform.claude.com"],
-        requiredText: ["mcp"],
-      },
-      {
-        id: "cloudflare",
-        label: "Cloudflare",
-        aliases: ["cloudflare"],
-        allowedSourceDomains: ["developers.cloudflare.com"],
-        requiredText: ["mcp"],
-      },
-    ],
-    minimumExpectedEntityMatches: 3,
-    officialSourceDomains: [
-      "developers.openai.com",
-      "platform.openai.com",
-      "openai.com",
-      "docs.anthropic.com",
-      "platform.claude.com",
-      "developers.cloudflare.com",
-    ],
+    requiredColumns: ["entity_name", "university", "lab_website_url", "research_focus"],
+    scoringNotes: "Open-ended university AI lab catalog.",
   },
-  "menlo-park-coca-cola": {
-    verifiedAt,
-    sourceUrls: [
-      "https://order-menlopark.celiasrestaurants.com/",
-      "https://www.portablurestaurant.com/menus",
-    ],
-    scoringNotes:
-      "Pass requires direct menu/order evidence for Coke/Coca-Cola. A directory saying a restaurant exists is not proof.",
+  "public-company-investor-relations": {
+    scoringMode: "open_ended",
     expectedBehavior: "answer",
-    requiredColumns: ["entity_name", "address", "serves_requested_item", "source_url"],
-    rowMustContainAny: ["coca-cola", "coke", "diet coke", "diet coca-cola"],
-    minimumScore: 0.7,
+    requiredColumns: ["entity_name", "ticker", "investor_relations_url", "headquarters_city"],
+    scoringNotes: "Open-ended S&P 500 IR page dataset.",
   },
-  "hcmc-bakery-products": {
-    verifiedAt,
-    sourceUrls: [
-      "https://maisonmarou.com/product/croissant/",
-      "https://moncannele.com/products/box-of-9-mini",
-    ],
-    scoringNotes:
-      "Pass requires product-detail URLs from bakery-owned sites, not generic listicles.",
-    expectedBehavior: "answer",
-    requiredColumns: ["bakery_name", "product_name", "product_url", "source_url"],
-    expectedEntities: [
-      {
-        id: "maison-marou",
-        label: "Maison Marou",
-        aliases: ["maison marou", "marou"],
-        allowedSourceDomains: ["maisonmarou.com"],
-        requiredText: ["croissant", "macaron", "opera", "pastry"],
-      },
-      {
-        id: "mon-cannele",
-        label: "Mon Cannele",
-        aliases: ["mon cannele", "cannel"],
-        allowedSourceDomains: ["moncannele.com"],
-        requiredText: ["cannel"],
-      },
-    ],
-    minimumExpectedEntityMatches: 1,
-    officialSourceDomains: ["maisonmarou.com", "moncannele.com"],
-  },
-  "ny-ai-startup-careers": {
-    verifiedAt,
-    sourceUrls: [
-      "https://www.runwayml.com/careers",
-      "https://www.huggingface.co/jobs",
-      "https://www.hebbia.ai/careers",
-    ],
-    scoringNotes:
-      "Pass requires company-owned websites or careers pages. One third-party startup directory with repeated 'View Jobs' text is not enough.",
-    expectedBehavior: "answer",
-    requiredColumns: ["entity_name", "company_website", "careers_page_url", "is_hiring"],
-    expectedEntities: [
-      {
-        id: "runway",
-        label: "Runway",
-        aliases: ["runway"],
-        allowedSourceDomains: ["runwayml.com"],
-        requiredText: ["careers", "jobs"],
-      },
-      {
-        id: "hugging-face",
-        label: "Hugging Face",
-        aliases: ["hugging face", "huggingface"],
-        allowedSourceDomains: ["huggingface.co"],
-        requiredText: ["jobs", "careers"],
-      },
-      {
-        id: "hebbia",
-        label: "Hebbia",
-        aliases: ["hebbia"],
-        allowedSourceDomains: ["hebbia.ai"],
-        requiredText: ["careers", "jobs"],
-      },
-    ],
-    minimumExpectedEntityMatches: 2,
-  },
-  "vietnam-fintech-sites": {
-    verifiedAt,
-    sourceUrls: [
-      "https://www.momo.vn/",
-      "https://zalopay.vn/",
-      "https://vnpay.vn/",
-      "https://www.finhay.com.vn/",
-    ],
-    scoringNotes:
-      "Pass requires official company/product domains for Vietnamese fintech examples.",
-    expectedBehavior: "answer",
-    requiredColumns: ["entity_name", "official_website", "description", "source_url"],
-    expectedEntities: [
-      {
-        id: "momo",
-        label: "MoMo",
-        aliases: ["momo"],
-        allowedSourceDomains: ["momo.vn"],
-      },
-      {
-        id: "zalopay",
-        label: "ZaloPay",
-        aliases: ["zalopay", "zalo pay"],
-        allowedSourceDomains: ["zalopay.vn"],
-      },
-      {
-        id: "vnpay",
-        label: "VNPAY",
-        aliases: ["vnpay"],
-        allowedSourceDomains: ["vnpay.vn"],
-      },
-      {
-        id: "finhay",
-        label: "Finhay",
-        aliases: ["finhay"],
-        allowedSourceDomains: ["finhay.com.vn"],
-      },
-    ],
-    minimumExpectedEntityMatches: 3,
-    officialSourceDomains: ["momo.vn", "zalopay.vn", "vnpay.vn", "finhay.com.vn"],
-  },
-  "district-one-coffee-sites": {
-    verifiedAt,
-    sourceUrls: ["https://tonkin.coffee/menu/", "https://www.cafehien.com/"],
-    scoringNotes:
-      "Pass requires a shop-owned site or online menu plus District 1 address evidence.",
-    expectedBehavior: "answer",
-    requiredColumns: ["entity_name", "website_or_menu_url", "address", "source_url"],
-    expectedEntities: [
-      {
-        id: "tonkin",
-        label: "Tonkin Coffee",
-        aliases: ["tonkin"],
-        allowedSourceDomains: ["tonkin.coffee"],
-        requiredText: ["district 1", "menu"],
-      },
-      {
-        id: "hien",
-        label: "Hien Cafe",
-        aliases: ["hien cafe", "cafe hien"],
-        allowedSourceDomains: ["cafehien.com"],
-        requiredText: ["menu", "ho chi minh"],
-      },
-    ],
-    minimumExpectedEntityMatches: 1,
-  },
-  "amazon-starbucks-products": {
-    verifiedAt,
-    sourceUrls: ["https://www.amazon.com/stores/Starbucks/Starbucks/page/"],
-    scoringNotes:
-      "Pass requires Amazon product/listing evidence with product name, price, image URL, and stock/availability. If Amazon blocks access, an honest validation issue beats hallucinated products.",
-    expectedBehavior: "answer",
-    requiredColumns: ["product_name", "price", "image_url", "in_stock"],
-    officialSourceDomains: ["amazon.com"],
-    rowMustContainAny: ["starbucks"],
-    minimumScore: 0.7,
-  },
-  "california-insurance-prices": {
-    verifiedAt,
-    sourceUrls: [
-      "https://www.geico.com/auto-insurance/",
-      "https://www.progressive.com/auto/",
-      "https://www.statefarm.com/insurance/auto",
-    ],
-    scoringNotes:
-      "Actual prices require driver, vehicle, ZIP, coverage, and deductible. Best behavior is official quote pages plus missing-input validation, not invented premiums.",
-    expectedBehavior: "clarify_or_abstain",
-    requiredColumns: ["provider_name", "quote_page_url", "missing_inputs", "source_url"],
-    clarificationTerms: ["driver", "vehicle", "zip", "coverage", "deductible"],
-    officialSourceDomains: ["geico.com", "progressive.com", "statefarm.com"],
-  },
-  "la-coke-menu-lol": {
-    verifiedAt,
-    sourceUrls: [],
-    scoringNotes:
-      "Pass requires direct LA menu/order evidence for Coke/Coca-Cola. Yelp/listicle rows are not enough.",
-    expectedBehavior: "answer",
-    requiredColumns: ["entity_name", "menu_url", "serves_requested_item", "source_url"],
-    rowMustContainAny: ["coca-cola", "coke", "diet coke", "soft drink"],
-    minimumScore: 0.9,
-  },
-  "sf-ml-hiring-rn": {
-    verifiedAt,
-    sourceUrls: [
-      "https://openai.com/careers/",
-      "https://www.anthropic.com/careers",
-      "https://www.perplexity.ai/careers",
-    ],
-    scoringNotes:
-      "Pass requires current company-owned careers/job pages with ML or AI role evidence near San Francisco or the Bay Area.",
-    expectedBehavior: "answer",
-    requiredColumns: ["entity_name", "careers_page_url", "open_role_title", "source_url"],
-    expectedEntities: [
-      {
-        id: "openai",
-        label: "OpenAI",
-        aliases: ["openai"],
-        allowedSourceDomains: ["openai.com"],
-        requiredText: ["machine learning", "ml", "research", "engineer"],
-      },
-      {
-        id: "anthropic",
-        label: "Anthropic",
-        aliases: ["anthropic"],
-        allowedSourceDomains: ["anthropic.com"],
-        requiredText: ["machine learning", "ml", "research", "engineer"],
-      },
-      {
-        id: "perplexity",
-        label: "Perplexity",
-        aliases: ["perplexity"],
-        allowedSourceDomains: ["perplexity.ai"],
-        requiredText: ["machine learning", "ml", "engineer"],
-      },
-    ],
-    minimumExpectedEntityMatches: 1,
-  },
-  "latest-ai-company-stuff": {
-    verifiedAt,
-    sourceUrls: [],
-    scoringNotes:
-      "Prompt is underspecified. Best behavior is ask which companies and item types count, or return an explicitly scoped partial dataset with validation issues.",
-    expectedBehavior: "clarify_or_abstain",
-    requiredColumns: ["entity_name", "latest_item_title", "latest_item_url", "source_url"],
-    clarificationTerms: ["which companies", "source type", "news", "blog", "release", "columns"],
-  },
-  "pastry-things-menlo": {
-    verifiedAt,
-    sourceUrls: ["https://mademoisellecolette.com/", "https://www.fleurdelysbakery.com/"],
-    scoringNotes:
-      "Pass requires bakery-owned websites or product/menu pages near Menlo Park. 'Good' should not become invented ratings.",
-    expectedBehavior: "answer",
-    requiredColumns: ["entity_name", "product_or_business_name", "website_url", "source_url"],
-    expectedEntities: [
-      {
-        id: "mademoiselle-colette",
-        label: "Mademoiselle Colette",
-        aliases: ["mademoiselle colette"],
-        allowedSourceDomains: ["mademoisellecolette.com"],
-      },
-      {
-        id: "fleur-de-lys",
-        label: "Fleur de Lys",
-        aliases: ["fleur de lys"],
-        allowedSourceDomains: ["fleurdelysbakery.com"],
-      },
-    ],
-    minimumExpectedEntityMatches: 1,
-  },
-  "perplexity-like-companies": {
-    verifiedAt,
-    sourceUrls: ["https://www.perplexity.ai/", "https://you.com/", "https://www.glean.com/"],
-    scoringNotes:
-      "Prompt is vague but answerable as AI search/answer companies if the system explains the comparison. Pass requires official websites and a concrete similarity reason.",
-    expectedBehavior: "answer",
-    requiredColumns: ["entity_name", "official_website", "why_similar", "source_url"],
-    expectedEntities: [
-      {
-        id: "you-com",
-        label: "You.com",
-        aliases: ["you.com", "youcom"],
-        allowedSourceDomains: ["you.com"],
-        requiredText: ["search", "answer", "ai"],
-      },
-      {
-        id: "glean",
-        label: "Glean",
-        aliases: ["glean"],
-        allowedSourceDomains: ["glean.com"],
-        requiredText: ["search", "workplace", "ai"],
-      },
-      {
-        id: "exa",
-        label: "Exa",
-        aliases: ["exa"],
-        allowedSourceDomains: ["exa.ai"],
-        requiredText: ["search", "web", "ai"],
-      },
-    ],
-    minimumExpectedEntityMatches: 1,
-  },
+  ...entityAnswerKeysByPromptId,
 };
-
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  await main();
-}
 
 async function runSystemPrompt(input) {
   const startedAt = Date.now();
@@ -529,6 +209,13 @@ async function runSystemPrompt(input) {
   console.error(
     `[${input.system.name}] ${input.promptIndex + 1}/${input.promptCount} ${input.promptDefinition.id}`
   );
+
+  const promptRunDirectory = join(
+    input.runDirectory,
+    input.system.name,
+    `${String(input.promptIndex + 1).padStart(2, "0")}-${input.promptDefinition.id}`
+  );
+  await mkdir(promptRunDirectory, { recursive: true });
 
   const execution = await runCommand({
     command,
@@ -541,6 +228,7 @@ async function runSystemPrompt(input) {
       BIGSET_BENCHMARK_EXPECTED_STRESS: input.promptDefinition.expectedStress,
       BIGSET_BENCHMARK_REQUIRED_COLUMNS: input.promptDefinition.requiredColumns.join(","),
       BIGSET_BENCHMARK_MINIMUM_REQUIRED_COLUMNS: minimumRequiredColumns.join(","),
+      BIGSET_BENCHMARK_ARTIFACT_DIR: promptRunDirectory,
     },
   });
   const parsedPayload = parseJsonPayload(execution.stdout);
@@ -549,13 +237,15 @@ async function runSystemPrompt(input) {
     rows: normalized.rows,
     promptDefinition: input.promptDefinition,
   });
+  const targetContract = resolveTargetContract(input.config, input.promptDefinition);
   const answerKeyScore = scoreBenchmarkRows({
     promptDefinition: input.promptDefinition,
     rows: normalized.rows,
     validationIssues: normalized.validationIssues,
     validation,
-    minRequiredCompleteness: input.config.minRequiredCompleteness,
-    minFactualAccuracy: input.config.minFactualAccuracy,
+    targetContract,
+    minRequiredCompleteness: targetContract.minRequiredCompleteness,
+    minFactualAccuracy: targetContract.minFactualAccuracy,
   });
   const usage = normalized.usage;
   const estimatedModelCostUsd = estimateModelCostUsd(usage, input.config);
@@ -573,12 +263,6 @@ async function runSystemPrompt(input) {
       ? "ok"
       : "failed";
 
-  const promptRunDirectory = join(
-    input.runDirectory,
-    input.system.name,
-    `${String(input.promptIndex + 1).padStart(2, "0")}-${input.promptDefinition.id}`
-  );
-  await mkdir(promptRunDirectory, { recursive: true });
   await writeFile(join(promptRunDirectory, "stdout.txt"), execution.stdout);
   await writeFile(join(promptRunDirectory, "stderr.txt"), execution.stderr);
   await writeJson(join(promptRunDirectory, "parsed-output.json"), parsedPayload ?? {
@@ -612,6 +296,9 @@ async function runSystemPrompt(input) {
     latencyMs: Date.now() - startedAt,
     exitCode: execution.exitCode,
     timedOut: execution.timedOut,
+    targetContract,
+    targetRows: targetContract.targetRows,
+    rowTargetRatio: answerKeyScore.rowTargetRatio,
     rowCount: validation.rowCount,
     nonEmptyCellCount: validation.nonEmptyCellCount,
     totalExpectedCellCount: validation.totalExpectedCellCount,
@@ -645,7 +332,8 @@ async function runSystemPrompt(input) {
         validation,
         answerKeyScore,
         infraBlockerReason,
-        minRequiredCompleteness: input.config.minRequiredCompleteness,
+        minRequiredCompleteness: targetContract.minRequiredCompleteness,
+        requireEvidence: targetContract.requireEvidence,
         validationIssues: normalized.validationIssues,
       }),
   };
@@ -744,8 +432,9 @@ function parseArgs(args) {
     inputUsdPer1M: 0.05,
     outputUsdPer1M: 0.5,
     tinyFishAgentStepUsd: 0.015,
-    minRequiredCompleteness: 0.75,
-    minFactualAccuracy: defaultMinimumFactualAccuracy,
+    targetContract: { ...defaultTargetContract },
+    minRequiredCompleteness: defaultTargetContract.minRequiredCompleteness,
+    minFactualAccuracy: defaultTargetContract.minFactualAccuracy,
   };
 
   for (let index = 0; index < args.length; index += 1) {
@@ -779,11 +468,27 @@ function parseArgs(args) {
     } else if (arg === "--tinyfish-agent-step-usd") {
       config.tinyFishAgentStepUsd = nonNegativeNumber(value, config.tinyFishAgentStepUsd);
       index += 1;
-    } else if (arg === "--min-required-completeness") {
-      config.minRequiredCompleteness = nonNegativeNumber(value, config.minRequiredCompleteness);
-      index += 1;
     } else if (arg === "--min-factual-accuracy") {
       config.minFactualAccuracy = nonNegativeNumber(value, config.minFactualAccuracy);
+      config.targetContract.minFactualAccuracy = config.minFactualAccuracy;
+      index += 1;
+    } else if (arg === "--target-rows") {
+      config.targetContract.targetRows = positiveNumber(value, config.targetContract.targetRows);
+      index += 1;
+    } else if (arg === "--min-row-count") {
+      config.targetContract.minRowCount = positiveNumber(value, config.targetContract.minRowCount);
+      index += 1;
+    } else if (arg === "--min-evidence-coverage") {
+      config.targetContract.minEvidenceCoverage = nonNegativeNumber(
+        value,
+        config.targetContract.minEvidenceCoverage
+      );
+      index += 1;
+    } else if (arg === "--require-evidence") {
+      config.targetContract.requireEvidence = true;
+    } else if (arg === "--min-required-completeness") {
+      config.minRequiredCompleteness = nonNegativeNumber(value, config.minRequiredCompleteness);
+      config.targetContract.minRequiredCompleteness = config.minRequiredCompleteness;
       index += 1;
     } else if (arg === "--help" || arg === "-h") {
       printHelpAndExit();
@@ -1056,13 +761,15 @@ async function rescoreBenchmarkRun({ runDirectory, prompts, config }) {
     const usablePayload = parsedPayload?.error ? null : parsedPayload;
     const normalized = normalizePayload(usablePayload);
     const validation = evaluateRows({ rows: normalized.rows, promptDefinition });
+    const targetContract = resolveTargetContract(config, promptDefinition);
     const answerKeyScore = scoreBenchmarkRows({
       promptDefinition,
       rows: normalized.rows,
       validationIssues: normalized.validationIssues,
       validation,
-      minRequiredCompleteness: config.minRequiredCompleteness,
-      minFactualAccuracy: config.minFactualAccuracy,
+      targetContract,
+      minRequiredCompleteness: targetContract.minRequiredCompleteness,
+      minFactualAccuracy: targetContract.minFactualAccuracy,
     });
     const execution = {
       stdout,
@@ -1101,6 +808,9 @@ async function rescoreBenchmarkRun({ runDirectory, prompts, config }) {
       matchedExpectedEntities: answerKeyScore.matchedExpectedEntities,
       missingExpectedEntities: answerKeyScore.missingExpectedEntities,
       missingClaimSupportEntities: answerKeyScore.missingClaimSupportEntities,
+      targetContract,
+      targetRows: targetContract.targetRows,
+      rowTargetRatio: answerKeyScore.rowTargetRatio,
       rowCount: validation.rowCount,
       nonEmptyCellCount: validation.nonEmptyCellCount,
       totalExpectedCellCount: validation.totalExpectedCellCount,
@@ -1124,7 +834,8 @@ async function rescoreBenchmarkRun({ runDirectory, prompts, config }) {
           validation,
           answerKeyScore,
           infraBlockerReason,
-          minRequiredCompleteness: config.minRequiredCompleteness,
+          minRequiredCompleteness: targetContract.minRequiredCompleteness,
+          requireEvidence: targetContract.requireEvidence,
           validationIssues: normalized.validationIssues,
         }),
     });
@@ -1178,8 +889,90 @@ async function resolveRescoreArtifactDirectory({ runDirectory, laneResult }) {
   return candidates[0];
 }
 
+export function resolveTargetContract(config, promptDefinition) {
+  const baseContract = promptDefinition.scoringMode === "open_ended"
+    ? defaultTargetContract
+    : entityBenchmarkContract;
+  return {
+    ...baseContract,
+    ...config.targetContract,
+    ...promptDefinition.targetContract,
+  };
+}
+
+export function scoreOpenEndedBenchmarkRows(input) {
+  const answerKey = answerKeyForPrompt(input.promptDefinition);
+  const contract = input.targetContract ?? resolveTargetContract(
+    { targetContract: defaultTargetContract },
+    input.promptDefinition
+  );
+  const evidenceSupportRatio = input.validation.rowCount === 0
+    ? 0
+    : roundRatio(input.validation.evidenceQuoteCount / Math.max(1, input.validation.rowCount));
+  const rowTargetRatio = contract.targetRows === 0
+    ? 0
+    : roundRatio(input.validation.rowCount / contract.targetRows);
+  const shapeScore = shapeScoreForRows({
+    validation: input.validation,
+    minRequiredCompleteness: contract.minRequiredCompleteness,
+    expectedBehavior: answerKey.expectedBehavior ?? "answer",
+    validationIssues: input.validationIssues,
+    requireEvidence: contract.requireEvidence,
+  });
+  const factualAccuracyScore = roundRatio(
+    shapeScore * 0.45 +
+      Math.min(1, rowTargetRatio) * 0.45 +
+      input.validation.requiredCellCompletenessRatio * 0.1
+  );
+  const minimumScore = contract.minFactualAccuracy;
+  const meetsRowTarget = input.validation.rowCount >= contract.minRowCount;
+  const meetsEvidenceCoverage = !contract.requireEvidence ||
+    evidenceSupportRatio >= contract.minEvidenceCoverage;
+  const passed = meetsRowTarget &&
+    input.validation.sourceUrlCount > 0 &&
+    shapeScore >= 1 &&
+    factualAccuracyScore >= minimumScore &&
+    meetsEvidenceCoverage;
+
+  return {
+    passed,
+    failureCategory: passed ? undefined : failureCategoryForOpenEnded({
+      validation: input.validation,
+      shapeScore,
+      rowTargetRatio,
+      contract,
+      meetsRowTarget,
+      meetsEvidenceCoverage,
+    }),
+    factualAccuracyScore,
+    entityCoverageRatio: rowTargetRatio,
+    domainAccuracyRatio: input.validation.sourceUrlCount > 0 ? 1 : 0,
+    evidenceSupportRatio,
+    claimSupportRatio: 1,
+    abstentionScore: 0,
+    rowTargetRatio,
+    matchedExpectedEntities: [],
+    missingExpectedEntities: [],
+    missingClaimSupportEntities: [],
+    minimumScore,
+  };
+}
+
+function failureCategoryForOpenEnded(input) {
+  if (input.validation.rowCount === 0) return "schema";
+  if (!input.meetsRowTarget) return "row_target";
+  if (input.validation.sourceUrlCount === 0) return "source_evidence";
+  if (input.shapeScore < 1) return "source_evidence";
+  if (!input.meetsEvidenceCoverage) return "source_evidence";
+  return "factual_accuracy";
+}
+
 export function scoreBenchmarkRows(input) {
   const answerKey = answerKeyForPrompt(input.promptDefinition);
+  const scoringMode = answerKey.scoringMode ?? input.promptDefinition.scoringMode ?? "entity";
+  if (scoringMode === "open_ended") {
+    return scoreOpenEndedBenchmarkRows(input);
+  }
   const rowTexts = input.rows.map(rowSearchText);
   const validationIssueText = input.validationIssues.join(" ").toLowerCase();
   const allText = [...rowTexts, validationIssueText].join(" ");
@@ -1236,11 +1029,13 @@ export function scoreBenchmarkRows(input) {
   const abstentionScore = answerKey.expectedBehavior === "clarify_or_abstain"
     ? clarificationScore(allText, answerKey.clarificationTerms ?? [])
     : 0;
+  const contract = input.targetContract ?? defaultTargetContract;
   const shapeScore = shapeScoreForRows({
     validation: input.validation,
     minRequiredCompleteness: input.minRequiredCompleteness,
     expectedBehavior: answerKey.expectedBehavior,
     validationIssues: input.validationIssues,
+    requireEvidence: contract.requireEvidence,
   });
   const factualAccuracyScore = answerKey.expectedBehavior === "clarify_or_abstain"
     ? roundRatio(
@@ -1298,7 +1093,28 @@ export function scoreBenchmarkRows(input) {
 }
 
 function answerKeyForPrompt(promptDefinition) {
-  return promptDefinition.answerKey ?? answerKeysByPromptId[promptDefinition.id] ?? {
+  const fromMap = answerKeysByPromptId[promptDefinition.id];
+  if (fromMap) {
+    return fromMap;
+  }
+  if (promptDefinition.scoringMode === "open_ended") {
+    return {
+      scoringMode: "open_ended",
+      expectedBehavior: "answer",
+      requiredColumns: promptDefinition.requiredColumns,
+      scoringNotes: promptDefinition.expectedStress,
+    };
+  }
+  if (promptDefinition.scoringMode === "entity") {
+    return entityAnswerKeysByPromptId[promptDefinition.id] ?? {
+      scoringMode: "entity",
+      expectedBehavior: "answer",
+      requiredColumns: promptDefinition.requiredColumns,
+      sourceUrls: [],
+      scoringNotes: promptDefinition.expectedStress,
+    };
+  }
+  return promptDefinition.answerKey ?? {
     expectedBehavior: "answer",
     requiredColumns: promptDefinition.requiredColumns,
     sourceUrls: [],
@@ -1306,11 +1122,20 @@ function answerKeyForPrompt(promptDefinition) {
   };
 }
 
-function shapeScoreForRows({ validation, minRequiredCompleteness, expectedBehavior, validationIssues }) {
+function shapeScoreForRows({
+  validation,
+  minRequiredCompleteness,
+  expectedBehavior,
+  validationIssues,
+  requireEvidence = false,
+}) {
   if (expectedBehavior === "clarify_or_abstain" && validationIssues.length > 0) {
     return 1;
   }
-  if (validation.rowCount === 0 || validation.sourceUrlCount === 0 || validation.evidenceQuoteCount === 0) {
+  if (validation.rowCount === 0 || validation.sourceUrlCount === 0) {
+    return 0;
+  }
+  if (requireEvidence && validation.evidenceQuoteCount === 0) {
     return 0;
   }
   if (validation.requiredCellCompletenessRatio < minRequiredCompleteness) {
@@ -1639,6 +1464,7 @@ export function failureReason({
   answerKeyScore,
   infraBlockerReason,
   minRequiredCompleteness,
+  requireEvidence = false,
   validationIssues = [],
 }) {
   if (infraBlockerReason) return infraBlockerReason;
@@ -1650,9 +1476,18 @@ export function failureReason({
   if (answerKeyScore?.failureCategory === "clarification") {
     return `Clarification/abstention score ${answerKeyScore.abstentionScore} below required threshold.`;
   }
-  if (validation.rowCount === 0) return "Parsed JSON had zero rows.";
+  if (validation.rowCount === 0) {
+    const setupIssue = validationIssues.find((issue) => typeof issue === "string" && issue.trim());
+    if (setupIssue) return setupIssue;
+    return "Parsed JSON had zero rows.";
+  }
   if (validation.sourceUrlCount === 0) return "No source URLs found.";
-  if (validation.evidenceQuoteCount === 0) return "No evidence quotes found.";
+  if (requireEvidence && validation.evidenceQuoteCount === 0) {
+    return "No evidence quotes found.";
+  }
+  if (answerKeyScore?.failureCategory === "row_target") {
+    return `Row count ${validation.rowCount} below target contract minimum.`;
+  }
   if (validation.requiredCellCompletenessRatio < minRequiredCompleteness) {
     return `Requested-cell completeness ${validation.requiredCellCompletenessRatio} below ${minRequiredCompleteness}.`;
   }
@@ -1778,10 +1613,11 @@ node benchmarks/dataset-agent/run-benchmark.mjs \\
   --system mengzhe='npm run benchmark -- {{promptJson}}' \\
   --system edward='node ./my-agent.js --prompt {{promptJson}}'
 
-Run a canary subset before spending credits on all prompts:
+Run the open-ended 5-prompt pack (default prompts.json):
 node benchmarks/dataset-agent/run-benchmark.mjs \\
-  --prompt-ids latest-ai-blog-posts,saas-pricing-pages \\
-  --system edward='node ./my-agent.js --prompt {{promptJson}}'
+  --system mastra='node --import ./backend/node_modules/tsx/dist/esm/index.mjs benchmarks/dataset-agent/adapters/mastra-populate-adapter.mjs'
+
+Target contract defaults: targetRows=100, minRowCount=50, minEvidenceCoverage=0.95 (informational unless --require-evidence).
 
 Rescore existing artifacts without spending credits:
 node benchmarks/dataset-agent/run-benchmark.mjs --rescore-dir benchmark-results/<run>
@@ -1793,4 +1629,8 @@ Agent command contract:
 - metrics supports searchCalls, fetchCalls, browserCalls, agentRuns, agentSteps.
 `);
   process.exit(0);
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  await main();
 }

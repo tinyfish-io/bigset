@@ -25,6 +25,10 @@ temp/
 .mastra
 .bigset/
 
+# Accidental root-level npm install (use backend/ and frontend/ package managers).
+/package.json
+/package-lock.json
+
 # Local tarballs
 *.tgz
 

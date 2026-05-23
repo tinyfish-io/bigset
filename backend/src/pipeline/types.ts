@@ -10,13 +10,6 @@ export const columnTypeSchema = z.enum([
 ]);
 export type ColumnType = z.infer<typeof columnTypeSchema>;
 
-export const retrievalStrategySchema = z.enum([
-  "search_fetch",
-  "browser",
-  "hybrid",
-]);
-export type RetrievalStrategy = z.infer<typeof retrievalStrategySchema>;
-
 const snakeCase = /^[a-z][a-z0-9_]*$/;
 
 export const columnDefinitionSchema = z.object({
@@ -25,7 +18,7 @@ export const columnDefinitionSchema = z.object({
   type: columnTypeSchema,
   is_primary_key: z.boolean(),
   is_enumerable: z.boolean(),
-  retrieval_hint: z.string(),
+  description: z.string().min(1),
   nullable: z.boolean(),
 });
 export type ColumnDefinition = z.infer<typeof columnDefinitionSchema>;
@@ -36,8 +29,7 @@ export const datasetSchemaSchema = z
     description: z.string().min(1),
     columns: z.array(columnDefinitionSchema).min(1),
     primary_key: z.string(),
-    retrieval_strategy: retrievalStrategySchema,
-    source_hint: z.string().min(1),
+    search_queries: z.array(z.string().min(1)).min(1),
   })
   .superRefine((data, ctx) => {
     const names = data.columns.map((c) => c.name);
@@ -114,3 +106,124 @@ export const runManifestSchema = z.object({
   endpoints_called: z.array(endpointCallSchema),
 });
 export type RunManifest = z.infer<typeof runManifestSchema>;
+
+/** Per-URL score returned by the search acquisition agent. */
+export const searchAcquisitionScoredUrlSchema = z.object({
+  url: z.string().min(1),
+  expectation_score: z.number().int().min(1).max(5),
+});
+export type AgentSearchScore = z.infer<typeof searchAcquisitionScoredUrlSchema>;
+
+/** Structured completion from the search acquisition agent. */
+export const searchAcquisitionCompletionSchema = z.object({
+  scored_urls: z.array(searchAcquisitionScoredUrlSchema),
+  validation_issues: z.array(z.string()).default([]),
+});
+export type SearchAcquisitionCompletion = z.infer<
+  typeof searchAcquisitionCompletionSchema
+>;
+
+/** Scored URL after acquisition + prioritization (includes search_query). */
+export const acquisitionScoredUrlSchema = z.object({
+  url: z.string(),
+  expectation_score: z.number().int().min(1).max(5),
+  search_query: z.string(),
+});
+export type AcquisitionScoredUrl = z.infer<typeof acquisitionScoredUrlSchema>;
+
+export const populateAcquisitionResultSchema = z.object({
+  prioritizedUrls: z.array(z.string()),
+  scoredUrls: z.array(acquisitionScoredUrlSchema),
+  initialQueries: z.array(z.string()),
+  validationIssues: z.array(z.string()),
+});
+export type PopulateAcquisitionResult = z.infer<
+  typeof populateAcquisitionResultSchema
+>;
+
+export const structuredPopulateEvidenceSchema = z.object({
+  columnName: z.string().optional(),
+  sourceUrl: z.string().optional(),
+  quote: z.string(),
+});
+
+export const structuredPopulateOutputSchema = z.object({
+  rows: z
+    .array(
+      z.object({
+        cells: z.record(z.string(), z.any()),
+        sourceUrls: z.array(z.string()).optional(),
+        evidence: z.array(structuredPopulateEvidenceSchema).optional(),
+        needsReview: z.boolean().optional(),
+      })
+    )
+    .default([]),
+  validationIssues: z.array(z.string()).default([]),
+});
+export type StructuredPopulateOutput = z.infer<
+  typeof structuredPopulateOutputSchema
+>;
+
+export const populateSourceStatusSchema = z.enum([
+  "extract_now",
+  "requires_navigation",
+  "requires_form_submission",
+  "requires_detail_page_followup",
+  "irrelevant",
+  "duplicate",
+  "blocked",
+  "low_value",
+]);
+export type PopulateSourceStatus = z.infer<typeof populateSourceStatusSchema>;
+
+export const populateExpectedYieldSchema = z.enum([
+  "complete",
+  "partial",
+  "none",
+]);
+export type PopulateExpectedYield = z.infer<typeof populateExpectedYieldSchema>;
+
+export const populateSourceTriageResultSchema = z.object({
+  url: z.string(),
+  final_url: z.string(),
+  title: z.string(),
+  status: populateSourceStatusSchema,
+  confidence: z.number().min(0).max(1),
+  source_data_confidence: z.number().min(0).max(1),
+  expected_yield: populateExpectedYieldSchema,
+  reasoning: z.string(),
+  suggested_action: z.string().optional(),
+});
+export type PopulateSourceTriageResult = z.infer<
+  typeof populateSourceTriageResultSchema
+>;
+
+const populateLlmEvidenceSchema = z.object({
+  field: z.string(),
+  quote: z.string(),
+  url: z.string().optional(),
+});
+
+export function buildPopulateLlmExtractionSchema(columnNames: string[]) {
+  const rowShape: Record<string, z.ZodTypeAny> = {};
+  for (const name of columnNames) {
+    rowShape[name] = z.union([z.string(), z.number(), z.boolean(), z.null()]);
+  }
+  return z.object({
+    records: z.array(
+      z.object({
+        row: z.object(rowShape),
+        evidence: z.array(populateLlmEvidenceSchema).default([]),
+        extraction_confidence: z.number().min(0).max(1).optional(),
+      })
+    ),
+    notes: z.string().optional(),
+  });
+}
+
+export function buildPopulateTriageExtractSchema(columnNames: string[]) {
+  return z.object({
+    triage_results: populateSourceTriageResultSchema,
+    extraction_results: buildPopulateLlmExtractionSchema(columnNames),
+  });
+}

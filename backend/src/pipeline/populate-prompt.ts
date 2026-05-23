@@ -1,44 +1,110 @@
+import {
+  buildPopulateFetchPlan,
+  type PopulateAcquisitionResult,
+  type PopulateFetchPlan,
+} from "./populate-acquisition.js";
 import type { DatasetContext } from "./populate.js";
 
-export const populateAgentInstructions = `You fill datasets with real data. Here's how:
+export { buildPopulateFetchPlan, type PopulateFetchPlan };
 
-1. Search the web for data that fits the dataset topic.
-2. Fetch 1-2 pages to get details.
-3. Call insert_row only for rows supported by search or fetched page content.
-4. Also return structured rows with cells, sourceUrls, evidence, and needsReview.
+export const populateAgentInstructions = `You are a dataset populate agent. Search is already done; your job is to fetch every source URL provided for this run and fill the table with verified facts.
 
-Never make up rows or missing cell values. If you can't find enough real data, insert fewer rows and explain the gap in your final response.`;
+Workflow:
+1. fetch_page on each URL in the source list (work through the full list).
+2. Extract facts only from fetched page content.
+3. insert_row for each verified row, and return structured rows when useful.
 
-export function buildPopulatePrompt(inputData: DatasetContext): string {
-  const columnNames = inputData.columns.map((c) => c.name);
-  const columnsDesc = inputData.columns
-    .map(
-      (c) =>
-        `- "${c.name}" (${c.type})${c.description ? `: ${c.description}` : ""}`,
-    )
-    .join("\n");
+Provenance (required for every row):
+- Each row must come from a URL you fetched with fetch_page in this run.
+- Record that exact URL in sourceUrls and in every evidence item's sourceUrl.
+- evidence.quote must be a verbatim excerpt from that fetched page.
+- For any column that stores a source or page URL, set it to the same fetch URL you used for that row.
 
-  return `Dataset ID: ${inputData.datasetId}
-Dataset: ${inputData.datasetName}
-Description: ${inputData.description}
+Output:
+- Prefer insert_row with the exact dataset column keys.
+- You may also return { rows: [{ cells, sourceUrls, evidence, needsReview }] }.
+- Do not call search_web.
 
-Columns:
-${columnsDesc}
+Never invent rows, URLs, quotes, or cell values. Omit rows you cannot support from a fetched page.`;
 
-When calling insert_row, the data object keys MUST be exactly these strings (no backticks, no extra quotes):
-${JSON.stringify(columnNames)}
+export function buildPopulatePrompt(
+  context: DatasetContext,
+  maxRows: number,
+  fetchPlan?: PopulateFetchPlan
+): string {
+  return [
+    formatPopulateDatasetSection(context),
+    formatPopulateColumnsSection(context),
+    formatPopulateInsertRowSection(context),
+    formatPopulateSourceUrlsSection(fetchPlan),
+    formatPopulateLimitsSection(maxRows),
+    formatPopulateRemindersSection(),
+  ].join("\n\n");
+}
 
-Example insert_row call:
-insert_row({ datasetId: "${inputData.datasetId}", data: { ${columnNames.map((n) => `"${n}": <value>`).join(", ")} } })
+export function buildPopulatePromptFromAcquisition(
+  context: DatasetContext,
+  maxRows: number,
+  acquisition: PopulateAcquisitionResult
+): string {
+  return buildPopulatePrompt(
+    context,
+    maxRows,
+    buildPopulateFetchPlan(acquisition)
+  );
+}
 
-Search the web for real data about this topic. Then call insert_row for up to 10 source-backed rows.
+function formatPopulateDatasetSection(context: DatasetContext): string {
+  return `## Dataset
+- datasetId: ${context.datasetId}
+- name: ${context.datasetName}
+- description: ${context.description}`;
+}
 
-Important:
-- The dataset should be populated by insert_row tool calls whenever possible.
-- Also return structured rows using this shape: { rows: [{ cells, sourceUrls, evidence, needsReview }] }.
-- Every structured row cells object must contain exactly the requested column keys above.
-- Every structured row must include sourceUrls and evidence quotes copied from search_web or fetch_page results.
-- For every verified row, call insert_row with the exact datasetId above.
-- Never invent rows or cell values.
-- If sources only support fewer than 10 rows, insert only the verified rows and explain what was missing.`;
+function formatPopulateColumnsSection(context: DatasetContext): string {
+  const lines = context.columns.map(
+    (column) =>
+      `- ${column.name} (${column.type})${
+        column.description ? `: ${column.description}` : ""
+      }`
+  );
+
+  return `## Columns\n${lines.join("\n")}`;
+}
+
+function formatPopulateInsertRowSection(context: DatasetContext): string {
+  const columnNames = context.columns.map((column) => column.name);
+
+  return `## insert_row contract
+- Keys must be exactly: ${JSON.stringify(columnNames)}
+- Example: insert_row({ datasetId: "${context.datasetId}", data: { ${columnNames.map((name) => `"${name}": <value>`).join(", ")} } })`;
+}
+
+function formatPopulateSourceUrlsSection(
+  fetchPlan?: PopulateFetchPlan
+): string {
+  if (!fetchPlan || fetchPlan.fetchUrls.length === 0) {
+    return `## Source URLs
+(none — do not invent rows; explain in validationIssues)`;
+  }
+
+  const lines = fetchPlan.fetchUrls.map(
+    (entry, index) => `${index + 1}. ${entry.url}`
+  );
+
+  return `## Source URLs
+Fetch every URL below (already ranked for this run; do not call search_web):
+${lines.join("\n")}`;
+}
+
+function formatPopulateLimitsSection(maxRows: number): string {
+  return `## Limits
+- Up to ${maxRows} insert_row calls`;
+}
+
+function formatPopulateRemindersSection(): string {
+  return `## Reminders
+- fetch_page each listed URL before using it in any row.
+- Every row must cite the fetch URL you used in sourceUrls and evidence.sourceUrl.
+- Call insert_row for each verified row using datasetId from above.`;
 }

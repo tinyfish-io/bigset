@@ -5,6 +5,13 @@ Shared harness for scoring one dataset agent command against the same prompt pac
 The runner is intentionally standalone. Each system is a command that reads the
 benchmark env vars, runs one prompt, and prints one JSON object to stdout.
 
+On startup, `run-benchmark.mjs` loads env files from the repo (without
+overriding variables you already exported in the shell): `.env`,
+`backend/.env`, and `backend/.env.local`. It also sets default
+`COLLECTION_AGENT_PIPELINE_MODULE` and `BIGSET_COLLECTION_BENCHMARK_RUNNER_MODULE`
+when those are unset. Child adapter processes inherit everything through
+`process.env`.
+
 ## Run Mastra Populate
 
 The Mastra adapter calls the self-healing populate service around
@@ -13,9 +20,21 @@ recipe store per prompt run, and never clears or inserts Convex rows.
 
 ```bash
 node benchmarks/dataset-agent/run-benchmark.mjs \
-  --prompt-ids latest-ai-blog-posts,saas-pricing-pages \
   --system mastra='node --import ./backend/node_modules/tsx/dist/esm/index.mjs benchmarks/dataset-agent/adapters/mastra-populate-adapter.mjs'
 ```
+
+The default `prompts.json` has **5 open-ended** prompts (scoringMode `open_ended`, ~100-row target contract) followed by the **original 16** fixed-entity prompts (scoringMode `entity`, stricter gates with evidence required).
+
+| Pack | Scoring | Pass highlights |
+|------|---------|-----------------|
+| Open-ended (first 5) | `open_ended` | ≥50 rows, source URLs, 60% cell completeness; evidence optional |
+| Original 16 | `entity` | Entity/domain answer keys, 75% completeness, evidence required |
+
+Target contract defaults for open-ended: `targetRows=100`, `minRowCount=50`, `minEvidenceCoverage=0.95` (informational unless `--require-evidence`).
+
+**Search vs fetch:** acquisition only searches; populate fetches from the prioritized URL list (capped by `POPULATE_MAX_FETCH_CALLS`, default 50). The populate agent is not given a separate fetch budget — it should work through that list. Raise `POPULATE_MAX_SEARCH_CALLS` and `POPULATE_MAX_FETCH_CALLS` in `backend/.env.local` for large open-ended runs.
+
+**Populate debug artifacts:** set `POPULATE_BENCHMARK_DEBUG=true` in `backend/.env.local`. Each prompt run writes `debug/` under its artifact folder (`run_report.json`, `search_pool.json`, `source_candidates.json`, `prioritized_urls.json`, CSVs, etc.). Stdout/`parsed-output.json` stay unchanged when debug is off.
 
 Real Mastra benchmark runs require `OPENROUTER_API_KEY` and `TINYFISH_API_KEY`
 loaded execution-only. If either is missing, the adapter returns a blocked
@@ -29,16 +48,13 @@ That means collection results are scored after the same recipe generation,
 repair, validation, and promotion path as the app runtime.
 
 ```bash
-COLLECTION_AGENT_PIPELINE_MODULE=./backend/BigSet_Data_Collection_Agent/src/orchestrator/pipeline.ts \
-BIGSET_COLLECTION_BENCHMARK_RUNNER_MODULE=./backend/src/pipeline/collection-agent-runner.ts \
 node benchmarks/dataset-agent/run-benchmark.mjs \
   --prompt-ids latest-ai-blog-posts,saas-pricing-pages \
   --system collection-self-heal='node --import ./backend/node_modules/tsx/dist/esm/index.mjs benchmarks/dataset-agent/adapters/collection-self-healing-adapter.mjs'
 ```
 
-Real collection benchmark runs require `OPENROUTER_API_KEY`,
-`TINYFISH_API_KEY`, `BIGSET_COLLECTION_BENCHMARK_RUNNER_MODULE`, and
-`COLLECTION_AGENT_PIPELINE_MODULE` loaded in the shell. The benchmark runner
+Real collection benchmark runs require `OPENROUTER_API_KEY` and
+`TINYFISH_API_KEY` in the env files above or in the shell. The benchmark runner
 module must export `runCollectionPopulatePipeline(input)` or a default runner
 that accepts `CollectionPopulatePipelineInput` and returns a
 `PopulateRuntimeResult`. The pipeline module must export `runPipeline(options)`.

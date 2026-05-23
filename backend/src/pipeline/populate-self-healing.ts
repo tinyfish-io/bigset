@@ -1,6 +1,8 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
+import type { PopulateAcquisitionResult, SearchAcquisitionAgentRunner } from "./populate-acquisition.js";
+import type { PopulateParallelHooks } from "./populate-parallel.js";
 import {
   type PopulateRuntimeAgentRunner,
   type PopulateRuntimeResult,
@@ -140,7 +142,10 @@ export class MastraPopulateRecipeRuntime implements PopulateRecipeRuntime {
       runPopulate?: typeof runPopulateRuntime;
       webTools?: PopulateRuntimeWebTools;
       agentRunner?: PopulateRuntimeAgentRunner;
+      searchAcquisitionRunner?: SearchAcquisitionAgentRunner;
+      acquisition?: PopulateAcquisitionResult;
       maxRows?: number;
+      populateHooks?: PopulateParallelHooks;
     } = {}
   ) {}
 
@@ -160,7 +165,10 @@ export class MastraPopulateRecipeRuntime implements PopulateRecipeRuntime {
         context,
         webTools: this.input.webTools,
         agentRunner: this.input.agentRunner,
+        searchAcquisitionRunner: this.input.searchAcquisitionRunner,
+        acquisition: this.input.acquisition,
         maxRows: this.input.maxRows,
+        populateHooks: this.input.populateHooks,
       });
     } catch (error) {
       failureMessage = error instanceof Error ? error.message : String(error);
