@@ -1,6 +1,10 @@
 import { query, internalMutation, internalQuery } from "./_generated/server.js";
 import { v } from "convex/values";
 import { loadReadableDataset } from "./lib/authz.js";
+import {
+  consumeQuotaForDataset,
+  consumeQuotaForRow,
+} from "./lib/quota.js";
 
 /**
  * Read all rows of a dataset.
@@ -28,9 +32,15 @@ export const listByDataset = query({
  * functions or from a trusted backend authenticated with the Convex
  * admin key.
  *
+ * Quota: every row write charges the dataset's owner exactly once (see
+ * convex/lib/quota.ts). System-owned datasets bypass quota. The charge
+ * happens BEFORE the write in the same transaction, so failed writes
+ * never consume quota.
+ *
  * If user-facing row editing is ever introduced, add a separate purpose-
  * built public mutation (e.g. `userEditCell`) that performs ownership
- * checks via `loadOwnedDataset` first. Do not relax these to public.
+ * checks via `loadOwnedDataset` first AND calls `consumeQuotaForRow`.
+ * Do not relax these to public.
  */
 export const insert = internalMutation({
   args: {
@@ -39,6 +49,7 @@ export const insert = internalMutation({
     sources: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
+    await consumeQuotaForDataset(ctx, args.datasetId, 1);
     return await ctx.db.insert("datasetRows", args);
   },
 });
@@ -49,8 +60,8 @@ export const update = internalMutation({
     data: v.record(v.string(), v.any()),
   },
   handler: async (ctx, args) => {
-    const existing = await ctx.db.get(args.id);
-    if (!existing) throw new Error("Row not found");
+    // Resolves row → dataset → consumes 1 unit of owner's quota.
+    const existing = await consumeQuotaForRow(ctx, args.id, 1);
 
     const oldData = existing.data as Record<string, unknown>;
     const newData = args.data;
@@ -100,12 +111,24 @@ export const remove = internalMutation({
   },
 });
 
+/**
+ * Insert N rows in one transaction.
+ *
+ * All-or-nothing semantics by design:
+ *   - The quota layer's only job is hard enforcement (yes/no, atomic).
+ *   - The agent runner's job is batch sizing — call `quota:getMy` to
+ *     see `remaining`, then call insertBatch with at most that many.
+ *   - Partial accept would push policy decisions ("which rows survived?")
+ *     into the quota layer, which has no business making them.
+ */
 export const insertBatch = internalMutation({
   args: {
     datasetId: v.id("datasets"),
     rows: v.array(v.record(v.string(), v.any())),
   },
   handler: async (ctx, args) => {
+    await consumeQuotaForDataset(ctx, args.datasetId, args.rows.length);
+
     for (const data of args.rows) {
       await ctx.db.insert("datasetRows", {
         datasetId: args.datasetId,

@@ -56,6 +56,8 @@ cp frontend/.env.example frontend/.env.local
 # Fill in all three Clerk keys (publishable, secret, and JWT issuer domain)
 ```
 
+> **Required for the create-dataset wizard:** set `OPENROUTER_API_KEY` (used by the schema-inference pipeline). Get one at [openrouter.ai](https://openrouter.ai). Without it the wizard's "Generate Schema" step will fail.
+
 > **Optional:** to enable [PostHog](https://posthog.com) product analytics + session replay + error tracking, set `NEXT_PUBLIC_POSTHOG_KEY` and `NEXT_PUBLIC_POSTHOG_HOST`. Leave blank to disable cleanly (the app no-ops every event).
 
 ### 3. Start everything
@@ -64,7 +66,11 @@ cp frontend/.env.example frontend/.env.local
 make dev
 ```
 
-This starts all Docker services, waits for Convex to be healthy, and deploys Convex functions automatically.
+This starts all Docker services, waits for Convex to be healthy, and deploys Convex functions automatically. Once it's up:
+
+- App: http://localhost:3500
+- Convex dashboard: http://localhost:6791
+- [Mastra Studio](https://mastra.ai) (workflow inspector): http://localhost:4111
 
 ### 4. Generate Convex admin key (first time only)
 
@@ -93,6 +99,8 @@ Open [localhost:3500](http://localhost:3500) and click **Get started** to sign i
 
 > **Note:** Backend env needs no setup — `backend/.env.example` has correct defaults. If you edit Convex functions in `frontend/convex/`, run `make convex-push` to deploy the changes.
 
+> **Free tier:** each signed-in account gets **2,500 row operations per calendar month** (resets on the 1st, UTC). The header shows a live usage badge; system-owned curated datasets bypass the quota.
+
 ---
 
 ## 🛠 Tech Stack
@@ -104,7 +112,9 @@ Open [localhost:3500](http://localhost:3500) and click **Get started** to sign i
 | Auth | [Clerk](https://clerk.com) |
 | Database | [Convex](https://convex.dev) (self-hosted) |
 | Data Collection | [TinyFish](https://tinyfish.ai) APIs (Search, Fetch, Browser) |
+| Schema inference | [Mastra](https://mastra.ai) workflows + [Vercel AI SDK](https://sdk.vercel.ai) + [OpenRouter](https://openrouter.ai) → Claude Sonnet |
 | Table view | [TanStack Table](https://tanstack.com/table) + [react-window](https://github.com/bvaughn/react-window) virtualization |
+| Exports | CSV (built-in) + XLSX ([SheetJS](https://sheetjs.com), dynamic-imported) |
 | Analytics | [PostHog](https://posthog.com) — events, session replay, error tracking (optional) |
 
 ## 📁 Project Structure
@@ -112,9 +122,12 @@ Open [localhost:3500](http://localhost:3500) and click **Get started** to sign i
 ```text
 bigset/
 ├── frontend/            Next.js 16 — UI + Convex schema & functions
-│   ├── convex/          Convex functions, schema, and auth config
+│   ├── convex/          Convex functions, schema, authz + quota helpers
 │   └── .env.local       Clerk + Convex keys (not committed)
-├── backend/             Fastify — agent runner, writes to Convex via HTTP
+├── backend/             Fastify + Mastra — schema inference + (future) agents
+│   ├── src/pipeline/    Pure schema-inference fn (called by Fastify + Mastra)
+│   └── src/mastra/      Mastra workflows (Studio at :4111 in dev)
+├── scripts/             One-off scripts (e.g. verify-authz.sh)
 ├── .env                 Clerk keys for docker-compose (not committed)
 ├── docker-compose.dev.yml
 └── Makefile

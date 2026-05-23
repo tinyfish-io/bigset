@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { useQuery, useMutation, useConvexAuth } from "convex/react";
+import { useQuery, useConvexAuth } from "convex/react";
 import { useUser, useClerk } from "@clerk/nextjs";
 import { api } from "@/convex/_generated/api";
 import {
@@ -10,6 +10,7 @@ import {
   type DatasetCardData,
 } from "@/components/dataset/DatasetCard";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { QuotaBadge } from "@/components/QuotaBadge";
 import { EVENTS, track } from "@/lib/analytics";
 
 export default function DashboardPage() {
@@ -25,17 +26,13 @@ export default function DashboardPage() {
   // Public datasets are open to anonymous users too, so no `skip` gate.
   const curated = useQuery(api.datasets.listPublic, {});
 
-  const seedData = useMutation(api.seed.seed);
-  const hasSeeded = useRef(false);
-
-  useEffect(() => {
-    if (mine && mine.length === 0 && isAuthenticated && !hasSeeded.current) {
-      hasSeeded.current = true;
-      void seedData({}).catch(() => {
-        hasSeeded.current = false;
-      });
-    }
-  }, [mine, isAuthenticated, seedData]);
+  // Quota state drives the "+ New Dataset" button — disabled when the
+  // user is at their free-tier limit. `undefined` while loading.
+  const usage = useQuery(
+    api.quota.getMy,
+    isAuthenticated ? {} : "skip",
+  );
+  const atLimit = usage !== undefined && usage.remaining === 0;
 
   // Fire dashboard_viewed once per mount when both queries have resolved,
   // so we attach accurate counts. `dashboardFired` prevents the effect
@@ -86,6 +83,8 @@ export default function DashboardPage() {
         <img src="/BigSetLogo.png" alt="BigSet" className="h-[30px] dark:hidden" />
         <img src="/BigSetLogoDarkBG.png" alt="BigSet" className="h-[30px] hidden dark:block" />
         <div className="flex items-center gap-4">
+          <QuotaBadge />
+          <div className="w-px h-4 bg-border" />
           <ThemeToggle />
           <div className="w-px h-4 bg-border" />
           {/* PII: mask the email in session replays */}
@@ -148,12 +147,40 @@ export default function DashboardPage() {
               className="w-full rounded-lg border border-border bg-surface py-2.5 pl-10 pr-3 text-sm outline-none placeholder:text-muted/60 focus:border-foreground/30 transition-[border-color] duration-150"
             />
           </div>
-          <Link
-            href="/dataset/new"
-            className="rounded-lg border border-accent bg-accent px-5 py-2.5 text-sm font-semibold text-accent-text transition-opacity hover:opacity-90"
-          >
-            + New Dataset
-          </Link>
+          {atLimit ? (
+            <div className="relative group">
+              <span
+                role="button"
+                tabIndex={0}
+                aria-disabled="true"
+                aria-describedby="quota-popover"
+                className="inline-block rounded-lg border border-border bg-surface px-5 py-2.5 text-sm font-semibold text-muted cursor-not-allowed select-none focus:outline-none focus:ring-1 focus:ring-foreground/20"
+              >
+                + New Dataset
+              </span>
+              {/*
+                Custom popover beside the disabled button. Replaces the
+                native `title=""` tooltip so we can style consistently
+                with the rest of the UI and use the exact wording requested.
+                Shown on hover via Tailwind's `group-hover`.
+              */}
+              <div
+                id="quota-popover"
+                role="tooltip"
+                className="pointer-events-none absolute left-full ml-3 top-1/2 -translate-y-1/2 z-20 w-64 rounded-md border border-border bg-surface px-3 py-2 text-xs text-foreground opacity-0 translate-x-[-4px] transition-all duration-150 ease-out shadow-[0_4px_12px_rgba(0,0,0,0.08)] dark:shadow-[0_4px_12px_rgba(0,0,0,0.4)] group-hover:opacity-100 group-hover:translate-x-0 group-focus-within:opacity-100 group-focus-within:translate-x-0"
+              >
+                <span className="absolute -left-1.5 top-1/2 -translate-y-1/2 h-3 w-3 rotate-45 border-l border-b border-border bg-surface" />
+                Free-tier limit reached (2,500 row modifications). Please upgrade.
+              </div>
+            </div>
+          ) : (
+            <Link
+              href="/dataset/new"
+              className="rounded-lg border border-accent bg-accent px-5 py-2.5 text-sm font-semibold text-accent-text transition-opacity hover:opacity-90"
+            >
+              + New Dataset
+            </Link>
+          )}
         </div>
 
         <Section
@@ -164,7 +191,9 @@ export default function DashboardPage() {
           emptyState={
             search
               ? `No datasets of yours match "${search}".`
-              : "You don't have any datasets yet. Create your first one above."
+              : atLimit
+                ? "You've used all of this month's free-tier quota. New datasets will be available again when the quota resets at the start of next month."
+                : "No datasets yet. Click \"+ New Dataset\" above to create your first one."
           }
         />
 

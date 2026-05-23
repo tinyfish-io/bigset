@@ -37,8 +37,11 @@ export function ThemeToggle({ className = "" }: { className?: string }) {
   const [theme, setTheme] = useState<Theme>("light");
 
   useEffect(() => {
-    setTheme(readEffectiveTheme());
-    setMounted(true);
+    const timeoutId = window.setTimeout(() => {
+      setTheme(readEffectiveTheme());
+      setMounted(true);
+    }, 0);
+    return () => window.clearTimeout(timeoutId);
   }, []);
 
   function toggle() {
