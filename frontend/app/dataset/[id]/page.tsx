@@ -2,12 +2,13 @@
 
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useConvexAuth } from "convex/react";
 import { useAuth } from "@clerk/nextjs";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { DatasetTable } from "@/components/table";
+import { useSelection } from "@/components/table/use-selection";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { StatusBadge } from "@/components/dataset/StatusBadge";
 import { downloadCSV, downloadXLSX } from "@/lib/export";
@@ -16,16 +17,24 @@ import { EVENTS, captureException, track } from "@/lib/analytics";
 
 export default function DatasetPage() {
   const params = useParams();
-  const { isLoading } = useConvexAuth();
+  const { isLoading: authLoading } = useConvexAuth();
   const { userId, getToken } = useAuth();
   const [exporting, setExporting] = useState<"csv" | "xlsx" | null>(null);
   const [populating, setPopulating] = useState(false);
 
   const datasetId = params.id as Id<"datasets">;
-  const dataset = useQuery(api.datasets.get, isLoading ? "skip" : { id: datasetId });
-  const rows = useQuery(api.datasetRows.listByDataset, isLoading ? "skip" : {
-    datasetId,
-  });
+  const dataset = useQuery(
+    api.datasets.get,
+    authLoading ? "skip" : { id: datasetId },
+  );
+  const rows = useQuery(
+    api.datasetRows.listByDataset,
+    authLoading ? "skip" : { datasetId },
+  );
+
+  const rowIds = useMemo(() => (rows ?? []).map((r) => r._id), [rows]);
+  const selection = useSelection(rowIds);
+  const selectedCount = selection.selected.size;
 
   // Fire dataset_opened once per dataset visit, after the dataset has
   // resolved. The ref keeps it idempotent across re-renders.
@@ -44,16 +53,28 @@ export default function DatasetPage() {
 
   async function handleExport(format: "csv" | "xlsx") {
     if (!dataset || !rows || exporting) return;
+
+    // If the user has rows selected, export ONLY those. Otherwise the
+    // entire dataset. Preserves column ordering (handled by the export
+    // util — it iterates `dataset.columns` in order).
+    const exportRows =
+      selectedCount > 0
+        ? rows.filter((r) => selection.selected.has(r._id))
+        : rows;
+    if (exportRows.length === 0) return;
+
     setExporting(format);
     try {
       if (format === "csv") {
-        downloadCSV(dataset.name, dataset.columns, rows);
+        downloadCSV(dataset.name, dataset.columns, exportRows);
       } else {
-        await downloadXLSX(dataset.name, dataset.columns, rows);
+        await downloadXLSX(dataset.name, dataset.columns, exportRows);
       }
       track(EVENTS.DATASET_EXPORTED, {
         format,
-        row_count: rows.length,
+        row_count: exportRows.length,
+        total_rows: rows.length,
+        selected_only: selectedCount > 0,
         seedKey: dataset.seedKey,
       });
     } catch (err) {
@@ -62,7 +83,8 @@ export default function DatasetPage() {
         operation: "dataset_export",
         format,
         datasetId: dataset._id,
-        row_count: rows.length,
+        row_count: exportRows.length,
+        selected_only: selectedCount > 0,
       });
     } finally {
       setExporting(null);
@@ -98,7 +120,7 @@ export default function DatasetPage() {
     }
   }
 
-  if (isLoading || dataset === undefined || rows === undefined) {
+  if (authLoading || dataset === undefined || rows === undefined) {
     return (
       <div className="flex flex-1 items-center justify-center">
         <p className="text-muted">Loading...</p>
@@ -109,6 +131,20 @@ export default function DatasetPage() {
   // server-side authz layer rejected the request, `useQuery` would have
   // thrown instead — caught by /dataset/[id]/error.tsx, which renders
   // the "Dataset not found" UI.
+
+  const exportDisabled = exporting !== null || rows.length === 0;
+  const csvLabel =
+    exporting === "csv"
+      ? "Exporting…"
+      : selectedCount > 0
+        ? `Export CSV (${selectedCount})`
+        : "Export CSV";
+  const xlsxLabel =
+    exporting === "xlsx"
+      ? "Exporting…"
+      : selectedCount > 0
+        ? `Export XLSX (${selectedCount})`
+        : "Export XLSX";
 
   return (
     <div className="flex flex-1 flex-col h-screen">
@@ -130,17 +166,27 @@ export default function DatasetPage() {
           </span>
           <button
             onClick={() => handleExport("csv")}
-            disabled={exporting !== null || rows.length === 0}
+            disabled={exportDisabled}
+            title={
+              selectedCount > 0
+                ? `Export ${selectedCount} selected row${selectedCount === 1 ? "" : "s"} to CSV`
+                : "Export all rows to CSV"
+            }
             className="border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-foreground/[0.03] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            {exporting === "csv" ? "Exporting…" : "Export CSV"}
+            {csvLabel}
           </button>
           <button
             onClick={() => handleExport("xlsx")}
-            disabled={exporting !== null || rows.length === 0}
+            disabled={exportDisabled}
+            title={
+              selectedCount > 0
+                ? `Export ${selectedCount} selected row${selectedCount === 1 ? "" : "s"} to XLSX`
+                : "Export all rows to XLSX"
+            }
             className="border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-foreground/[0.03] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            {exporting === "xlsx" ? "Exporting…" : "Export XLSX"}
+            {xlsxLabel}
           </button>
           <button
             onClick={handlePopulate}
@@ -159,6 +205,14 @@ export default function DatasetPage() {
           {dataset.description}
         </p>
         <div className="ml-auto flex items-center gap-4 text-[11px] text-muted shrink-0">
+          {selectedCount > 0 && (
+            <>
+              <span className="text-foreground/80 font-medium">
+                {selectedCount} selected
+              </span>
+              <span className="text-foreground/10">|</span>
+            </>
+          )}
           <span>{rows.length} rows</span>
           <span className="text-foreground/10">|</span>
           <span>{dataset.columns.length} columns</span>
@@ -169,6 +223,7 @@ export default function DatasetPage() {
         dataset={dataset}
         rows={rows}
         datasetId={datasetId}
+        selection={selection}
       />
     </div>
   );

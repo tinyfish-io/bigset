@@ -23,8 +23,7 @@ export function ColumnHeader({
     >
       {isResizing && (
         <div
-          className="absolute top-0 right-0 z-10 w-0.5 bg-foreground/40"
-          style={{ height: "100%" }}
+          className="absolute top-0 right-0 z-10 h-full w-0.5 bg-foreground/40"
         />
       )}
 
