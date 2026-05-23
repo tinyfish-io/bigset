@@ -1,4 +1,4 @@
-import { query, mutation } from "./_generated/server.js";
+import { query, mutation, internalQuery } from "./_generated/server.js";
 import type { QueryCtx } from "./_generated/server.js";
 import { v } from "convex/values";
 import type { Doc } from "./_generated/dataModel.js";
@@ -83,6 +83,15 @@ export const get = query({
   },
 });
 
+export const getInternal = internalQuery({
+  args: { id: v.id("datasets") },
+  handler: async (ctx, args) => {
+    const dataset = await ctx.db.get(args.id);
+    if (!dataset) throw new Error("Dataset not found");
+    return dataset;
+  },
+});
+
 export const create = mutation({
   args: {
     name: v.string(),
@@ -119,6 +128,24 @@ export const updateStatus = mutation({
   handler: async (ctx, args) => {
     const dataset = await loadOwnedDataset(ctx, args.id);
     await ctx.db.patch(dataset._id, { status: args.status });
+  },
+});
+
+export const updateDetails = mutation({
+  args: {
+    id: v.id("datasets"),
+    name: v.string(),
+    description: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const trimmedName = args.name.trim();
+    if (!trimmedName) throw new Error("Dataset name cannot be empty");
+    const dataset = await loadOwnedDataset(ctx, args.id);
+    if (trimmedName === dataset.name && args.description === dataset.description) return;
+    await ctx.db.patch(dataset._id, {
+      name: trimmedName,
+      description: args.description,
+    });
   },
 });
 
