@@ -3,7 +3,7 @@
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useQuery, useConvexAuth } from "convex/react";
+import { useQuery, useMutation, useConvexAuth } from "convex/react";
 import { useAuth } from "@clerk/nextjs";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -14,6 +14,7 @@ import { StatusBadge } from "@/components/dataset/StatusBadge";
 import { downloadCSV, downloadXLSX } from "@/lib/export";
 import { populate } from "@/lib/backend";
 import { EVENTS, captureException, track } from "@/lib/analytics";
+import { toast } from "@/components/Toaster";
 
 export default function DatasetPage() {
   const params = useParams();
@@ -21,6 +22,11 @@ export default function DatasetPage() {
   const { userId, getToken } = useAuth();
   const [exporting, setExporting] = useState<"csv" | "xlsx" | null>(null);
   const [populating, setPopulating] = useState(false);
+  const [editingName, setEditingName] = useState(false);
+  const [nameValue, setNameValue] = useState("");
+  const nameInputRef = useRef<HTMLInputElement>(null);
+
+  const updateDetails = useMutation(api.datasets.updateDetails);
 
   const datasetId = params.id as Id<"datasets">;
   const dataset = useQuery(
@@ -120,6 +126,38 @@ export default function DatasetPage() {
     }
   }
 
+  function startEditingName() {
+    if (!dataset) return;
+    setNameValue(dataset.name);
+    setEditingName(true);
+    setTimeout(() => nameInputRef.current?.select(), 0);
+  }
+
+  async function saveName() {
+    if (!dataset) return;
+    const trimmed = nameValue.trim();
+    if (!trimmed || trimmed === dataset.name) {
+      setEditingName(false);
+      return;
+    }
+    try {
+      await updateDetails({
+        id: dataset._id,
+        name: trimmed,
+        description: dataset.description,
+      });
+      toast.success("Dataset name updated");
+    } catch {
+      toast.error("Failed to update dataset name");
+    } finally {
+      setEditingName(false);
+    }
+  }
+
+  function cancelNameEdit() {
+    setEditingName(false);
+  }
+
   if (authLoading || dataset === undefined || rows === undefined) {
     return (
       <div className="flex flex-1 items-center justify-center">
@@ -155,9 +193,38 @@ export default function DatasetPage() {
             <img src="/BigSetLogoDarkBG.png" alt="BigSet" className="h-[26px] hidden dark:block" />
           </Link>
           <span className="text-foreground/15">/</span>
-          <h1 className="text-sm font-semibold tracking-tight truncate max-w-md">
-            {dataset.name}
-          </h1>
+          {editingName ? (
+            <input
+              ref={nameInputRef}
+              type="text"
+              value={nameValue}
+              onChange={(e) => setNameValue(e.target.value)}
+              onBlur={saveName}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") saveName();
+                if (e.key === "Escape") cancelNameEdit();
+              }}
+              className="text-sm font-semibold tracking-tight truncate max-w-md rounded border border-border bg-background px-2 py-0.5 outline-none focus:border-foreground/30"
+            />
+          ) : (
+            <button
+              onClick={startEditingName}
+              className="flex items-center gap-1.5 group"
+              title="Edit dataset name"
+            >
+              <h1 className="text-sm font-semibold tracking-tight truncate max-w-md">
+                {dataset.name}
+              </h1>
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 16 16"
+                fill="currentColor"
+                className="w-3 h-3 text-foreground/30 group-hover:text-foreground/60 transition-colors"
+              >
+                <path d="M11.013 1.427a1.75 1.75 0 0 1 2.474 0l1.086 1.086a1.75 1.75 0 0 1 0 2.474l-8.61 8.61c-.21.21-.47.364-.756.445l-3.251.93a.75.75 0 0 1-.927-.928l.929-3.25c.081-.286.235-.547.445-.758l8.61-8.61Zm1.414 1.06a.25.25 0 0 0-.354 0L10.811 3.75l1.439 1.44 1.263-1.263a.25.25 0 0 1 .354 0Z" />
+              </svg>
+            </button>
+          )}
           <StatusBadge status={dataset.status} />
         </div>
         <div className="flex items-center gap-2">
