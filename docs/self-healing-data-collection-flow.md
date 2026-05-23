@@ -173,7 +173,7 @@ Save working extraction plan: output looked good, so BigSet saves the method as 
 
 Reject bad run: output was missing sources, wrong, or low-confidence. Do not save it. Do not count benchmark as a fake pass.
 
-Repair loop: when output is missing/bad, use the failure details to search/fetch/populate missing pieces. Meeting notes specifically say repair should span searches, not just rerun the same thing.
+Repair loop: when output is missing/bad, use the failure details to search/fetch/populate missing pieces. Current design direction is that repair should span searches, not just rerun the same thing.
 
 Write rows to DB: put actual table rows into storage so the frontend can show them.
 
@@ -216,7 +216,7 @@ To ask questions, select any line or block and ask Codex something like:
 - "Where is this implemented?"
 - "Is this built or planned?"
 - "What PR owns this?"
-- "What should I say in meeting?"
+- "How should I explain this to the team?"
 
 Use this file for comments/annotations. Do not annotate or share raw meeting notes; those are local/private context.
 

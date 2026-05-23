@@ -312,7 +312,12 @@ export async function runPopulateRuntime(input: {
 
   }
 
-  const insertedRows = capturedRows.map((row) => benchmarkRowFromInsertedData(row.data));
+  const insertedRows = capturedRows.map((row) =>
+    benchmarkRowFromInsertedData({
+      data: row.data,
+      capturedSources,
+    })
+  );
   const insertedRowIssues = validateRuntimeRows(insertedRows);
   if (
     !input.agentRunner &&
@@ -1270,123 +1275,46 @@ function createTinyFishWebTools(): PopulateRuntimeWebTools {
     },
     async fetch({ url }) {
       const apiKey = requiredEnv("TINYFISH_API_KEY");
-      try {
-        const response = await fetch("https://api.fetch.tinyfish.ai", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-API-Key": apiKey,
-          },
-          body: JSON.stringify({ urls: [url], format: "markdown" }),
-        });
-        if (!response.ok) {
-          throw new Error(`TinyFish fetch returned HTTP ${response.status}.`);
-        }
-        const payload = await response.json() as {
-          results?: Array<{ title?: string; text?: string }>;
-          errors?: Array<{ error?: string }>;
-        };
-        const page = payload.results?.[0];
-        if (!page && payload.errors?.[0]) {
-          throw new Error(payload.errors[0].error ?? "TinyFish fetch failed.");
-        }
-        return {
-          title: page?.title,
-          text: page?.text,
-        };
-      } catch (error) {
-        const fallbackPage = await fetchPublicStaticPage({ url });
-        if (fallbackPage.text) {
-          return fallbackPage;
-        }
-        throw error;
+      const response = await fetch("https://api.fetch.tinyfish.ai", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-API-Key": apiKey,
+        },
+        body: JSON.stringify({ urls: [url], format: "markdown" }),
+      });
+      if (!response.ok) {
+        throw new Error(`TinyFish fetch returned HTTP ${response.status}.`);
       }
+      const payload = await response.json() as {
+        results?: Array<{ title?: string; text?: string }>;
+        errors?: Array<{ error?: string }>;
+      };
+      const page = payload.results?.[0];
+      if (!page && payload.errors?.[0]) {
+        throw new Error(payload.errors[0].error ?? "TinyFish fetch failed.");
+      }
+      return {
+        title: page?.title,
+        text: page?.text,
+      };
     },
   };
 }
 
-async function fetchPublicStaticPage(input: {
-  url: string;
-}): Promise<PopulateFetchedPage> {
-  const targetUrl = new URL(input.url);
-  if (!["http:", "https:"].includes(targetUrl.protocol)) {
-    return {};
-  }
-  if (
-    ["localhost", "127.0.0.1", "::1"].includes(targetUrl.hostname) ||
-    /\.local$/i.test(targetUrl.hostname)
-  ) {
-    return {};
-  }
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 20_000);
-  try {
-    const response = await fetch(targetUrl, {
-      signal: controller.signal,
-      headers: {
-        "User-Agent": "BigSetPopulate/0.1 (+https://bigset.local)",
-        "Accept": "text/html,text/plain,application/xhtml+xml",
-      },
-    });
-    if (!response.ok) {
-      return {};
-    }
-    const contentType = response.headers.get("content-type") ?? "";
-    if (!/text\/html|text\/plain|application\/xhtml\+xml/i.test(contentType)) {
-      return {};
-    }
-    const rawText = await response.text();
-    return htmlPageToFetchedPage(rawText);
-  } catch {
-    return {};
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-function htmlPageToFetchedPage(rawText: string): PopulateFetchedPage {
-  const title = decodeHtmlEntities(
-    rawText.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] ?? ""
-  ).trim();
-  const withoutScripts = rawText
-    .replace(/<script[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style[\s\S]*?<\/style>/gi, " ")
-    .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ");
-  const text = decodeHtmlEntities(
-    withoutScripts
-      .replace(/<br\s*\/?>/gi, "\n")
-      .replace(/<\/(p|li|h[1-6]|article|section|div)>/gi, "\n")
-      .replace(/<[^>]+>/g, " ")
-  )
-    .replace(/\s+\n/g, "\n")
-    .replace(/\n\s+/g, "\n")
-    .replace(/[ \t]{2,}/g, " ")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim()
-    .slice(0, 20_000);
-  return { title: title || undefined, text };
-}
-
-function decodeHtmlEntities(value: string): string {
-  return value
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, "\"")
-    .replace(/&#39;/g, "'");
-}
-
-function benchmarkRowFromInsertedData(
-  data: Record<string, unknown>
-): PopulateRuntimeRow {
-  const cells = normalizeCells(data);
+function benchmarkRowFromInsertedData(input: {
+  data: Record<string, unknown>;
+  capturedSources: PopulateRuntimeCapturedSource[];
+}): PopulateRuntimeRow {
+  const cells = normalizeCells(input.data);
   const sourceUrls = sourceUrlsFromData(cells);
+  const evidence = evidenceFromData(cells, sourceUrls).filter((item) =>
+    isEvidenceBackedByCapturedSource(item, input.capturedSources)
+  );
   return {
     cells,
     sourceUrls,
-    evidence: evidenceFromData(cells, sourceUrls),
+    evidence,
     needsReview: true,
   };
 }
@@ -1908,10 +1836,32 @@ function validateRuntimeRows(rows: PopulateRuntimeRow[]): string[] {
   if (rows.some((row) => row.sourceUrls.length === 0)) {
     issues.push("One or more Mastra populate rows have no source URL.");
   }
+  if (rows.some((row) => row.sourceUrls.some((sourceUrl) => !isHttpUrl(sourceUrl)))) {
+    issues.push("One or more Mastra populate rows have invalid source URLs.");
+  }
   if (rows.some((row) => row.evidence.length === 0)) {
     issues.push("Mastra populate rows do not include per-row evidence quotes yet.");
   }
+  if (rows.some((row) =>
+    row.evidence.some((item) => !item.quote.trim())
+  )) {
+    issues.push("One or more Mastra populate evidence quotes are blank.");
+  }
+  if (rows.some((row) =>
+    row.evidence.some((item) => !row.sourceUrls.includes(item.sourceUrl))
+  )) {
+    issues.push("One or more Mastra populate evidence URLs do not match row source URLs.");
+  }
   return issues;
+}
+
+function isHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 function firstPresentColumn(data: Record<string, PopulateCellValue>): string {

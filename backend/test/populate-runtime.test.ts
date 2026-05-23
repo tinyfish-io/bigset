@@ -92,6 +92,39 @@ test("populate runtime captures rows through injected tools without Convex write
   assert.deepEqual(result.validationIssues, []);
 });
 
+test("populate runtime strips unbacked insert_row evidence before validation", async () => {
+  const result = await runPopulateRuntime({
+    context,
+    webTools: {
+      search: async () => [],
+      fetch: async () => ({}),
+    },
+    agentRunner: async ({ tools }) => {
+      const insertRow = tools.insert_row as ToolLike<
+        { datasetId: string; data: Record<string, unknown> },
+        { success: boolean }
+      >;
+
+      await insertRow.execute({
+        datasetId: "benchmark-dataset",
+        data: {
+          entity_name: "OpenAI",
+          latest_post_title: "Invented post",
+          source_url: "https://openai.com/news",
+          evidence_quote: "Invented quote never fetched",
+        },
+      });
+    },
+  });
+
+  assert.equal(result.rows.length, 1);
+  assert.deepEqual(result.rows[0]?.evidence, []);
+  assert.match(
+    result.validationIssues.join("\n"),
+    /evidence quotes/i
+  );
+});
+
 test("populate runtime accepts structured fallback rows backed by captured sources", async () => {
   const result = await runPopulateRuntime({
     context,

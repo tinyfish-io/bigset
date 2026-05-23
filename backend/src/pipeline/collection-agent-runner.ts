@@ -471,12 +471,13 @@ function browserActionKind(
     normalized === "navigate" ||
     normalized === "click" ||
     normalized === "type" ||
+    normalized === "fill" ||
     normalized === "select" ||
     normalized === "wait" ||
     normalized === "extract" ||
     normalized === "screenshot"
   ) {
-    return normalized;
+    return normalized === "fill" ? "type" : normalized;
   }
   return "unknown";
 }

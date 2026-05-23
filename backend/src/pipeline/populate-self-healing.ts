@@ -803,13 +803,35 @@ function productionRowSafety(input: {
   if (input.row.sourceUrls.length === 0) {
     criticalIssues.push(`Row ${input.rowNumber} has no source URL.`);
   }
+  if (input.row.sourceUrls.some((sourceUrl) => !isHttpUrl(sourceUrl))) {
+    criticalIssues.push(`Row ${input.rowNumber} has an invalid source URL.`);
+  }
   if (input.row.evidence.length === 0) {
     criticalIssues.push(`Row ${input.rowNumber} has no evidence quote.`);
+  }
+  if (input.row.evidence.some((item) => !item.quote.trim())) {
+    criticalIssues.push(`Row ${input.rowNumber} has a blank evidence quote.`);
+  }
+  if (
+    input.row.evidence.some((item) => !input.row.sourceUrls.includes(item.sourceUrl))
+  ) {
+    criticalIssues.push(
+      `Row ${input.rowNumber} has evidence that does not match a row source URL.`
+    );
   }
   return {
     isSafe: criticalIssues.length === 0,
     criticalIssues,
   };
+}
+
+function isHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 function criticalValidationIssues(input: {

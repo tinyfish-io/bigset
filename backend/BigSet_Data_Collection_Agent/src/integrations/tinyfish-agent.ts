@@ -377,7 +377,7 @@ function normalizeBrowserAction(value: string | undefined): string | undefined {
   const lower = value.toLowerCase();
   if (/\b(click|tap|press|select)\b/.test(lower)) return "click";
   if (/\b(navigate|goto|go_to|open|visit)\b/.test(lower)) return "navigate";
-  if (/\b(fill|type|input|enter_text|set_value)\b/.test(lower)) return "fill";
+  if (/\b(fill|type|input|enter_text|set_value)\b/.test(lower)) return "type";
   if (/\b(scroll)\b/.test(lower)) return "scroll";
   if (/\b(wait)\b/.test(lower)) return "wait";
   if (/\b(extract|scrape|read)\b/.test(lower)) return "extract";
@@ -440,7 +440,7 @@ function valueDescriptionFromStep(
   step: Record<string, unknown>,
   action: string | undefined
 ): string | undefined {
-  if (action !== "fill") {
+  if (action !== "type") {
     return firstStringAtPaths(step, [
       ["value_description"],
       ["valueDescription"],

@@ -356,6 +356,36 @@ test("Mastra populate recipe runtime rejects approximated required cells", async
   );
 });
 
+test("Mastra populate recipe runtime rejects evidence disconnected from row sources", async () => {
+  const runtime = new MastraPopulateRecipeRuntime({
+    runPopulate: async () => ({
+      rows: validRows().map((row) => ({
+        ...row,
+        evidence: [{
+          columnName: "latest_post_title",
+          sourceUrl: "https://example.com/unrelated",
+          quote: "Release notes from OpenAI",
+        }],
+      })),
+      validationIssues: [],
+      usage: emptyUsage(),
+      metrics: emptyMetrics(),
+    }),
+  });
+
+  const run = await runtime.runRecipe({
+    recipe: recipe({ recipeId: "recipe-v1" }),
+    context,
+  });
+
+  assert.equal(run.runStatus, "failed");
+  assert.equal(run.productionValidation.isValid, false);
+  assert.match(
+    run.productionValidation.criticalIssues.join("\n"),
+    /does not match a row source URL/
+  );
+});
+
 test("process trace artifacts stay parseable when trace content is large", async () => {
   const runtime = new MastraPopulateRecipeRuntime({
     runPopulate: async () => ({

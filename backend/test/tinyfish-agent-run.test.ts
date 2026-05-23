@@ -103,7 +103,7 @@ test("TinyFish run normalization converts documented run steps to browser action
     label: undefined,
     value_description: undefined,
   }, {
-    action: "fill",
+    action: "type",
     url: "https://example.com/products",
     selector: "input[name='password']",
     target_text: undefined,
