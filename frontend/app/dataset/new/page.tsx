@@ -17,6 +17,7 @@ interface ProposedColumn {
   name: string;
   type: ColumnType;
   description: string;
+  nullable: boolean;
 }
 
 type Cadence = "30m" | "6h" | "12h" | "daily" | "weekly";
@@ -61,6 +62,7 @@ function mapBackendColumn(col: InferredColumn, index: number): ProposedColumn {
     name: col.display_name,
     type: BACKEND_TYPE_MAP[col.type],
     description: col.retrieval_hint,
+    nullable: col.nullable,
   };
 }
 
@@ -162,7 +164,13 @@ export default function NewDatasetPage() {
   function handleAddColumn() {
     setColumns((prev) => [
       ...prev,
-      { id: String(Date.now()), name: "New Column", type: "text", description: "" },
+      {
+        id: String(Date.now()),
+        name: "New Column",
+        type: "text",
+        description: "",
+        nullable: false,
+      },
     ]);
   }
 
@@ -180,6 +188,7 @@ export default function NewDatasetPage() {
           name: c.name,
           type: c.type,
           description: c.description || undefined,
+          nullable: c.nullable,
         })),
       });
     } catch (err) {

@@ -311,6 +311,35 @@ test("self-healing runner does not clear or insert rows when candidate is reject
   assert.match(result.validationIssues.join("\n"), /Still no evidence/);
 });
 
+test("self-healing runner commits partial safe rows without promoting recipe", async () => {
+  const store = new InMemoryPopulateRecipeStore();
+  const generatedRecipe = recipe({ recipeId: "generated-v1" });
+  const writer = new FakePopulateDatasetRowWriter();
+
+  const result = await runSelfHealingPopulate({
+    context,
+    store,
+    runtime: new FakePopulateRecipeRuntime({
+      "generated-v1": partialRun(
+        generatedRecipe,
+        "Missing expected entities: Anthropic."
+      ),
+    }),
+    author: new FakeRecipeAuthor({ generatedRecipe }),
+    rowWriter: writer,
+    shouldCommitRows: true,
+  });
+  const snapshot = await store.loadSnapshot(context.datasetId);
+
+  assert.equal(result.success, true);
+  assert.equal(result.action, "candidate_rejected");
+  assert.equal(result.validationState, "accepted_partial");
+  assert.equal(result.committedRows?.insertedRowCount, 1);
+  assert.equal(writer.replaceCalls.length, 1);
+  assert.equal(writer.replaceCalls[0]?.rows[0]?.cells.entity_name, "OpenAI 1");
+  assert.equal(snapshot.recipes[0]?.status, "rejected");
+});
+
 test("filesystem store lets the runner reuse an active recipe across calls", async () => {
   const rootDirectory = await mkdtemp(join(tmpdir(), "bigset-populate-runner-"));
   const store = new FileSystemPopulateRecipeStore(rootDirectory);
@@ -419,6 +448,29 @@ function invalidRun(recipe: PopulateRecipe, issue: string): PopulateRecipeRunRes
   });
 }
 
+function partialRun(recipe: PopulateRecipe, issue: string): PopulateRecipeRunResult {
+  const run = runResult({
+    recipe,
+    rows: validRunWithRows(recipe, 1).rows,
+    validationIssues: [issue],
+    criticalIssues: [issue],
+    isValid: false,
+    score: 0.75,
+  });
+  return {
+    ...run,
+    runStatus: "succeeded",
+    productionValidation: {
+      ...run.productionValidation,
+      state: "accepted_partial",
+      safeRowCount: run.rows.length,
+      expectedEntityCoverageRatio: 0.5,
+      expectedEntities: ["OpenAI", "Anthropic"],
+      missingExpectedEntities: ["Anthropic"],
+    },
+  };
+}
+
 function runResult(input: {
   recipe: PopulateRecipe;
   rows: PopulateRecipeRunResult["rows"];
@@ -449,15 +501,19 @@ function runResult(input: {
     completedAt: "2026-05-22T00:00:01.000Z",
     runtimeMs: 1_000,
     productionValidation: {
+      state: input.isValid ? "accepted_full" : "rejected",
       isValid: input.isValid,
       score: input.score,
       rowCount: input.rows.length,
+      safeRowCount: input.isValid ? input.rows.length : 0,
       requestedCellCompletenessRatio: input.score,
       sourceUrlCoverageRatio: input.score,
       evidenceCoverageRatio: input.score,
       expectedEntityCoverageRatio: input.score,
       expectedEntities: [],
       missingExpectedEntities: [],
+      coveragePolicy: "partial_allowed",
+      targetSource: "public web sources",
       criticalIssues: input.criticalIssues ?? [],
       warnings: input.validationIssues ?? [],
     },

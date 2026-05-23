@@ -182,6 +182,7 @@ function responseSafePopulateResult(
     action: result.action,
     datasetId: result.datasetId,
     success: result.success,
+    validationState: result.validationState,
     committedRows: result.committedRows,
     commitLimit: result.commitLimit,
     rejectionReasons: result.rejectionReasons,
@@ -189,6 +190,12 @@ function responseSafePopulateResult(
     productionValidation: diagnosticRun?.productionValidation,
     metrics: diagnosticRun?.metrics,
     rowCount: diagnosticRun?.rows.length ?? 0,
+    sampleRows: (diagnosticRun?.rows ?? []).slice(0, 5).map((row) => ({
+      cells: row.cells,
+      sourceUrls: row.sourceUrls,
+      evidence: row.evidence,
+      needsReview: row.needsReview,
+    })),
   };
 }
 

@@ -286,6 +286,76 @@ test("Mastra populate recipe runtime keeps supplemental fetch misses non-blockin
   assert.match(run.productionValidation.warnings.join("\n"), /timeout/);
 });
 
+test("Mastra populate recipe runtime treats nullable missing cells as non-blocking", async () => {
+  const runtime = new MastraPopulateRecipeRuntime({
+    runPopulate: async () => ({
+      rows: validRows(),
+      validationIssues: [
+        "Author field could not be determined from the available source transcript.",
+      ],
+      usage: emptyUsage(),
+      metrics: emptyMetrics(),
+    }),
+  });
+
+  const run = await runtime.runRecipe({
+    recipe: recipe({ recipeId: "recipe-v1" }),
+    context: {
+      ...context,
+      columns: [
+        ...context.columns,
+        {
+          name: "author",
+          type: "text",
+          description: "Author when the source names one.",
+          nullable: true,
+        },
+      ],
+    },
+  });
+
+  assert.equal(run.runStatus, "succeeded");
+  assert.equal(run.productionValidation.isValid, true);
+  assert.deepEqual(run.productionValidation.criticalIssues, []);
+  assert.equal(run.productionValidation.requestedCellCompletenessRatio, 0.8);
+});
+
+test("Mastra populate recipe runtime rejects approximated required cells", async () => {
+  const runtime = new MastraPopulateRecipeRuntime({
+    runPopulate: async () => ({
+      rows: validRows(),
+      validationIssues: [
+        "Actual post titles and canonical URLs are not present in the captured transcript, so category+date combinations are used as best approximations. These rows require manual review.",
+      ],
+      usage: emptyUsage(),
+      metrics: emptyMetrics(),
+    }),
+  });
+
+  const run = await runtime.runRecipe({
+    recipe: recipe({ recipeId: "recipe-v1" }),
+    context: {
+      ...context,
+      columns: [
+        ...context.columns,
+        {
+          name: "author",
+          type: "text",
+          description: "Author when the source names one.",
+          nullable: true,
+        },
+      ],
+    },
+  });
+
+  assert.equal(run.runStatus, "failed");
+  assert.equal(run.productionValidation.isValid, false);
+  assert.match(
+    run.productionValidation.criticalIssues.join("\n"),
+    /best approximations/
+  );
+});
+
 test("process trace artifacts stay parseable when trace content is large", async () => {
   const runtime = new MastraPopulateRecipeRuntime({
     runPopulate: async () => ({
@@ -335,7 +405,7 @@ test("process trace artifacts stay parseable when trace content is large", async
   assert.match(parsedTrace.searchQueries[0], /\[truncated\]/);
 });
 
-test("Mastra populate recipe runtime blocks missing expected entities", async () => {
+test("Mastra populate recipe runtime marks missing expected entities as partial", async () => {
   const runtime = new MastraPopulateRecipeRuntime({
     runPopulate: async () => ({
       rows: [{
@@ -368,8 +438,10 @@ test("Mastra populate recipe runtime blocks missing expected entities", async ()
     },
   });
 
-  assert.equal(run.runStatus, "failed");
+  assert.equal(run.runStatus, "succeeded");
+  assert.equal(run.productionValidation.state, "accepted_partial");
   assert.equal(run.productionValidation.isValid, false);
+  assert.equal(run.productionValidation.safeRowCount, 1);
   assert.deepEqual(run.productionValidation.expectedEntities, [
     "OpenAI",
     "Anthropic",
@@ -671,15 +743,19 @@ function runResult(input: {
     completedAt: "2026-05-22T00:00:01.000Z",
     runtimeMs: 1_000,
     productionValidation: {
+      state: input.isValid ? "accepted_full" : "rejected",
       isValid: input.isValid,
       score: input.score,
       rowCount: input.rows.length,
+      safeRowCount: input.isValid ? input.rows.length : 0,
       requestedCellCompletenessRatio: input.score,
       sourceUrlCoverageRatio: input.score,
       evidenceCoverageRatio: input.score,
       expectedEntityCoverageRatio: input.score,
       expectedEntities: [],
       missingExpectedEntities: [],
+      coveragePolicy: "partial_allowed",
+      targetSource: "public web sources",
       criticalIssues: input.criticalIssues ?? [],
       warnings: input.validationIssues ?? [],
     },

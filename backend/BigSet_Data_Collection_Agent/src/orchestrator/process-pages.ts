@@ -27,7 +27,10 @@ import {
 } from "../queue/pools.js";
 import { saveJson, type RunPaths } from "../storage/run-store.js";
 import { getDomain } from "../utils/url.js";
-import { explicitBrowserActionsFromAgentResult } from "./browser-actions.js";
+import {
+  dedupeBrowserActions,
+  explicitBrowserActionsFromAgentResult,
+} from "./browser-actions.js";
 import { join } from "node:path";
 
 export interface AgentDeferredEntry {
@@ -59,6 +62,8 @@ function emptySummary(): TriageSummary {
     records_from_agent: 0,
     agent_reported_step_count: 0,
     agent_runs_with_streaming_url: 0,
+    agent_runs_with_recording_url: 0,
+    agent_capture_artifact_count: 0,
     agent_runs_with_explicit_browser_actions: 0,
   };
 }
@@ -75,6 +80,12 @@ function recordAgentRunProvenance(
     summary.agent_runs_with_streaming_url =
       (summary.agent_runs_with_streaming_url ?? 0) + 1;
   }
+  if (run.has_recording_url) {
+    summary.agent_runs_with_recording_url =
+      (summary.agent_runs_with_recording_url ?? 0) + 1;
+  }
+  summary.agent_capture_artifact_count =
+    (summary.agent_capture_artifact_count ?? 0) + run.capture_artifact_count;
   if (browserActionCount > 0) {
     summary.agent_runs_with_explicit_browser_actions =
       (summary.agent_runs_with_explicit_browser_actions ?? 0) + 1;
@@ -89,6 +100,8 @@ function agentRunProvenanceFields(input: {
   AgentRunRecord,
   | "agent_step_count"
   | "has_streaming_url"
+  | "has_recording_url"
+  | "capture_artifact_count"
   | "result_keys"
   | "browser_action_diagnostic"
 > {
@@ -104,6 +117,8 @@ function agentRunProvenanceFields(input: {
   return {
     agent_step_count: input.run.agent_step_count,
     has_streaming_url: input.run.has_streaming_url,
+    has_recording_url: input.run.has_recording_url,
+    capture_artifact_count: input.run.capture_artifact_count,
     result_keys: input.run.result_keys,
     browser_action_diagnostic: browserActionDiagnostic,
   };
@@ -440,9 +455,16 @@ export async function processFetchedPages(options: {
       jobsToExtract,
       async ({ job, run }) => {
         const pageUrl = job.pageUrl;
+        const browserActions = dedupeBrowserActions([
+          ...(run.browser_actions ?? []),
+          ...explicitBrowserActionsFromAgentResult({
+            agentResult: run.result,
+            pageUrl,
+          }),
+        ]);
 
         if (run.error || !run.result) {
-          recordAgentRunProvenance(summary, run, 0);
+          recordAgentRunProvenance(summary, run, browserActions.length);
           summary.agent_failed += 1;
           agentRuns.push({
             url: pageUrl,
@@ -455,8 +477,11 @@ export async function processFetchedPages(options: {
             ...agentRunProvenanceFields({
               run,
               recordsExtracted: 0,
-              browserActionCount: 0,
+              browserActionCount: browserActions.length,
             }),
+            browser_actions: browserActions.length > 0
+              ? browserActions
+              : undefined,
           });
           options.log(
             options.label,
@@ -465,10 +490,6 @@ export async function processFetchedPages(options: {
           return;
         }
 
-        const browserActions = explicitBrowserActionsFromAgentResult({
-          agentResult: run.result,
-          pageUrl,
-        });
         recordAgentRunProvenance(summary, run, browserActions.length);
 
         try {

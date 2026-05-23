@@ -20,6 +20,7 @@ const columnValidator = v.object({
     v.literal("date"),
   ),
   description: v.optional(v.string()),
+  nullable: v.optional(v.boolean()),
 });
 
 const PREVIEW_ROW_COUNT = 5;

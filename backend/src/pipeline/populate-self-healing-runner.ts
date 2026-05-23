@@ -8,6 +8,7 @@ import {
   FileSystemPopulateRecipeStore,
   MastraPopulateRecipeRuntime,
   SelfHealingPopulateRecipeService,
+  safeRowsForPopulateCommit,
   type PopulateRecipeAuthor,
   type PopulateRecipeRunResult,
   type PopulateRecipeRuntime,
@@ -284,6 +285,7 @@ export interface RunSelfHealingPopulateResult {
   diagnosticRun?: PopulateRecipeRunResult;
   committedRows?: PopulateDatasetWriteResult;
   commitLimit?: PopulateDatasetRowCommitLimitDecision;
+  validationState?: PopulateRecipeRunResult["productionValidation"]["state"];
   rejectionReasons: string[];
   validationIssues: string[];
   tick?: SelfHealingPopulateTickResult;
@@ -325,8 +327,11 @@ export async function runSelfHealingPopulate(
     datasetId: input.context.datasetId,
     context: input.context,
   });
-  const selectedRun = successfulRunForTick(tick);
+  const selectedRun = committableRunForTick(tick);
   const diagnosticRun = diagnosticRunForTick(tick);
+  const rowsToCommit = selectedRun
+    ? safeRowsForPopulateCommit({ context: input.context, run: selectedRun })
+    : [];
   let committedRows: PopulateDatasetWriteResult | undefined;
   let commitLimit: PopulateDatasetRowCommitLimitDecision | undefined;
 
@@ -335,7 +340,7 @@ export async function runSelfHealingPopulate(
     if (commitLimiter) {
       reservation = await reserveCommitRows({
         context: input.context,
-        rowCount: selectedRun.rows.length,
+        rowCount: rowsToCommit.length,
         commitRowLimit: input.commitRowLimit!,
         limiter: commitLimiter,
       });
@@ -353,7 +358,7 @@ export async function runSelfHealingPopulate(
     try {
       committedRows = await rowWriter.replaceRows({
         datasetId: input.context.datasetId,
-        rows: selectedRun.rows,
+        rows: rowsToCommit,
       });
     } catch (error) {
       await reservation?.release();
@@ -370,10 +375,18 @@ export async function runSelfHealingPopulate(
     diagnosticRun,
     committedRows,
     commitLimit,
+    validationState: selectedRun?.productionValidation.state ??
+      diagnosticRun?.productionValidation.state,
     rejectionReasons: tick.rejectionReasons,
     validationIssues: validationIssuesForSelfHealingTick(tick),
     tick,
   };
+}
+
+function committableRunForTick(
+  tick: SelfHealingPopulateTickResult
+): PopulateRecipeRunResult | undefined {
+  return successfulRunForTick(tick) ?? acceptedPartialRunForTick(tick);
 }
 
 export function successfulRunForTick(
@@ -395,6 +408,15 @@ export function diagnosticRunForTick(
   tick: SelfHealingPopulateTickResult
 ): PopulateRecipeRunResult | undefined {
   return successfulRunForTick(tick) ?? tick.candidateRun ?? tick.activeRun;
+}
+
+function acceptedPartialRunForTick(
+  tick: SelfHealingPopulateTickResult
+): PopulateRecipeRunResult | undefined {
+  return [tick.candidateRun, tick.activeRun].find((run) =>
+    run?.productionValidation.state === "accepted_partial" &&
+    run.productionValidation.safeRowCount > 0
+  );
 }
 
 export function validationIssuesForSelfHealingTick(
@@ -482,6 +504,8 @@ function commitRateLimitedResult(input: {
     selectedRun: input.selectedRun,
     diagnosticRun: input.diagnosticRun ?? input.selectedRun,
     commitLimit: input.decision,
+    validationState: input.selectedRun?.productionValidation.state ??
+      input.diagnosticRun?.productionValidation.state,
     rejectionReasons: [reason],
     validationIssues: [reason],
     tick: input.tick,

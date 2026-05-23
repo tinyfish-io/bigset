@@ -47,6 +47,11 @@ export const insert = internalMutation({
     datasetId: v.id("datasets"),
     data: v.record(v.string(), v.any()),
     sources: v.optional(v.array(v.string())),
+    evidence: v.optional(v.array(v.object({
+      columnName: v.string(),
+      sourceUrl: v.string(),
+      quote: v.string(),
+    }))),
   },
   handler: async (ctx, args) => {
     await consumeQuotaForDataset(ctx, args.datasetId, 1);
@@ -144,6 +149,11 @@ export const replaceByDataset = internalMutation({
     rows: v.array(v.object({
       data: v.record(v.string(), v.any()),
       sources: v.optional(v.array(v.string())),
+      evidence: v.optional(v.array(v.object({
+        columnName: v.string(),
+        sourceUrl: v.string(),
+        quote: v.string(),
+      }))),
     })),
   },
   handler: async (ctx, args) => {
@@ -165,6 +175,7 @@ export const replaceByDataset = internalMutation({
         datasetId: args.datasetId,
         data: row.data,
         sources: row.sources,
+        evidence: row.evidence,
       });
     }
 

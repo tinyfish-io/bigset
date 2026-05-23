@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BigSet PR67 Populate Flow</title>
+  <style>
+    :root {
+      --paper: #f7f7f2;
+      --surface: #ffffff;
+      --ink: #171717;
+      --muted: #62685f;
+      --line: #d7dccf;
+      --blue: #e7f0ff;
+      --green: #e8f7ef;
+      --amber: #fff1d8;
+      --red: #fff0ee;
+      --red-ink: #8c281c;
+      --shadow: 0 18px 42px rgba(20, 28, 18, 0.08);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--paper);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }
+
+    main {
+      width: min(1180px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 36px 0 64px;
+    }
+
+    header {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 20px;
+      align-items: start;
+      margin-bottom: 24px;
+    }
+
+    h1 {
+      margin: 0;
+      max-width: 780px;
+      font-size: clamp(34px, 6vw, 72px);
+      line-height: 0.94;
+      font-weight: 760;
+      letter-spacing: 0;
+    }
+
+    h2 {
+      margin: 0 0 12px;
+      font-size: 22px;
+      line-height: 1.15;
+      letter-spacing: 0;
+    }
+
+    h3 {
+      margin: 0 0 8px;
+      font-size: 15px;
+      line-height: 1.2;
+      letter-spacing: 0;
+    }
+
+    p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.55;
+    }
+
+    .subtitle {
+      max-width: 760px;
+      margin-top: 18px;
+      font-size: 16px;
+    }
+
+    .status {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 8px;
+      max-width: 440px;
+    }
+
+    .pill {
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.7);
+      padding: 8px 10px;
+      font-size: 12px;
+      font-weight: 720;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+
+    .pill.good {
+      border-color: #9ccbb2;
+      background: var(--green);
+      color: #16462b;
+    }
+
+    .pill.warn {
+      border-color: #e0b66b;
+      background: var(--amber);
+      color: #6d4a12;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+      margin: 22px 0;
+    }
+
+    .panel,
+    figure {
+      border: 1px solid var(--line);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+
+    .panel {
+      min-height: 152px;
+      padding: 18px;
+    }
+
+    .panel b {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 12px;
+      text-transform: uppercase;
+      color: #42483f;
+    }
+
+    .panel ul {
+      margin: 0;
+      padding-left: 18px;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    section {
+      margin-top: 28px;
+    }
+
+    figure {
+      margin: 0 0 18px;
+      overflow: hidden;
+    }
+
+    figcaption {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: center;
+      border-bottom: 1px solid var(--line);
+      background: #fbfbf7;
+      padding: 16px 18px;
+    }
+
+    figcaption a {
+      color: #3f5f90;
+      font-size: 12px;
+      font-weight: 720;
+      text-decoration: none;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+
+    .diagram {
+      padding: 18px;
+      overflow-x: auto;
+      background: #ffffff;
+    }
+
+    .diagram img {
+      display: block;
+      width: 100%;
+      min-width: 900px;
+      height: auto;
+    }
+
+    .callout {
+      border-left: 5px solid #b33424;
+      background: var(--red);
+      color: var(--red-ink);
+      padding: 15px 18px;
+      margin-top: 18px;
+      font-size: 14px;
+      line-height: 1.55;
+    }
+
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.94em;
+      color: #2d4d78;
+    }
+
+    @media (max-width: 860px) {
+      main {
+        width: min(100vw - 24px, 1180px);
+        padding-top: 24px;
+      }
+
+      header {
+        grid-template-columns: 1fr;
+      }
+
+      .status {
+        justify-content: flex-start;
+      }
+
+      .grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>BigSet PR67 Populate Flow</h1>
+        <p class="subtitle">
+          Public-safe architecture artifact for the in-app populate path. It shows the
+          original auth break, the fixed target loop, and the validation gate that keeps
+          rejected runs from writing fake rows.
+        </p>
+      </div>
+      <div class="status" aria-label="Current PR67 status">
+        <span class="pill good">Auth break fixed</span>
+        <span class="pill good">Rejected runs visible</span>
+        <span class="pill good">Accepted rows proven</span>
+        <span class="pill warn">Browser replay not ready</span>
+      </div>
+    </header>
+
+    <section class="grid" aria-label="Implementation summary">
+      <article class="panel">
+        <b>Backend</b>
+        <p>
+          `/populate` uses a trusted internal Convex owner lookup, then compares
+          `ownerId` to the authenticated request user before runtime execution.
+        </p>
+      </article>
+      <article class="panel">
+        <b>Rows</b>
+        <p>
+          Accepted rows are written through the internal row writer with source URLs
+          and evidence quotes preserved in Convex. Partial-safe rows can be written
+          without promoting a full recipe.
+        </p>
+      </article>
+      <article class="panel">
+        <b>UI</b>
+        <p>
+          The dataset page surfaces accepted or rejected populate state, validation
+          score, first issue, source links, and evidence snippets.
+        </p>
+      </article>
+    </section>
+
+    <section>
+      <h2>Smoke Result</h2>
+      <div class="grid">
+        <article class="panel">
+          <b>Ready checks</b>
+          <ul>
+            <li>`make dev` rebuilt and pushed Convex functions.</li>
+            <li>Frontend, backend, Mastra, Convex, and Postgres were reachable.</li>
+            <li>Chrome-for-testing had a signed-in BigSet session.</li>
+          </ul>
+        </article>
+        <article class="panel">
+          <b>Rejected prompt</b>
+          <ul>
+            <li>Underspecified prompt returned `422`.</li>
+            <li>Committed rows stayed at 0.</li>
+            <li>UI showed "Rejected: no rows written".</li>
+          </ul>
+        </article>
+        <article class="panel">
+          <b>Accepted prompt</b>
+          <ul>
+            <li>Frontend created `Openai Api Docs Pages`.</li>
+            <li>`/populate` committed 2 rows.</li>
+            <li>UI showed `Accepted full`, score `1.00`, links, and evidence.</li>
+          </ul>
+        </article>
+      </div>
+      <p class="callout">
+        The old blocker was an anonymous private Convex read before extraction. PR67 moves
+        past that. Search/fetch-only traces are still marked replay `not_ready`; browser replay
+        requires explicit browser actions instead of a fabricated script.
+      </p>
+    </section>
+
+    <section aria-label="Rendered diagrams">
+      <figure>
+        <figcaption>
+          <div>
+            <h3>Before State: Auth Break</h3>
+            <p>The backend reached `/populate`, then failed while reading a private dataset anonymously.</p>
+          </div>
+          <a href="assets/bigset-populate-before-state.svg">Open SVG</a>
+        </figcaption>
+        <div class="diagram">
+          <img src="assets/bigset-populate-before-state.svg" alt="Before-state populate auth break diagram">
+        </div>
+      </figure>
+
+      <figure>
+        <figcaption>
+          <div>
+            <h3>Target App Loop</h3>
+            <p>Signed-in UI, ownership-safe backend load, Mastra runtime, validation, safe commit, and artifacts.</p>
+          </div>
+          <a href="assets/bigset-populate-target-loop.svg">Open SVG</a>
+        </figcaption>
+        <div class="diagram">
+          <img src="assets/bigset-populate-target-loop.svg" alt="Target app populate loop diagram">
+        </div>
+      </figure>
+
+      <figure>
+        <figcaption>
+          <div>
+            <h3>Validation Gate</h3>
+            <p>Rows must have useful cells, sources, evidence, and expected-entity coverage before write.</p>
+          </div>
+          <a href="assets/bigset-populate-validation-gate.svg">Open SVG</a>
+        </figcaption>
+        <div class="diagram">
+          <img src="assets/bigset-populate-validation-gate.svg" alt="Self-healing validation gate diagram">
+        </div>
+      </figure>
+    </section>
+  </main>
+</body>
+</html>

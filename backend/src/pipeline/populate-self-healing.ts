@@ -65,17 +65,36 @@ export interface PopulateRecipeArtifact {
 }
 
 export interface PopulateRecipeProductionValidation {
+  state: PopulateValidationState;
   isValid: boolean;
   score: number;
   rowCount: number;
+  safeRowCount: number;
   requestedCellCompletenessRatio: number;
   sourceUrlCoverageRatio: number;
   evidenceCoverageRatio: number;
   expectedEntityCoverageRatio: number;
   expectedEntities: string[];
   missingExpectedEntities: string[];
+  coveragePolicy: PopulateValidationCoveragePolicy;
+  targetSource: string;
   criticalIssues: string[];
   warnings: string[];
+}
+
+export type PopulateValidationState =
+  | "accepted_full"
+  | "accepted_partial"
+  | "rejected";
+
+export type PopulateValidationCoveragePolicy =
+  | "partial_allowed"
+  | "full_required";
+
+interface PopulateValidationIntent {
+  expectedEntities: string[];
+  coveragePolicy: PopulateValidationCoveragePolicy;
+  targetSource: string;
 }
 
 export interface PopulateRecipeRunResult extends PopulateRuntimeResult {
@@ -218,7 +237,7 @@ export function populateRecipeRunResultFromRuntimeResult(input: {
     ...input.result,
     recipeId: input.recipe.recipeId,
     recipeVersion: input.recipe.version,
-    runStatus: productionValidation.isValid ? "succeeded" : "failed",
+    runStatus: productionValidation.state === "rejected" ? "failed" : "succeeded",
     startedAt: input.startedAt,
     completedAt,
     runtimeMs: Date.now() - input.startedAtMs,
@@ -579,13 +598,25 @@ function requestedColumnNames(context: DatasetContext): string[] {
   return context.columns.map((column) => column.name);
 }
 
+function requiredColumnNamesForValidation(context: DatasetContext): string[] {
+  return context.columns
+    .filter((column) => column.nullable !== true)
+    .map((column) => column.name);
+}
+
+function columnRequirementLabels(context: DatasetContext): string {
+  return context.columns
+    .map((column) => `${column.name}${column.nullable ? " (nullable)" : " (required)"}`)
+    .join(", ");
+}
+
 function initialRuntimeInstructions(context: DatasetContext): string {
   return [
     "Use search_web before fetch_page unless an official source URL is already obvious.",
     "Prefer official docs, pricing, blog, product, or company pages over third-party summaries.",
     "Every inserted row must include source_url and evidence_quote cells when those columns exist.",
     "Every inserted row must include at least one source URL and one evidence quote.",
-    `Requested columns: ${requestedColumnNames(context).join(", ")}.`,
+    `Requested columns: ${columnRequirementLabels(context)}.`,
   ].join("\n");
 }
 
@@ -637,13 +668,43 @@ function validatePopulateRuntimeResult(input: {
   result: PopulateRuntimeResult;
   context: DatasetContext;
 }): PopulateRecipeProductionValidation {
-  const requestedColumns = input.context.columns.map((column) => column.name);
-  const expectedEntities = expectedEntitiesFromContext(input.context);
+  const requestedColumns = requestedColumnNames(input.context);
+  const requiredColumns = requiredColumnNamesForValidation(input.context);
+  const nullableColumns = requestedColumns.filter(
+    (columnName) => !requiredColumns.includes(columnName)
+  );
+  const validationIntent = validationIntentFromContext(input.context);
+  const expectedEntities = validationIntent.expectedEntities;
   const entityCoverage = expectedEntityCoverage({
     rows: input.result.rows,
     expectedEntities,
   });
   const rowCount = input.result.rows.length;
+  const rowSafety = input.result.rows.map((row, index) =>
+    productionRowSafety({
+      row,
+      rowNumber: index + 1,
+      requiredColumns,
+    })
+  );
+  const rowCriticalIssues = rowSafety.flatMap((safety) => safety.criticalIssues);
+  const dataCriticalIssues = criticalValidationIssues({
+    validationIssues: input.result.validationIssues,
+    nullableColumns,
+    requiredColumns,
+  });
+  const coverageIssues = coverageIssuesFromValidationIntent({
+    missingExpectedEntities: entityCoverage.missingExpectedEntities,
+  });
+  const safeRowCount = rowSafety.filter((safety) => safety.isSafe).length;
+  const state = validationStateFromSignals({
+    rowCount,
+    safeRowCount,
+    rowCriticalIssues,
+    dataCriticalIssues,
+    coverageIssues,
+    coveragePolicy: validationIntent.coveragePolicy,
+  });
   const requestedCellCompletenessRatio = averageRatio(
     input.result.rows.map((row) => cellCompletenessRatio(row, requestedColumns))
   );
@@ -653,12 +714,6 @@ function validatePopulateRuntimeResult(input: {
   const evidenceCoverageRatio = averageRatio(
     input.result.rows.map((row) => row.evidence.length > 0 ? 1 : 0)
   );
-  const criticalIssues = criticalIssuesForRows({
-    rows: input.result.rows,
-    requestedColumns,
-    validationIssues: input.result.validationIssues,
-    missingExpectedEntities: entityCoverage.missingExpectedEntities,
-  });
   const scoreComponents = [
     requestedCellCompletenessRatio,
     sourceUrlCoverageRatio,
@@ -670,58 +725,166 @@ function validatePopulateRuntimeResult(input: {
   const score = rowCount === 0
     ? 0
     : averageRatio(scoreComponents);
+  const criticalIssues = Array.from(new Set([
+    ...rowCriticalIssues,
+    ...dataCriticalIssues,
+    ...coverageIssues,
+  ]));
 
   return {
-    isValid: criticalIssues.length === 0,
+    state,
+    isValid: state === "accepted_full",
     score,
     rowCount,
+    safeRowCount,
     requestedCellCompletenessRatio,
     sourceUrlCoverageRatio,
     evidenceCoverageRatio,
     expectedEntityCoverageRatio: entityCoverage.expectedEntityCoverageRatio,
     expectedEntities,
     missingExpectedEntities: entityCoverage.missingExpectedEntities,
+    coveragePolicy: validationIntent.coveragePolicy,
+    targetSource: validationIntent.targetSource,
     criticalIssues,
     warnings: input.result.validationIssues,
   };
 }
 
-function criticalIssuesForRows(input: {
-  rows: PopulateRuntimeRow[];
-  requestedColumns: string[];
-  validationIssues: string[];
+function validationStateFromSignals(input: {
+  rowCount: number;
+  safeRowCount: number;
+  rowCriticalIssues: string[];
+  dataCriticalIssues: string[];
+  coverageIssues: string[];
+  coveragePolicy: PopulateValidationCoveragePolicy;
+}): PopulateValidationState {
+  if (input.rowCount === 0 || input.safeRowCount === 0) {
+    return "rejected";
+  }
+  if (input.rowCriticalIssues.length > 0 || input.dataCriticalIssues.length > 0) {
+    return "rejected";
+  }
+  if (input.coverageIssues.length > 0) {
+    return input.coveragePolicy === "partial_allowed"
+      ? "accepted_partial"
+      : "rejected";
+  }
+  return "accepted_full";
+}
+
+function coverageIssuesFromValidationIntent(input: {
   missingExpectedEntities: string[];
 }): string[] {
-  const issues: string[] = [];
-  if (input.rows.length === 0) {
-    issues.push("Populate runtime returned no rows.");
+  if (input.missingExpectedEntities.length === 0) {
+    return [];
   }
-  if (input.missingExpectedEntities.length > 0) {
-    issues.push(
-      `Missing expected entities: ${input.missingExpectedEntities.join(", ")}.`
+  return [
+    `Missing expected entities: ${input.missingExpectedEntities.join(", ")}.`,
+  ];
+}
+
+function productionRowSafety(input: {
+  row: PopulateRuntimeRow;
+  rowNumber: number;
+  requiredColumns: string[];
+}): {
+  isSafe: boolean;
+  criticalIssues: string[];
+} {
+  const criticalIssues: string[] = [];
+  const missingColumns = input.requiredColumns.filter(
+    (columnName) => isMissingCellValue(input.row.cells[columnName])
+  );
+  if (missingColumns.length > 0) {
+    criticalIssues.push(
+      `Row ${input.rowNumber} missing requested columns: ${missingColumns.join(", ")}.`
     );
   }
-  input.rows.forEach((row, index) => {
-    const missingColumns = input.requestedColumns.filter(
-      (columnName) => isMissingCellValue(row.cells[columnName])
+  if (input.row.sourceUrls.length === 0) {
+    criticalIssues.push(`Row ${input.rowNumber} has no source URL.`);
+  }
+  if (input.row.evidence.length === 0) {
+    criticalIssues.push(`Row ${input.rowNumber} has no evidence quote.`);
+  }
+  return {
+    isSafe: criticalIssues.length === 0,
+    criticalIssues,
+  };
+}
+
+function criticalValidationIssues(input: {
+  validationIssues: string[];
+  nullableColumns: string[];
+  requiredColumns: string[];
+}): string[] {
+  return input.validationIssues.filter((issue) =>
+    /failed|missing|no rows|not found|invented|invalid|approximation|manual review|not present|could not be determined|left blank|unavailable/i.test(issue) &&
+    !isNullableColumnOnlyWarning(issue, {
+      nullableColumns: input.nullableColumns,
+      requiredColumns: input.requiredColumns,
+    }) &&
+    !isNonBlockingOperationalWarning(issue)
+  );
+}
+
+export function safeRowsForPopulateCommit(input: {
+  context: DatasetContext;
+  run: PopulateRecipeRunResult;
+}): PopulateRuntimeRow[] {
+  const context = datasetContextSchema.parse(input.context);
+  const requiredColumns = requiredColumnNamesForValidation(context);
+  return input.run.rows.filter((row, index) =>
+    productionRowSafety({
+      row,
+      rowNumber: index + 1,
+      requiredColumns,
+    }).isSafe
+  );
+}
+
+function isNullableColumnOnlyWarning(
+  issue: string,
+  input: {
+    nullableColumns: string[];
+    requiredColumns: string[];
+  }
+): boolean {
+  if (!/not present|could not be determined|left blank|unavailable/i.test(issue)) {
+    return false;
+  }
+  const mentionsNullableColumn = input.nullableColumns.some((columnName) =>
+    issueMentionsColumn(issue, columnName)
+  );
+  if (!mentionsNullableColumn) {
+    return false;
+  }
+  return !input.requiredColumns.some((columnName) =>
+    issueMentionsColumn(issue, columnName)
+  );
+}
+
+function issueMentionsColumn(issue: string, columnName: string): boolean {
+  const normalizedIssue = normalizeColumnMention(issue);
+  const normalizedColumnName = normalizeColumnMention(columnName);
+  const meaningfulTokens = columnName
+    .split(/[^a-z0-9]+/i)
+    .map((part) => part.trim().toLowerCase())
+    .filter((part) => part.length >= 3)
+    .filter((part) =>
+      !["source", "url", "link", "evidence", "quote", "field", "value"].includes(part)
     );
-    if (missingColumns.length > 0) {
-      issues.push(`Row ${index + 1} missing requested columns: ${missingColumns.join(", ")}.`);
-    }
-    if (row.sourceUrls.length === 0) {
-      issues.push(`Row ${index + 1} has no source URL.`);
-    }
-    if (row.evidence.length === 0) {
-      issues.push(`Row ${index + 1} has no evidence quote.`);
-    }
-  });
-  input.validationIssues
-    .filter((issue) =>
-      /failed|missing|no rows|not found|invented|invalid/i.test(issue) &&
-      !isNonBlockingOperationalWarning(issue)
-    )
-    .forEach((issue) => issues.push(issue));
-  return Array.from(new Set(issues));
+  if (meaningfulTokens.length === 0) {
+    return normalizedIssue.includes(normalizedColumnName);
+  }
+  return meaningfulTokens.some((part) =>
+    normalizedIssue.includes(part.replace(/s$/, ""))
+  );
+}
+
+function normalizeColumnMention(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ");
 }
 
 function cellCompletenessRatio(
@@ -737,21 +900,82 @@ function cellCompletenessRatio(
   return filledCount / requestedColumns.length;
 }
 
+function validationIntentFromContext(context: DatasetContext): PopulateValidationIntent {
+  return {
+    expectedEntities: expectedEntitiesFromContext(context),
+    coveragePolicy: coveragePolicyFromContext(context),
+    targetSource: targetSourceFromContext(context),
+  };
+}
+
 function expectedEntitiesFromContext(context: DatasetContext): string[] {
-  const fromSegment = context.description.match(/\bfrom\s+([^?.]+)/i)?.[1];
-  if (!fromSegment) {
-    return [];
-  }
-  const entities = fromSegment
-    .split(/,|\band\b/i)
-    .map((entity) => entity.replace(/\b(the|a|an)\b/gi, " ").trim())
-    .map((entity) => entity.replace(/\s+/g, " "))
+  const description = context.description.replace(/\s+/g, " ").trim();
+  const entitySegments = [
+    ...entitySegmentsAfterConnectors(description),
+    capitalizedListSegment(description),
+  ].filter((segment): segment is string => Boolean(segment));
+  const entities = entitySegments
+    .flatMap((segment) => entitiesFromSegment(segment))
     .filter((entity) =>
       entity.length >= 2 &&
       entity.length <= 60 &&
       /[A-Z]/.test(entity)
     );
   return entities.length >= 2 ? Array.from(new Set(entities)) : [];
+}
+
+function entitySegmentsAfterConnectors(description: string): string[] {
+  return Array.from(
+    description.matchAll(
+      /\b(?:from|for|across|among|between)\s+([^?.]+)/gi
+    )
+  ).map((match) => stopEntitySegment(match[1] ?? ""));
+}
+
+function capitalizedListSegment(description: string): string | undefined {
+  const commaList = description.match(
+    /\b([A-Z][A-Za-z0-9.&-]*(?:\s+[A-Z][A-Za-z0-9.&-]*)?(?:\s*,\s*[A-Z][A-Za-z0-9.&-]*(?:\s+[A-Z][A-Za-z0-9.&-]*)?)+(?:,?\s+and\s+[A-Z][A-Za-z0-9.&-]*(?:\s+[A-Z][A-Za-z0-9.&-]*)?)?)\b/
+  )?.[1];
+  return commaList ? stopEntitySegment(commaList) : undefined;
+}
+
+function stopEntitySegment(segment: string): string {
+  return segment
+    .split(/\b(?:include|includes|including|with|where|that|whose|prefer|using|one row|one record|as|by)\b/i)[0]
+    ?.trim() ?? "";
+}
+
+function entitiesFromSegment(segment: string): string[] {
+  return segment
+    .split(/,|\band\b/i)
+    .map((entity) => entity.replace(/\b(the|a|an)\b/gi, " ").trim())
+    .map((entity) => entity.replace(/\s+/g, " "))
+    .map((entity) => entity.replace(/[.:;]+$/g, "").trim())
+    .filter((entity) => !isValidationIntentStopword(entity));
+}
+
+function isValidationIntentStopword(value: string): boolean {
+  return /^(create|dataset|current|public|api|model|pricing|latest|posts?|articles?|companies|sources?|official|pages?)$/i.test(value);
+}
+
+function coveragePolicyFromContext(
+  context: DatasetContext
+): PopulateValidationCoveragePolicy {
+  return /\b(no partial|full coverage|required coverage|must include all|every expected|all expected)\b/i.test(
+    context.description
+  )
+    ? "full_required"
+    : "partial_allowed";
+}
+
+function targetSourceFromContext(context: DatasetContext): string {
+  if (/\bofficial\b/i.test(context.description)) {
+    return "official public pages";
+  }
+  if (/\b(public|website|docs|blog|news|pricing)\b/i.test(context.description)) {
+    return "public web sources";
+  }
+  return "source-backed public data";
 }
 
 function expectedEntityCoverage(input: {
@@ -795,7 +1019,7 @@ function rowIdentityText(row: PopulateRuntimeRow): string {
 }
 
 function isNonBlockingOperationalWarning(issue: string): boolean {
-  return /^Structured fallback (search|fetch) failed/i.test(issue);
+  return /^(Structured fallback (search|fetch) failed|search_web failed|fetch_page failed|context URL fetch failed)/i.test(issue);
 }
 
 function isMissingCellValue(value: unknown): boolean {

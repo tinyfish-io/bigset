@@ -201,7 +201,7 @@ function stringValue(value: unknown): string | undefined {
     : undefined;
 }
 
-function dedupeBrowserActions(
+export function dedupeBrowserActions(
   actions: BrowserActionReport[]
 ): BrowserActionReport[] {
   const seen = new Set<string>();

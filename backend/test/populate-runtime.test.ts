@@ -147,6 +147,197 @@ test("populate runtime accepts structured fallback rows backed by captured sourc
   assert.deepEqual(result.validationIssues, []);
 });
 
+test("populate runtime builds simple title URL rows from captured sources", async () => {
+  const result = await runPopulateRuntime({
+    context: {
+      datasetId: "product-releases",
+      datasetName: "OpenAI product releases",
+      description:
+        "find OpenAI product release articles from https://openai.com/news/product-releases/ with post title and post URL",
+      columns: [
+        {
+          name: "Post Title",
+          type: "text" as const,
+          description: "Post title.",
+        },
+        {
+          name: "Post URL",
+          type: "url" as const,
+          description: "Post URL.",
+        },
+      ],
+    },
+    webTools: {
+      search: async () => [
+        {
+          title: "OpenAI Newsroom | Product",
+          snippet: "Product release listing page.",
+          url: "https://openai.com/news/product-releases/",
+        },
+        {
+          title: "Introducing GPT-5",
+          snippet: "OpenAI product release post.",
+          url: "https://openai.com/index/introducing-gpt-5/",
+        },
+      ],
+      fetch: async () => ({
+        title: "OpenAI Newsroom | Product",
+        text: "Product release listing page.",
+      }),
+    },
+    agentRunner: async ({ tools }) => {
+      const searchWeb = tools.search_web as ToolLike<
+        { query: string },
+        { results?: unknown[] }
+      >;
+      await searchWeb.execute({ query: "OpenAI product releases" });
+      return {
+        rows: [{
+          cells: {
+            "Post Title": "OpenAI Newsroom | Product",
+            "Post URL": "https://openai.com/news/product-releases/",
+          },
+          sourceUrls: ["https://openai.com/news/product-releases/"],
+          evidence: [{
+            columnName: "Post Title",
+            sourceUrl: "https://openai.com/news/product-releases/",
+            quote: "OpenAI Newsroom | Product",
+          }],
+        }],
+        validationIssues: [
+          "Individual article URLs are not present in the transcript; only the listing page URL is available.",
+        ],
+      };
+    },
+  });
+
+  assert.equal(result.rows.length, 1);
+  assert.equal(result.rows[0]?.cells["Post Title"], "Introducing GPT-5");
+  assert.equal(
+    result.rows[0]?.cells["Post URL"],
+    "https://openai.com/index/introducing-gpt-5/"
+  );
+  assert.deepEqual(result.validationIssues, []);
+});
+
+test("populate runtime shortcuts explicit URL title rows without agent call", async () => {
+  let agentCalls = 0;
+  const result = await runPopulateRuntime({
+    context: {
+      datasetId: "docs-pages",
+      datasetName: "OpenAI API docs pages",
+      description:
+        "make a table from these public OpenAI API docs pages with only page title and page URL: https://developers.openai.com/api/docs/mcp",
+      columns: [
+        {
+          name: "Page URL",
+          type: "url" as const,
+          description: "Page URL.",
+        },
+        {
+          name: "Page Title",
+          type: "text" as const,
+          description: "Page title.",
+        },
+      ],
+    },
+    webTools: {
+      search: async () => [],
+      fetch: async () => ({
+        title: "Building MCP servers for ChatGPT Apps and API integrations",
+        text: "Building MCP servers for ChatGPT Apps and API integrations\nMCP and Connectors",
+      }),
+    },
+    agentRunner: async () => {
+      agentCalls += 1;
+    },
+  });
+
+  assert.equal(agentCalls, 0);
+  assert.equal(result.rows.length, 1);
+  assert.equal(
+    result.rows[0]?.cells["Page Title"],
+    "Building MCP servers for ChatGPT Apps and API integrations"
+  );
+  assert.equal(
+    result.rows[0]?.cells["Page URL"],
+    "https://developers.openai.com/api/docs/mcp"
+  );
+  assert.deepEqual(result.validationIssues, []);
+  assert.equal(result.metrics.agentRuns, 0);
+});
+
+test("populate runtime does not build deterministic rows outside explicit URL scope", async () => {
+  const result = await runPopulateRuntime({
+    context: {
+      datasetId: "product-releases",
+      datasetName: "OpenAI product releases",
+      description:
+        "find OpenAI product release articles from https://openai.com/news/product-releases/ with post title and post URL",
+      columns: [
+        {
+          name: "Post Title",
+          type: "text" as const,
+          description: "Post title.",
+        },
+        {
+          name: "Post URL",
+          type: "url" as const,
+          description: "Post URL.",
+        },
+      ],
+    },
+    webTools: {
+      search: async () => [
+        {
+          title: "Building MCP servers for ChatGPT Apps and API integrations",
+          snippet: "OpenAI developer docs.",
+          url: "https://developers.openai.com/api/docs/mcp",
+        },
+      ],
+      fetch: async (input) => {
+        if (input.url === "https://openai.com/news/product-releases/") {
+          throw new Error("fetch failed");
+        }
+        return {
+          title: "Building MCP servers for ChatGPT Apps and API integrations",
+          text: "Building MCP servers for ChatGPT Apps and API integrations",
+        };
+      },
+    },
+    agentRunner: async ({ tools }) => {
+      const searchWeb = tools.search_web as ToolLike<
+        { query: string },
+        { results?: unknown[] }
+      >;
+      await searchWeb.execute({ query: "OpenAI product releases" });
+      return {
+        rows: [{
+          cells: {
+            "Post Title": "OpenAI Newsroom | Product",
+            "Post URL": "https://openai.com/news/product-releases/",
+          },
+          sourceUrls: ["https://openai.com/news/product-releases/"],
+          evidence: [{
+            columnName: "Post Title",
+            sourceUrl: "https://openai.com/news/product-releases/",
+            quote: "OpenAI Newsroom | Product",
+          }],
+        }],
+        validationIssues: [
+          "Individual article URLs are not present in the transcript; only the listing page URL is available.",
+        ],
+      };
+    },
+  });
+
+  assert.equal(result.rows.length, 0);
+  assert.match(
+    result.validationIssues.join("\n"),
+    /Mastra populate runtime returned no rows/
+  );
+});
+
 test("populate runtime rejects structured fallback rows without source-backed evidence", async () => {
   const result = await runPopulateRuntime({
     context,

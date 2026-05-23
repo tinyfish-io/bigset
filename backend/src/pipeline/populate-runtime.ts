@@ -202,6 +202,47 @@ export async function runPopulateRuntime(input: {
     maxRows: input.maxRows ?? 10,
     processTraceSteps,
   });
+  await seedCapturedSourcesFromContextUrls({
+    context: parsedContext,
+    webTools,
+    capturedSources,
+    validationIssues,
+    metrics,
+    processTraceSteps,
+  });
+  const explicitUrlRows = deterministicRowsFromCapturedSources({
+    context: parsedContext,
+    capturedSources,
+    maxRows: input.maxRows ?? 10,
+  });
+  if (urlsFromText(parsedContext.description).length > 0 && explicitUrlRows.length > 0) {
+    debugNotes.push(
+      "Explicit URL shortcut built title/URL rows from fetched source snippets."
+    );
+    const processTrace = populateProcessTraceFromSteps({
+      runtime: input.agentRunner ? "mastra-injected" : "mastra",
+      steps: processTraceSteps,
+      capturedSources,
+      selectedRowSource: "structured_recovery",
+      notes: debugNotes,
+    });
+    return {
+      rows: explicitUrlRows,
+      validationIssues: Array.from(new Set([
+        ...validationIssues,
+        ...validateRuntimeRows(explicitUrlRows),
+      ])),
+      usage: emptyUsage(),
+      metrics,
+      debug: {
+        capturedRows,
+        capturedSources,
+        selectedRowSource: "structured_recovery",
+        notes: debugNotes,
+        processTrace,
+      },
+    };
+  }
   const prompt = buildPopulatePrompt(parsedContext);
   let agentOutput: unknown;
 
@@ -316,6 +357,7 @@ export async function runPopulateRuntime(input: {
     }
   }
 
+  const validationIssueCountBeforeStructuredRows = validationIssues.length;
   const structuredRows = benchmarkRowsFromStructuredOutput({
     output: structuredOutputFromAgentResult(agentOutput),
     maxRows: input.maxRows ?? 10,
@@ -325,12 +367,41 @@ export async function runPopulateRuntime(input: {
     validationIssues,
     debugNotes,
   });
-  const structuredRowIssues = validateRuntimeRows(structuredRows);
+  const structuredOutputValidationIssues = validationIssues.slice(
+    validationIssueCountBeforeStructuredRows
+  );
+  const deterministicRows = deterministicRowsFromCapturedSources({
+    context: parsedContext,
+    capturedSources,
+    maxRows: input.maxRows ?? 10,
+  });
+  const rawStructuredRowIssues = validateRuntimeRows(structuredRows);
+  const deterministicRowIssues = validateRuntimeRows(deterministicRows);
+  const shouldUseDeterministicRows =
+    deterministicRows.length > 0 &&
+    deterministicRowIssues.length === 0 &&
+    (
+      structuredRows.length === 0 ||
+      rawStructuredRowIssues.length > 0 ||
+      structuredOutputValidationIssues.some((issue) =>
+        /approximation|manual review|not present|not accompanied|only .*listing page/i.test(issue)
+      )
+    );
+  if (shouldUseDeterministicRows) {
+    validationIssues.splice(validationIssueCountBeforeStructuredRows);
+    debugNotes.push(
+      "Deterministic source fallback built title/URL rows from captured source snippets."
+    );
+  }
+  const fallbackStructuredRows = shouldUseDeterministicRows
+    ? deterministicRows
+    : structuredRows;
+  const structuredRowIssues = validateRuntimeRows(fallbackStructuredRows);
   if (
     insertedRows.length > 0 &&
     insertedRowIssues.length === 0 &&
-    structuredRows.length > 0 &&
-    hasContradictingStructuredRows(insertedRows, structuredRows)
+    fallbackStructuredRows.length > 0 &&
+    hasContradictingStructuredRows(insertedRows, fallbackStructuredRows)
   ) {
     validationIssues.push(
       "Structured populate rows differed from insert_row rows and were ignored."
@@ -339,14 +410,14 @@ export async function runPopulateRuntime(input: {
   const rows = selectBestRuntimeRows({
     insertedRows,
     insertedRowIssues,
-    structuredRows,
+    structuredRows: fallbackStructuredRows,
     structuredRowIssues,
     debugNotes,
   });
   const selectedRowSource = selectedRowSourceForRows({
     rows,
     insertedRows,
-    structuredRows,
+    structuredRows: fallbackStructuredRows,
   });
   const processTrace = populateProcessTraceFromSteps({
     runtime: input.agentRunner ? "mastra-injected" : "mastra",
@@ -720,6 +791,11 @@ function buildStructuredRowsPrompt(input: {
   capturedSources: PopulateRuntimeCapturedSource[];
 }): string {
   const columnNames = input.context.columns.map((column) => column.name);
+  const columnRequirements = input.context.columns.map((column) => ({
+    name: column.name,
+    nullable: column.nullable === true,
+    description: column.description ?? "",
+  }));
   const entities = entityCandidatesFromDescription(input.context.description);
   const officialHints = Object.fromEntries(
     entities.map((entity) => [
@@ -740,8 +816,8 @@ function buildStructuredRowsPrompt(input: {
   return `Dataset description:
 ${input.context.description}
 
-Required columns:
-${JSON.stringify(columnNames)}
+Columns:
+${JSON.stringify(columnRequirements)}
 
 Named entities, when present:
 ${JSON.stringify(entities)}
@@ -756,7 +832,9 @@ Return rows using this exact shape:
 { "rows": [{ "cells": {}, "sourceUrls": [], "evidence": [{ "columnName": "", "sourceUrl": "", "quote": "" }], "needsReview": true }], "validationIssues": [] }
 
 Rules:
-- cells must contain exactly the required columns.
+- cells must contain exactly the listed columns.
+- non-nullable cells must only be filled with facts directly present in the transcript.
+- nullable cells may be null when the source transcript does not support a value.
 - sourceUrls must contain exact URLs from the captured source transcript.
 - evidence.sourceUrl must exactly match one captured source URL.
 - evidence.quote must be copied verbatim from that source text.
@@ -1119,6 +1197,55 @@ function createPopulateRuntimeTools(input: {
   };
 }
 
+async function seedCapturedSourcesFromContextUrls(input: {
+  context: DatasetContext;
+  webTools: PopulateRuntimeWebTools;
+  capturedSources: PopulateRuntimeCapturedSource[];
+  validationIssues: string[];
+  metrics: PopulateRuntimeResult["metrics"];
+  processTraceSteps: PopulateRuntimeTraceStep[];
+}): Promise<void> {
+  const urls = urlsFromText(input.context.description).slice(0, 5);
+  for (const url of urls) {
+    input.metrics.fetchCalls += 1;
+    try {
+      const page = await input.webTools.fetch({ url });
+      input.capturedSources.push({
+        url,
+        text: [page.title, page.text].filter(Boolean).join("\n"),
+        source: "fetch",
+      });
+      input.processTraceSteps.push({
+        kind: "fetch",
+        label: "context-url-fetch",
+        status: "succeeded",
+        input: { url },
+        output: {
+          title: page.title,
+          textCharacters: page.text?.length ?? 0,
+        },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      input.validationIssues.push(`context URL fetch failed for ${url}: ${message}`);
+      input.processTraceSteps.push({
+        kind: "fetch",
+        label: "context-url-fetch",
+        status: "failed",
+        input: { url },
+        error: message,
+      });
+    }
+  }
+}
+
+function urlsFromText(value: string): string[] {
+  return Array.from(new Set(
+    [...value.matchAll(/https?:\/\/[^\s),]+/gi)]
+      .map((match) => match[0].replace(/[.,;:]+$/, ""))
+  ));
+}
+
 function createTinyFishWebTools(): PopulateRuntimeWebTools {
   return {
     async search({ query }) {
@@ -1143,31 +1270,112 @@ function createTinyFishWebTools(): PopulateRuntimeWebTools {
     },
     async fetch({ url }) {
       const apiKey = requiredEnv("TINYFISH_API_KEY");
-      const response = await fetch("https://api.fetch.tinyfish.ai", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-API-Key": apiKey,
-        },
-        body: JSON.stringify({ urls: [url], format: "markdown" }),
-      });
-      if (!response.ok) {
-        throw new Error(`TinyFish fetch returned HTTP ${response.status}.`);
+      try {
+        const response = await fetch("https://api.fetch.tinyfish.ai", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-API-Key": apiKey,
+          },
+          body: JSON.stringify({ urls: [url], format: "markdown" }),
+        });
+        if (!response.ok) {
+          throw new Error(`TinyFish fetch returned HTTP ${response.status}.`);
+        }
+        const payload = await response.json() as {
+          results?: Array<{ title?: string; text?: string }>;
+          errors?: Array<{ error?: string }>;
+        };
+        const page = payload.results?.[0];
+        if (!page && payload.errors?.[0]) {
+          throw new Error(payload.errors[0].error ?? "TinyFish fetch failed.");
+        }
+        return {
+          title: page?.title,
+          text: page?.text,
+        };
+      } catch (error) {
+        const fallbackPage = await fetchPublicStaticPage({ url });
+        if (fallbackPage.text) {
+          return fallbackPage;
+        }
+        throw error;
       }
-      const payload = await response.json() as {
-        results?: Array<{ title?: string; text?: string }>;
-        errors?: Array<{ error?: string }>;
-      };
-      const page = payload.results?.[0];
-      if (!page && payload.errors?.[0]) {
-        throw new Error(payload.errors[0].error ?? "TinyFish fetch failed.");
-      }
-      return {
-        title: page?.title,
-        text: page?.text,
-      };
     },
   };
+}
+
+async function fetchPublicStaticPage(input: {
+  url: string;
+}): Promise<PopulateFetchedPage> {
+  const targetUrl = new URL(input.url);
+  if (!["http:", "https:"].includes(targetUrl.protocol)) {
+    return {};
+  }
+  if (
+    ["localhost", "127.0.0.1", "::1"].includes(targetUrl.hostname) ||
+    /\.local$/i.test(targetUrl.hostname)
+  ) {
+    return {};
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20_000);
+  try {
+    const response = await fetch(targetUrl, {
+      signal: controller.signal,
+      headers: {
+        "User-Agent": "BigSetPopulate/0.1 (+https://bigset.local)",
+        "Accept": "text/html,text/plain,application/xhtml+xml",
+      },
+    });
+    if (!response.ok) {
+      return {};
+    }
+    const contentType = response.headers.get("content-type") ?? "";
+    if (!/text\/html|text\/plain|application\/xhtml\+xml/i.test(contentType)) {
+      return {};
+    }
+    const rawText = await response.text();
+    return htmlPageToFetchedPage(rawText);
+  } catch {
+    return {};
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function htmlPageToFetchedPage(rawText: string): PopulateFetchedPage {
+  const title = decodeHtmlEntities(
+    rawText.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] ?? ""
+  ).trim();
+  const withoutScripts = rawText
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ");
+  const text = decodeHtmlEntities(
+    withoutScripts
+      .replace(/<br\s*\/?>/gi, "\n")
+      .replace(/<\/(p|li|h[1-6]|article|section|div)>/gi, "\n")
+      .replace(/<[^>]+>/g, " ")
+  )
+    .replace(/\s+\n/g, "\n")
+    .replace(/\n\s+/g, "\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim()
+    .slice(0, 20_000);
+  return { title: title || undefined, text };
+}
+
+function decodeHtmlEntities(value: string): string {
+  return value
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, "\"")
+    .replace(/&#39;/g, "'");
 }
 
 function benchmarkRowFromInsertedData(
@@ -1253,6 +1461,170 @@ function benchmarkRowsFromStructuredOutput(input: {
   });
 
   return selectRepresentativeRows(rows, input.context);
+}
+
+function deterministicRowsFromCapturedSources(input: {
+  context: DatasetContext;
+  capturedSources: PopulateRuntimeCapturedSource[];
+  maxRows: number;
+}): PopulateRuntimeRow[] {
+  const explicitSourceUrls = urlsFromText(input.context.description);
+  const titleColumn = input.context.columns.find((column) =>
+    /title|name/i.test(column.name)
+  );
+  const urlColumn = input.context.columns.find((column) =>
+    /url|link|website/i.test(column.name)
+  );
+  if (!titleColumn || !urlColumn) {
+    return [];
+  }
+  const requiredColumns = input.context.columns.filter(
+    (column) => column.nullable !== true
+  );
+  const canBuildRequiredColumns = requiredColumns.every((column) =>
+    column.name === titleColumn.name || column.name === urlColumn.name
+  );
+  if (!canBuildRequiredColumns) {
+    return [];
+  }
+
+  const seenUrls = new Set<string>();
+  return input.capturedSources
+    .filter((source) => source.url && !seenUrls.has(source.url))
+    .map((source) => {
+      seenUrls.add(source.url);
+      return source;
+    })
+    .map((source) => ({
+      source,
+      title: firstUsefulSourceTitle(source.text),
+      score: capturedSourceRelevanceScore(source, input.context),
+    }))
+    .filter((candidate) =>
+      candidate.title &&
+      candidate.score > 0 &&
+      sourceMatchesExplicitUrlScope(candidate.source.url, explicitSourceUrls) &&
+      !isListingSource(candidate.source, candidate.title)
+    )
+    .sort((a, b) => b.score - a.score)
+    .slice(0, input.maxRows)
+    .map(({ source, title }) => {
+      const cells = Object.fromEntries(
+        input.context.columns.map((column) => {
+          if (column.name === titleColumn.name) {
+            return [column.name, title];
+          }
+          if (column.name === urlColumn.name) {
+            return [column.name, source.url];
+          }
+          return [column.name, null];
+        })
+      ) as Record<string, PopulateCellValue>;
+      return {
+        cells,
+        sourceUrls: [source.url],
+        evidence: [{
+          columnName: titleColumn.name,
+          sourceUrl: source.url,
+          quote: title,
+        }],
+        needsReview: true,
+      };
+    });
+}
+
+function sourceMatchesExplicitUrlScope(
+  sourceUrl: string,
+  explicitSourceUrls: string[]
+): boolean {
+  if (explicitSourceUrls.length === 0) {
+    return true;
+  }
+  const source = parseHttpUrl(sourceUrl);
+  if (!source) {
+    return false;
+  }
+  return explicitSourceUrls.some((explicitUrl) => {
+    const explicit = parseHttpUrl(explicitUrl);
+    if (!explicit) {
+      return false;
+    }
+    if (normalizedUrlWithoutHash(source) === normalizedUrlWithoutHash(explicit)) {
+      return true;
+    }
+    return source.hostname === explicit.hostname;
+  });
+}
+
+function parseHttpUrl(value: string): URL | undefined {
+  try {
+    const url = new URL(value);
+    return /^https?:$/i.test(url.protocol) ? url : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizedUrlWithoutHash(url: URL): string {
+  const normalized = new URL(url.toString());
+  normalized.hash = "";
+  return normalized.toString().replace(/\/$/, "");
+}
+
+function firstUsefulSourceTitle(text: string): string {
+  return text
+    .split("\n")
+    .map((line) => line.trim())
+    .find((line) =>
+      line.length >= 8 &&
+      line.length <= 160 &&
+      !/^https?:\/\//i.test(line) &&
+      !/^source\s+\d+/i.test(line)
+    ) ?? "";
+}
+
+function capturedSourceRelevanceScore(
+  source: PopulateRuntimeCapturedSource,
+  context: DatasetContext
+): number {
+  const text = `${source.url}\n${source.text}`.toLowerCase();
+  const descriptionTokens = context.description
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((token) =>
+      token.length >= 4 &&
+      !["from", "with", "post", "posts", "title", "titles", "url", "urls", "article", "articles", "find"].includes(token)
+    );
+  let score = 1;
+  for (const token of new Set(descriptionTokens)) {
+    if (text.includes(token)) {
+      score += 1;
+    }
+  }
+  if (/\/index\//i.test(source.url)) {
+    score += 2;
+  }
+  if (/\/news\/product/i.test(source.url)) {
+    score += 2;
+  }
+  if (/openai\.com\/news\/?$|openai\.com\/news\/(product-releases|research|company-announcements)\/?$/i.test(source.url)) {
+    score -= 3;
+  }
+  if (/mcp/i.test(source.url) && !/mcp/i.test(context.description)) {
+    score -= 4;
+  }
+  return score;
+}
+
+function isListingSource(
+  source: PopulateRuntimeCapturedSource,
+  title: string
+): boolean {
+  return (
+    /openai\.com\/news\/?$|openai\.com\/news\/(product-releases|research|company-announcements)\/?$/i.test(source.url) ||
+    /\b(newsroom|recent news)\b/i.test(title) ||
+    /^openai news$/i.test(title)
+  );
 }
 
 function validateStructuredRowColumns(
