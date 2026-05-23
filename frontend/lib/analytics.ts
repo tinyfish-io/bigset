@@ -84,8 +84,6 @@ export function initAnalytics(): boolean {
     //   - maskInputOptions: every form input/textarea value is masked
     //     unconditionally. Catches the search box, the wizard prompt,
     //     Clerk's email + password fields.
-    //   - recordConsole: console.error/warn shows up alongside the
-    //     replay timeline — invaluable for "user says it broke".
     //   - recordCrossOriginIframes: false → Clerk's hosted iframes
     //     (if any) are not pierced into.
     session_recording: {
@@ -97,7 +95,6 @@ export function initAnalytics(): boolean {
         email: true,
       },
       recordCrossOriginIframes: false,
-      recordConsole: true,
     },
 
     loaded: () => {

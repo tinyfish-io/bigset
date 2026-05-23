@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { EVENTS, track } from "@/lib/analytics";
 
 type Theme = "light" | "dark";
@@ -30,16 +30,8 @@ function applyTheme(theme: Theme): void {
 }
 
 export function ThemeToggle({ className = "" }: { className?: string }) {
-  // We don't know the theme until we've mounted (server can't read
-  // localStorage). Render the toggle invisible-but-laid-out until then
-  // so it doesn't pop in and shift layout.
-  const [mounted, setMounted] = useState(false);
-  const [theme, setTheme] = useState<Theme>("light");
-
-  useEffect(() => {
-    setTheme(readEffectiveTheme());
-    setMounted(true);
-  }, []);
+  // Client-side only: read persisted preference when React initializes.
+  const [theme, setTheme] = useState<Theme>(() => readEffectiveTheme());
 
   function toggle() {
     const next: Theme = theme === "dark" ? "light" : "dark";
@@ -63,7 +55,6 @@ export function ThemeToggle({ className = "" }: { className?: string }) {
       aria-label={label}
       title={label}
       className={`inline-flex items-center justify-center h-7 w-7 text-muted hover:text-foreground transition-colors ${className}`}
-      style={{ opacity: mounted ? 1 : 0 }}
     >
       {/* Both icons rendered, one shown based on theme. Avoids a flash
           when switching since neither has to mount/unmount. */}

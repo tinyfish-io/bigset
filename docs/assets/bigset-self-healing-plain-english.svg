@@ -1,0 +1,118 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
+  <title id="title">BigSet self-healing data collection flow</title>
+  <desc id="desc">Plain-English diagram showing how a BigSet prompt becomes sourced dataset rows, how bad output is rejected, and which browser replay pieces are still future work.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#111827" />
+    </marker>
+    <marker id="goodArrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#166534" />
+    </marker>
+    <marker id="badArrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#991b1b" />
+    </marker>
+    <style>
+      .bg { fill: #f8fafc; }
+      .title { font: 700 48px Inter, Arial, sans-serif; fill: #0f172a; }
+      .subtitle { font: 500 20px Inter, Arial, sans-serif; fill: #475569; }
+      .box { fill: #ffffff; stroke: #0f172a; stroke-width: 2; rx: 14; }
+      .stage { fill: #eef6ff; stroke: #1d4ed8; }
+      .heal { fill: #f0fdf4; stroke: #15803d; }
+      .bad { fill: #fef2f2; stroke: #b91c1c; }
+      .future { fill: #fff7ed; stroke: #c2410c; }
+      .text { font: 600 20px Inter, Arial, sans-serif; fill: #111827; }
+      .small { font: 500 16px Inter, Arial, sans-serif; fill: #374151; }
+      .tiny { font: 500 14px Inter, Arial, sans-serif; fill: #475569; }
+      .label { font: 700 15px Inter, Arial, sans-serif; fill: #334155; }
+      .arrow { stroke: #111827; stroke-width: 3; fill: none; marker-end: url(#arrow); }
+      .goodLine { stroke: #166534; stroke-width: 3; fill: none; marker-end: url(#goodArrow); }
+      .badLine { stroke: #991b1b; stroke-width: 3; fill: none; marker-end: url(#badArrow); }
+      .dash { stroke-dasharray: 9 8; }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1600" height="900" />
+  <text class="title" x="80" y="72">BigSet self-healing data collection</text>
+  <text class="subtitle" x="82" y="108">Goal: user prompt in the app -> real sourced rows in the dataset, with bad output blocked.</text>
+
+  <rect class="box stage" x="70" y="165" width="190" height="100" />
+  <text class="text" x="96" y="205">1. User prompt</text>
+  <text class="small" x="96" y="235">Ask BigSet for a table</text>
+
+  <rect class="box stage" x="310" y="165" width="210" height="100" />
+  <text class="text" x="340" y="205">2. Frontend</text>
+  <text class="small" x="340" y="235">Create dataset shell</text>
+
+  <rect class="box stage" x="570" y="165" width="235" height="100" />
+  <text class="text" x="600" y="205">3. Backend /populate</text>
+  <text class="small" x="600" y="235">Start data collection</text>
+
+  <rect class="box stage" x="855" y="165" width="230" height="100" />
+  <text class="text" x="886" y="205">4. Search + fetch</text>
+  <text class="small" x="886" y="235">Find real sources</text>
+
+  <rect class="box stage" x="1135" y="145" width="300" height="140" />
+  <text class="text" x="1170" y="190">5. Fill rows</text>
+  <text class="small" x="1170" y="222">Use fetched pages</text>
+  <text class="small" x="1170" y="248">Use browser data when needed</text>
+
+  <path class="arrow" d="M260 215 H310" />
+  <path class="arrow" d="M520 215 H570" />
+  <path class="arrow" d="M805 215 H855" />
+  <path class="arrow" d="M1085 215 H1135" />
+
+  <rect class="box stage" x="855" y="335" width="250" height="126" />
+  <text class="text" x="886" y="378">Browser helper</text>
+  <text class="small" x="886" y="410">TinyFish clicks pages</text>
+  <text class="small" x="886" y="436">when fetch is not enough</text>
+
+  <rect class="box future" x="1150" y="335" width="285" height="126" />
+  <text class="text" x="1180" y="378">Draft replay script</text>
+  <text class="small" x="1180" y="410">Save browser steps</text>
+  <text class="small" x="1180" y="436">Not trusted cron yet</text>
+
+  <path class="arrow" d="M970 265 V335" />
+  <path class="arrow" d="M1105 398 H1150" />
+  <path class="arrow" d="M1292 335 V285" />
+
+  <rect class="box heal" x="580" y="520" width="565" height="215" />
+  <text class="label" x="610" y="555">SELF-HEALING LAYER</text>
+  <rect class="box heal" x="610" y="580" width="220" height="105" />
+  <text class="text" x="635" y="620">Check output</text>
+  <text class="small" x="635" y="650">Rows + sources + evidence</text>
+
+  <rect class="box heal" x="885" y="580" width="225" height="105" />
+  <text class="text" x="910" y="620">Good output?</text>
+  <text class="small" x="910" y="650">Matches required table</text>
+
+  <path class="arrow" d="M1285 285 V505 H720 V580" />
+  <path class="arrow" d="M830 632 H885" />
+
+  <rect class="box heal" x="1210" y="540" width="310" height="120" />
+  <text class="text" x="1238" y="582">Good: save + write rows</text>
+  <text class="small" x="1238" y="614">Save extraction plan</text>
+  <text class="small" x="1238" y="638">Write rows to DB with safety throttle</text>
+
+  <rect class="box bad" x="1210" y="700" width="310" height="120" />
+  <text class="text" x="1238" y="742">Bad: reject + repair</text>
+  <text class="small" x="1238" y="774">Do not save fake success</text>
+  <text class="small" x="1238" y="798">Search/fetch missing cells</text>
+
+  <path class="goodLine" d="M1110 612 H1210" />
+  <path class="badLine" d="M998 685 V760 H1210" />
+  <path class="badLine dash" d="M1210 760 H975 V461" />
+
+  <rect class="box future" x="70" y="540" width="430" height="190" />
+  <text class="label" x="100" y="575">FUTURE REPLAY</text>
+  <text class="text" x="100" y="615">Scheduled browser rerun</text>
+  <text class="small" x="100" y="645">Cheap rerun after script is proven</text>
+  <text class="text" x="100" y="690">Script repair</text>
+  <text class="small" x="100" y="720">If site changes, live agent regenerates script</text>
+
+  <path class="arrow dash" d="M1210 398 H500 V590" />
+
+  <rect class="box" x="70" y="780" width="1450" height="75" />
+  <text class="label" x="100" y="810">STATUS</text>
+  <text class="small" x="100" y="838">Built now: validation, reject bad runs, save good extraction plans, row-write safety throttle, draft browser replay script generation.</text>
+  <text class="small" x="850" y="838">Still next: full Mastra app integration, scheduled replay, script auto-repair, production-scale proof.</text>
+</svg>

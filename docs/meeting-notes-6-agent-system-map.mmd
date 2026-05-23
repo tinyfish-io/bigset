@@ -9,19 +9,19 @@ flowchart LR
     populate_agent["Agent 2: populate dataset rows"]
   end
 
-  subgraph browser["Browser / Playwright stage"]
+  subgraph browser["Browser replay stage"]
     tinyfish_agent["TinyFish Agent navigates site"]
     browser_actions["Explicit browser actions"]
-    playwright_script["Playwright candidate script"]
-    cron_future["Cron replay future"]
+    playwright_script["Draft browser replay script"]
+    cron_future["Scheduled replay future"]
   end
 
   subgraph healing["Self-healing layer"]
-    oracle["Oracle: defines good output"]
+    oracle["Output contract: defines good output"]
     validate["Validate rows, sources, evidence"]
-    promote["Promote good recipe"]
+    promote["Save working extraction plan"]
     reject["Reject bad candidate"]
-    commit_cap["Commit cap: 100 rows per hour per dataset"]
+    commit_cap["Write rows to DB with safety throttle"]
     repair["Repair missing fields across searches"]
   end
 
