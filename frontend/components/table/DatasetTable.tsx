@@ -60,11 +60,13 @@ export function DatasetTable({
   rows,
   datasetId,
   selection,
+  onCellExpand,
 }: {
   dataset: DatasetMeta;
   rows: DatasetRow[];
   datasetId: string;
   selection: Selection;
+  onCellExpand: (columnName: string, value: unknown, rowId: string) => void;
 }) {
   const tableContainerRef = useRef<HTMLDivElement>(null);
   const [containerHeight, setContainerHeight] = useState(600);
@@ -126,8 +128,9 @@ export function DatasetTable({
       columnWidths,
       isSelected: selection.has,
       toggleRow,
+      onCellExpand,
     }),
-    [tableRows, dataset.columns, columnWidths, selection.has, toggleRow],
+    [tableRows, dataset.columns, columnWidths, selection.has, toggleRow, onCellExpand],
   );
 
   return (

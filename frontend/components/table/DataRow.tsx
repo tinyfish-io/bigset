@@ -6,6 +6,7 @@ import type { Row } from "@tanstack/react-table";
 import type { DatasetRow, DatasetColumn } from "./types";
 import { CellValue } from "./CellValue";
 import { floorWidth } from "./utils";
+import { Maximize2 } from "lucide-react";
 
 export interface DataRowData {
   rows: Row<DatasetRow>[];
@@ -13,6 +14,7 @@ export interface DataRowData {
   columnWidths: number[];
   isSelected: (id: string) => boolean;
   toggleRow: (id: string, shiftKey: boolean) => void;
+  onCellExpand: (columnName: string, value: unknown, rowId: string) => void;
 }
 
 function DataRowImpl({
@@ -24,7 +26,7 @@ function DataRowImpl({
   index: number;
   style: CSSProperties;
 }) {
-  const { rows, columns, columnWidths, isSelected, toggleRow } = data;
+  const { rows, columns, columnWidths, isSelected, toggleRow, onCellExpand } = data;
   const row = rows[index];
 
   if (!row) {
@@ -65,16 +67,9 @@ function DataRowImpl({
         return (
           <div
             key={col.name}
-            // Session-replay masking: the cell VALUE could be anything
-            // (scraped emails, prices, internal data). Mask the text in
-            // replays. Layout, column structure, and clicks remain
-            // visible — enough to diagnose UI issues without leaking
-            // user data. See lib/analytics.ts session_recording config.
             data-ph-mask-text="true"
-            className={`shrink-0 overflow-hidden text-ellipsis whitespace-nowrap border-r border-border/30 last:border-r-0 ${
-              cellIdx === 0
-                ? "font-medium text-foreground"
-                : "text-foreground/70"
+            className={`group relative shrink-0 overflow-hidden text-ellipsis whitespace-nowrap border-r border-border/30 last:border-r-0 ${
+              cellIdx === 0 ? "font-medium text-foreground" : "text-foreground/70"
             }`}
             style={{
               width,
@@ -82,6 +77,17 @@ function DataRowImpl({
             }}
           >
             <CellValue value={value} type={col.type} />
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onCellExpand(col.name, value, row.original._id);
+              }}
+              className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 p-0.5 rounded bg-foreground/5 hover:bg-foreground/10 text-muted hover:text-foreground transition-all"
+              aria-label="Expand cell"
+            >
+              <Maximize2 className="size-3" />
+            </button>
           </div>
         );
       })}

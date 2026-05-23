@@ -8,9 +8,11 @@ import { useAuth } from "@clerk/nextjs";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { DatasetTable } from "@/components/table";
+import type { DatasetColumn } from "@/components/table/types";
 import { useSelection } from "@/components/table/use-selection";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { StatusBadge } from "@/components/dataset/StatusBadge";
+import { SideSheet, CellDetail } from "@/components/SideSheet";
 import { downloadCSV, downloadXLSX } from "@/lib/export";
 import { populate } from "@/lib/backend";
 import { EVENTS, captureException, track } from "@/lib/analytics";
@@ -25,6 +27,11 @@ export default function DatasetPage() {
   const [editingName, setEditingName] = useState(false);
   const [nameValue, setNameValue] = useState("");
   const nameInputRef = useRef<HTMLInputElement>(null);
+  const [sideSheet, setSideSheet] = useState<{
+    column: DatasetColumn;
+    value: unknown;
+    rowId: string;
+  } | null>(null);
 
   const updateDetails = useMutation(api.datasets.updateDetails);
 
@@ -156,6 +163,13 @@ export default function DatasetPage() {
 
   function cancelNameEdit() {
     setEditingName(false);
+  }
+
+  function handleCellExpand(columnName: string, value: unknown, rowId: string) {
+    if (!dataset) return;
+    const column = dataset.columns.find((c) => c.name === columnName);
+    if (!column) return;
+    setSideSheet({ column, value, rowId });
   }
 
   if (authLoading || dataset === undefined || rows === undefined) {
@@ -291,7 +305,22 @@ export default function DatasetPage() {
         rows={rows}
         datasetId={datasetId}
         selection={selection}
+        onCellExpand={handleCellExpand}
       />
+
+      <SideSheet
+        open={sideSheet !== null}
+        onClose={() => setSideSheet(null)}
+      >
+        {sideSheet && (
+          <CellDetail
+            columnName={sideSheet.column.name}
+            columnType={sideSheet.column.type}
+            description={sideSheet.column.description}
+            value={sideSheet.value}
+          />
+        )}
+      </SideSheet>
     </div>
   );
 }
