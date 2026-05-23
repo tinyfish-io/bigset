@@ -170,8 +170,9 @@ export default function NewDatasetPage() {
     if (isCreating) return;
     setIsCreating(true);
     setError(null);
+    let datasetId: string;
     try {
-      const datasetId = await createDataset({
+      datasetId = await createDataset({
         name: datasetName,
         description: prompt,
         cadence: CADENCE_LABELS[cadence],
@@ -181,16 +182,7 @@ export default function NewDatasetPage() {
           description: c.description || undefined,
         })),
       });
-      track(EVENTS.DATASET_CREATED, {
-        datasetId,
-        column_count: columns.length,
-        cadence: CADENCE_LABELS[cadence],
-      });
-      router.push(`/dataset/${datasetId}`);
     } catch (err) {
-      // Most commonly: free-tier monthly quota exhausted. Convex returns
-      // "Monthly free-tier quota exceeded: 2500/2500 used this period, 1
-      // more requested" — we substitute a UX-friendly message.
       const message = err instanceof Error ? err.message : "Failed to create dataset";
       setError(
         message.includes("quota exceeded")
@@ -198,7 +190,10 @@ export default function NewDatasetPage() {
           : message,
       );
       setIsCreating(false);
+      return;
     }
+    try { track(EVENTS.DATASET_CREATED, { datasetId, column_count: columns.length, cadence: CADENCE_LABELS[cadence] }); } catch {}
+    router.push(`/dataset/${datasetId}`);
   }
 
   return (

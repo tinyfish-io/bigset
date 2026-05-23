@@ -150,9 +150,11 @@ export default function DashboardPage() {
           {atLimit ? (
             <div className="relative group">
               <span
+                role="button"
+                tabIndex={0}
                 aria-disabled="true"
                 aria-describedby="quota-popover"
-                className="inline-block rounded-lg border border-border bg-surface px-5 py-2.5 text-sm font-semibold text-muted cursor-not-allowed select-none"
+                className="inline-block rounded-lg border border-border bg-surface px-5 py-2.5 text-sm font-semibold text-muted cursor-not-allowed select-none focus:outline-none focus:ring-1 focus:ring-foreground/20"
               >
                 + New Dataset
               </span>
@@ -165,7 +167,7 @@ export default function DashboardPage() {
               <div
                 id="quota-popover"
                 role="tooltip"
-                className="pointer-events-none absolute left-full ml-3 top-1/2 -translate-y-1/2 z-20 w-64 rounded-md border border-border bg-surface px-3 py-2 text-xs text-foreground opacity-0 translate-x-[-4px] transition-all duration-150 ease-out shadow-[0_4px_12px_rgba(0,0,0,0.08)] dark:shadow-[0_4px_12px_rgba(0,0,0,0.4)] group-hover:opacity-100 group-hover:translate-x-0"
+                className="pointer-events-none absolute left-full ml-3 top-1/2 -translate-y-1/2 z-20 w-64 rounded-md border border-border bg-surface px-3 py-2 text-xs text-foreground opacity-0 translate-x-[-4px] transition-all duration-150 ease-out shadow-[0_4px_12px_rgba(0,0,0,0.08)] dark:shadow-[0_4px_12px_rgba(0,0,0,0.4)] group-hover:opacity-100 group-hover:translate-x-0 group-focus-within:opacity-100 group-focus-within:translate-x-0"
               >
                 <span className="absolute -left-1.5 top-1/2 -translate-y-1/2 h-3 w-3 rotate-45 border-l border-b border-border bg-surface" />
                 Free-tier limit reached (2,500 row modifications). Please upgrade.
