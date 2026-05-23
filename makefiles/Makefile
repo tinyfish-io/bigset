@@ -1,4 +1,4 @@
-.PHONY: all dev down clean convex-push convex-env
+.PHONY: all dev down clean convex-push convex-env verify-self-healing
 
 all: dev
 
@@ -32,6 +32,9 @@ convex-push:
 	@cd frontend && npx convex deploy \
 		--url http://127.0.0.1:3210 \
 		--admin-key "$$(grep CONVEX_SELF_HOSTED_ADMIN_KEY .env.local | cut -d= -f2-)"
+
+verify-self-healing:
+	bash scripts/verify-self-healing-stack.sh
 
 down:
 	docker compose -f docker-compose.dev.yml down

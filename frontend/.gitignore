@@ -34,6 +34,9 @@ yarn-error.log*
 .env*
 !.env.example
 
+# Cursor / Convex agent skills cache (skills-lock.json may be committed for reproducibility).
+.agents/
+
 # package manager: this project uses bun (bun.lock is the source of truth).
 # Reject npm/yarn lockfiles so they don't drift from bun's resolution.
 package-lock.json

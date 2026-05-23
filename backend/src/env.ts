@@ -24,4 +24,10 @@ export const env = {
   CLERK_PUBLISHABLE_KEY: process.env.CLERK_PUBLISHABLE_KEY,
 
   OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY,
+  TINYFISH_API_KEY: process.env.TINYFISH_API_KEY,
+
+  // Durable recipe manifests for the self-healing populate layer. In Docker
+  // dev this points at a named volume; locally it defaults under the repo.
+  POPULATE_RECIPE_STORE_DIR:
+    process.env.POPULATE_RECIPE_STORE_DIR || ".bigset/populate-recipes",
 };

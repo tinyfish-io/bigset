@@ -27,5 +27,7 @@ export const internal = anyApi;
 export const convex = new ConvexHttpClient(env.CONVEX_URL);
 
 if (env.CONVEX_ADMIN_KEY) {
-  convex.setAdminAuth(env.CONVEX_ADMIN_KEY);
+  (convex as unknown as {
+    setAdminAuth(adminKey: string): void;
+  }).setAdminAuth(env.CONVEX_ADMIN_KEY);
 }

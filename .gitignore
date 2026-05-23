@@ -1,5 +1,6 @@
 .DS_Store
 node_modules/
+backend/node_modules
 .env
 .env.local
 Project_BigSet_brief.md
@@ -14,6 +15,7 @@ Project_BigSet_brief.md
 *.log
 npm-debug.log*
 yarn-debug.log*
+/benchmark-results/
 
 # Local-only files
 *.bak
@@ -21,6 +23,11 @@ tmp/
 temp/
 
 .mastra
+.bigset/
+
+# Accidental root-level npm install (use backend/ and frontend/ package managers).
+/package.json
+/package-lock.json
 
 # Local tarballs
 *.tgz

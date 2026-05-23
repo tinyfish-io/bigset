@@ -6,7 +6,7 @@ import clerkAuthPlugin, { requireAuth } from "./clerk-auth.js";
 import { inferSchema } from "./pipeline/schema-inference.js";
 import { datasetContextSchema } from "./pipeline/populate.js";
 import { populateWorkflow } from "./mastra/workflows/populate.js";
-import { convex, api } from "./convex.js";
+import { convex, internal } from "./convex.js";
 
 const fastify = Fastify({ logger: true });
 
@@ -18,20 +18,9 @@ await fastify.register(fastifyCors, {
   maxAge: 86400,
 });
 
-// Make `fastify.clerk` available and warn on missing CLERK_SECRET_KEY.
-// `requireAuth` (also exported from ./clerk-auth) is the preHandler for
-// protected routes — see the example block below.
 await fastify.register(clerkAuthPlugin);
 
-// ────────────────────────────────────────────────────────────────────────
-//  Public routes
-// ────────────────────────────────────────────────────────────────────────
-
 fastify.get("/health", async () => ({ status: "ok" }));
-
-// ────────────────────────────────────────────────────────────────────────
-//  Protected routes — gated by Clerk JWT verification
-// ────────────────────────────────────────────────────────────────────────
 
 await fastify.register(async (instance) => {
   instance.addHook("preHandler", requireAuth);
@@ -61,18 +50,26 @@ await fastify.register(async (instance) => {
     }
 
     try {
-      const dataset = await convex.query(api.datasets.get, { id: parsed.data.datasetId });
+      const dataset = await convex.query(internal.datasets.getForSystemPopulate, {
+        id: parsed.data.datasetId,
+      });
       if (!dataset) {
         return reply.code(404).send({ error: "Dataset not found" });
       }
-      if (dataset.ownerId !== req.auth.userId) {
+      if (dataset.ownerId !== req.auth!.userId) {
         return reply.code(403).send({ error: "Not authorized to populate this dataset" });
       }
 
       const run = await populateWorkflow.createRun();
       const result = await run.start({ inputData: parsed.data });
 
-      req.log.info({ workflowStatus: result.status, steps: JSON.stringify(result.steps).slice(0, 2000) }, "Populate workflow completed");
+      req.log.info(
+        {
+          workflowStatus: result.status,
+          steps: JSON.stringify(result.steps).slice(0, 2000),
+        },
+        "Populate workflow completed"
+      );
 
       if (result.status !== "success") {
         throw new Error(`Workflow ended with status: ${result.status}`);

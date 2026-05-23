@@ -29,7 +29,7 @@ Backend is Fastify + Mastra. Fastify serves the HTTP API (Clerk JWT auth on prot
 
 The schema inference pipeline: frontend calls `POST /infer-schema` → Fastify verifies the Clerk JWT → calls `inferSchema()` in `backend/src/pipeline/schema-inference.ts` → Claude Sonnet 4.6 via OpenRouter → returns a Zod-validated `DatasetSchema` → frontend maps it to editable columns in the wizard.
 
-The populate pipeline: frontend calls `POST /populate` with `{ datasetId, datasetName, description, columns }` → Fastify verifies the Clerk JWT → triggers `populateWorkflow` which: (1) clears existing rows, (2) builds a prompt from the schema, (3) runs the populate agent (Claude Sonnet 4.6) which searches the web via TinyFish APIs, then inserts rows into Convex one by one. Rows appear in realtime on the frontend via Convex reactive queries.
+The populate pipeline: frontend calls `POST /populate` with `{ datasetId, datasetName, description, columns }` → Fastify verifies the Clerk JWT → runs the self-healing populate service. The service builds or reuses a recipe, runs the Mastra populate runtime against TinyFish search/fetch, validates source-backed rows, repairs bad recipes, promotes the passing recipe, then atomically replaces the dataset rows in Convex. Rows appear in realtime on the frontend via Convex reactive queries.
 
 Convex functions use `ctx.auth.getUserIdentity()` to get the authenticated user. The `ownerId` field on datasets stores `identity.subject` (Clerk user ID). Do not pass `ownerId` from the client.
 
@@ -48,5 +48,11 @@ The backend container maps `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` → `CLERK_PUBLIS
 Convex is self-hosted — it does NOT hot-reload when you edit files in `frontend/convex/`. After changing any Convex function, schema, or auth config, you must run `make convex-push` to deploy the updated code to the running instance. `make dev` does this automatically on startup, but subsequent edits require a manual push.
 
 In CI/prod, run `npx convex deploy` with `CONVEX_SELF_HOSTED_URL` and `CONVEX_SELF_HOSTED_ADMIN_KEY` set as env vars.
+
+## Self-Healing Verification
+
+Run `make verify-self-healing` before handing the stack to another agent. It runs backend tests, backend build, adapter syntax checks, and a no-key benchmark smoke that should block cleanly without spending API credits.
+
+Use `bash scripts/verify-self-healing-stack.sh --real-benchmark` for the 2-prompt real Mastra benchmark, and `bash scripts/verify-self-healing-stack.sh --convex-push --dataset-id <dataset-id>` for a live app dataset dry-run. Export the required env vars before live modes; the verifier does not parse secret files itself. Add `--commit` only when you intentionally want to replace rows.
 
 This is an open-source (AGPL) project. Do not commit secrets, API keys, or internal docs.
