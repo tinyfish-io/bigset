@@ -12,11 +12,13 @@
     "@clerk/nextjs": "^7.3.7",
     "@tanstack/react-table": "^8.21.3",
     "convex": "^1.39.1",
+    "lucide-react": "^1.16.0",
     "next": "16.2.6",
     "posthog-js": "^1.374.2",
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "react-window": "^1.8.11",
+    "sonner": "^2.0.7",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
