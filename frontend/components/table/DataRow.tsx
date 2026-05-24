@@ -83,8 +83,8 @@ function DataRowImpl({
                 e.stopPropagation();
                 onCellExpand(col.name, value, row.original._id);
               }}
-              className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 p-0.5 rounded bg-foreground/5 hover:bg-foreground/10 text-muted hover:text-foreground transition-all"
-              aria-label="Expand cell"
+              className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 focus:opacity-100 p-0.5 rounded bg-foreground/5 hover:bg-foreground/10 text-muted hover:text-foreground transition-all"
+              aria-label={`Expand ${col.name} cell`}
             >
               <Maximize2 className="size-3" />
             </button>

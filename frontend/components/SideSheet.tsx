@@ -12,15 +12,19 @@ interface SideSheetProps {
 
 export function SideSheet({ open, onClose, children }: SideSheetProps) {
   const panelRef = useRef<HTMLDivElement>(null);
+  const prevOverflowRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (open) {
+      prevOverflowRef.current = document.body.style.overflow;
       document.body.style.overflow = "hidden";
     } else {
-      document.body.style.overflow = "";
+      document.body.style.overflow = prevOverflowRef.current ?? "";
+      prevOverflowRef.current = null;
     }
     return () => {
-      document.body.style.overflow = "";
+      document.body.style.overflow = prevOverflowRef.current ?? "";
+      prevOverflowRef.current = null;
     };
   }, [open]);
 
@@ -70,7 +74,8 @@ export function CellDetail({
 
   async function handleCopy() {
     try {
-      await navigator.clipboard.writeText(displayValue);
+      // Write the raw underlying value, not the display fallback "—".
+      await navigator.clipboard.writeText(value == null ? "" : String(value));
       toast.success("Copied to clipboard");
     } catch {
       toast.error("Failed to copy");

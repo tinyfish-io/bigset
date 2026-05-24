@@ -53,16 +53,14 @@ export default function DatasetPage() {
   );
 
   /**
-   * Two query variants:
-   * - `listByDataset`           — all rows, used when `filter === null`
-   * - `listByDatasetFiltered`   — server-side filtered rows, used when filter is set
-   *
-   * Convex reactively swaps between them as `filter` changes, so the
-   * component always reads from exactly one stable source of truth.
+   * allRows is always the full unfiltered dataset — needed by FilterPopover's
+   * exact-match value picklist regardless of whether a filter is active.
+   * filteredRows is only active when filter is set.
+   * Convex deduplicates identical subscriptions so no extra network cost.
    */
   const allRows = useQuery(
     api.datasetRows.listByDataset,
-    authLoading || filter !== null ? "skip" : { datasetId },
+    authLoading ? "skip" : { datasetId },
   );
   const filteredRows = useQuery(
     api.datasetRows.listByDatasetFiltered,
@@ -72,6 +70,9 @@ export default function DatasetPage() {
   );
 
   const rows = filter === null ? allRows : filteredRows;
+
+  /** True when the signed-in user owns this dataset — gates write actions. */
+  const isOwner = userId != null && dataset?.ownerId != null && userId === dataset.ownerId;
 
   const rowIds = useMemo(() => (rows ?? []).map((r) => r._id), [rows]);
   const selection = useSelection(rowIds);
@@ -162,7 +163,7 @@ export default function DatasetPage() {
   }
 
   function startEditingName() {
-    if (!dataset) return;
+    if (!dataset || !isOwner) return;
     setNameValue(dataset.name);
     setEditingName(true);
     setTimeout(() => nameInputRef.current?.select(), 0);
@@ -262,7 +263,7 @@ export default function DatasetPage() {
               }}
               className="text-sm font-semibold tracking-tight truncate max-w-md rounded border border-border bg-background px-2 py-0.5 outline-none focus:border-foreground/30"
             />
-          ) : (
+          ) : isOwner ? (
             <button
               onClick={startEditingName}
               className="flex items-center gap-1.5 group"
@@ -280,6 +281,10 @@ export default function DatasetPage() {
                 <path d="M11.013 1.427a1.75 1.75 0 0 1 2.474 0l1.086 1.086a1.75 1.75 0 0 1 0 2.474l-8.61 8.61c-.21.21-.47.364-.756.445l-3.251.93a.75.75 0 0 1-.927-.928l.929-3.25c.081-.286.235-.547.445-.758l8.61-8.61Zm1.414 1.06a.25.25 0 0 0-.354 0L10.811 3.75l1.439 1.44 1.263-1.263a.25.25 0 0 1 .354 0Z" />
               </svg>
             </button>
+          ) : (
+            <h1 className="text-sm font-semibold tracking-tight truncate max-w-md">
+              {dataset.name}
+            </h1>
           )}
           <StatusBadge status={dataset.status} />
         </div>
