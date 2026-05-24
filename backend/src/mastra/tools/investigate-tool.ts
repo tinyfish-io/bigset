@@ -75,34 +75,45 @@ export function buildInvestigateTool(
       console.log(
         `[investigate_row] spawning subagent user=${authContext.authorizedUserId} run=${authContext.workflowRunId} dataset=${authorizedDatasetId} entity="${entity_hint}"`,
       );
-      const agent = buildInvestigateAgent(
-        authorizedDatasetId,
-        authContext,
-        columns,
-      );
+      try {
+        const agent = buildInvestigateAgent(
+          authorizedDatasetId,
+          authContext,
+          columns,
+        );
 
-      const urlsBlock =
-        urls && urls.length > 0
-          ? `\nUseful URLs to start from:\n${urls.map((u) => `- ${u}`).join("\n")}`
-          : "";
-      const notesBlock = notes ? `\nAdditional notes: ${notes}` : "";
+        const urlsBlock =
+          urls && urls.length > 0
+            ? `\nUseful URLs to start from:\n${urls.map((u) => `- ${u}`).join("\n")}`
+            : "";
+        const notesBlock = notes ? `\nAdditional notes: ${notes}` : "";
 
-      const prompt = `Research this entity and insert a row if you find real, verified data.
+        const prompt = `Research this entity and insert a row if you find real, verified data.
 
 Entity: ${entity_hint}
 
 Context (partial data already found):
 ${context}${urlsBlock}${notesBlock}`;
 
-      const result = await agent.generate(prompt, { maxSteps: 25 });
-      const parsed = parseInvestigateResult(result.text);
-      console.log(
-        `[investigate_row] done entity="${entity_hint}" inserted=${parsed.inserted} steps=${result.steps?.length ?? "?"}` +
-          (parsed.row_summary ? `\n  summary: ${parsed.row_summary}` : "") +
-          (parsed.reason ? `\n  reason:  ${parsed.reason}` : "") +
-          (parsed.clues ? `\n  clues:   ${parsed.clues}` : ""),
-      );
-      return parsed;
+        const result = await agent.generate(prompt, { maxSteps: 25 });
+        const parsed = parseInvestigateResult(result.text);
+        console.log(
+          `[investigate_row] done entity="${entity_hint}" inserted=${parsed.inserted} steps=${result.steps?.length ?? "?"}` +
+            (parsed.row_summary ? `\n  summary: ${parsed.row_summary}` : "") +
+            (parsed.reason ? `\n  reason:  ${parsed.reason}` : "") +
+            (parsed.clues ? `\n  clues:   ${parsed.clues}` : ""),
+        );
+        return parsed;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`[investigate_row] subagent error entity="${entity_hint}" err=${msg}`);
+        return {
+          inserted: false,
+          reason: `Subagent failed: ${msg}`,
+          row_summary: undefined,
+          clues: undefined,
+        };
+      }
     },
   });
 }

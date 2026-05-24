@@ -110,7 +110,7 @@ export function DatasetTable({
   const tableRows = table.getRowModel().rows;
   const columnWidths = useMemo(() => headers.map((h) => h.getSize()), [headers]);
   const isBuilding = dataset.status === "building";
-  const displayCount = Math.max(tableRows.length, GHOST_ROW_COUNT);
+  const displayCount = isBuilding ? Math.max(tableRows.length, GHOST_ROW_COUNT) : tableRows.length;
   const totalWidth = columnWidths.reduce((sum, w) => sum + w, 0);
   const resizingColumnId = table.getState().columnSizingInfo.isResizingColumn;
 
