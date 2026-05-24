@@ -1,6 +1,7 @@
 import { Mastra } from "@mastra/core/mastra";
 import { inferSchemaWorkflow } from "./workflows/infer-schema.js";
 import { populateWorkflow } from "./workflows/populate.js";
+import { updateWorkflow } from "./workflows/update.js";
 
 /**
  * Mastra registry.
@@ -14,5 +15,5 @@ import { populateWorkflow } from "./workflows/populate.js";
  * registered, so Mastra Studio can inspect it end-to-end.
  */
 export const mastra = new Mastra({
-  workflows: { inferSchemaWorkflow, populateWorkflow },
+  workflows: { inferSchemaWorkflow, populateWorkflow, updateWorkflow },
 });

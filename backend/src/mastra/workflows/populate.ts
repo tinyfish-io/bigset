@@ -119,8 +119,14 @@ const agentStep = createStep({
       inputData.authContext,
       inputData.columns,
     );
-    const result = await agent.generate(inputData.prompt, { maxSteps: 80 });
-    return { text: result.text };
+    try {
+      const result = await agent.generate(inputData.prompt, { maxSteps: 80 });
+      return { text: result.text };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[populate-agent] agent.generate failed: ${msg}`);
+      return { text: `Agent failed: ${msg}` };
+    }
   },
 });
 

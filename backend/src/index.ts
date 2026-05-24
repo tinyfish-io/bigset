@@ -6,6 +6,7 @@ import clerkAuthPlugin, { requireAuth, getUserEmail } from "./clerk-auth.js";
 import { inferSchema } from "./pipeline/schema-inference.js";
 import { datasetContextSchema } from "./pipeline/populate.js";
 import { populateWorkflow } from "./mastra/workflows/populate.js";
+import { updateWorkflow } from "./mastra/workflows/update.js";
 import { convex, internal } from "./convex.js";
 import { sendTransactionalEmail } from "./email/send.js";
 import { datasetReadyTemplate } from "./email/templates/dataset-ready.js";
@@ -243,6 +244,54 @@ await fastify.register(async (instance) => {
       }
       req.log.error(err, "Populate failed");
       return reply.code(502).send({ error: "Failed to populate dataset. Please try again." });
+    }
+  });
+
+  instance.post("/update", async (req, reply) => {
+    const parsed = datasetContextSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.code(400).send({
+        error: "Invalid request",
+        details: parsed.error.flatten().fieldErrors,
+      });
+    }
+
+    try {
+      const dataset = await convex.query(internal.datasets.getInternal, {
+        id: parsed.data.datasetId,
+      });
+      if (!dataset) {
+        return reply.code(404).send({ error: "Dataset not found" });
+      }
+      if (dataset.ownerId !== req.auth.userId) {
+        return reply.code(403).send({ error: "Not authorized to update this dataset" });
+      }
+
+      const run = await updateWorkflow.createRun();
+      const result = await run.start({
+        inputData: {
+          ...parsed.data,
+          authContext: {
+            authorizedUserId: req.auth!.userId,
+            workflowRunId: run.runId,
+          },
+        },
+      });
+
+      req.log.info({ workflowStatus: result.status }, "Update workflow completed");
+
+      if (result.status !== "success") {
+        throw new Error(`Workflow ended with status: ${result.status}`);
+      }
+
+      return { success: true, result: result.result };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("validator") || msg.includes("Invalid")) {
+        return reply.code(400).send({ error: "Invalid datasetId" });
+      }
+      req.log.error(err, "Update failed");
+      return reply.code(502).send({ error: "Failed to update dataset. Please try again." });
     }
   });
 });

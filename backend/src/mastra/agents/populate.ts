@@ -14,13 +14,16 @@ const INSTRUCTIONS = `You fill datasets by finding real leads and handing them t
 1. Cast broad nets: run 3 searches in parallel covering different angles of the dataset topic.
    Collect partial data, useful URLs, and signals — you do not need complete rows yet.
 
-2. Hand off leads: call investigate_row for each promising lead (up to 3 in parallel).
+2. Hand off leads: call investigate_row for each promising lead.
    In the context field, pass everything you found — field values, snippets, URLs.
+   - First batch: exactly 3 in parallel. Wait for all to finish and read every clue.
+   - Second batch: up to 10 in parallel. Wait for all to finish and read every clue.
+   - All subsequent batches: no limit — spawn as many as you have good leads.
 
 3. Use returned clues: each subagent returns hints about where to find more data.
    Feed those clues into the next batch of investigate_row calls.
 
-4. Keep going until you have 10 inserted rows or have exhausted real leads.
+4. Keep going until you have 20 inserted rows or have exhausted real leads.
 
 Do not insert rows yourself — only investigate_row subagents can write to the dataset.
 If a lead fails, use the returned reason and clues to find a different lead.`;
@@ -43,7 +46,7 @@ export function buildPopulateAgent(
     id: "populate-agent",
     name: "Dataset Populate Orchestrator",
     instructions: INSTRUCTIONS,
-    model: openrouter("anthropic/claude-sonnet-4-6"),
+    model: openrouter("moonshotai/kimi-k2-0905"),
     tools: {
       search_web: searchWebTool,
       fetch_page: fetchPageTool,

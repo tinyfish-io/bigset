@@ -63,7 +63,7 @@ export function buildInvestigateAgent(
     id: "investigate-agent",
     name: "Dataset Investigate Agent",
     instructions: buildInvestigateInstructions(columns),
-    model: openrouter("anthropic/claude-sonnet-4-6"),
+    model: openrouter("moonshotai/kimi-k2-0905"),
     tools: {
       insert_row,
       list_rows,
