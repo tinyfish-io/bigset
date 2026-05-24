@@ -1,6 +1,6 @@
 import { createStep, createWorkflow } from "@mastra/core/workflows";
 import { z } from "zod";
-import { datasetContextSchema } from "../../pipeline/populate.js";
+import { datasetContextSchema, populateColumnSchema } from "../../pipeline/populate.js";
 import { convex, internal } from "../../convex.js";
 import { buildPopulateAgent } from "../agents/populate.js";
 
@@ -54,6 +54,7 @@ const buildPromptOutputSchema = z.object({
   // The LLM never sees these fields — they stay in the workflow envelope.
   authorizedDatasetId: z.string(),
   authContext: authContextSchema,
+  columns: z.array(populateColumnSchema),
 });
 
 const buildPromptStep = createStep({
@@ -61,7 +62,6 @@ const buildPromptStep = createStep({
   inputSchema: populateInputSchema,
   outputSchema: buildPromptOutputSchema,
   execute: async ({ inputData }) => {
-    const columnNames = inputData.columns.map((c) => c.name);
     const columnsDesc = inputData.columns
       .map(
         (c) =>
@@ -74,19 +74,18 @@ const buildPromptStep = createStep({
     // (see tools/dataset-tools.ts). If the LLM doesn't know the id, it
     // can't be tricked into typing it into a redirect attempt — and even
     // if it could, the tools no longer accept that argument.
+    //
+    // The orchestrator does not call insert_row directly — only the
+    // investigate_row subagents do. So the prompt only needs to describe
+    // what data to find, not how to format insert calls.
     const prompt = `Dataset: ${inputData.datasetName}
 Description: ${inputData.description}
 
-Columns:
+Data fields to collect:
 ${columnsDesc}
 
-When calling insert_row, the data object keys MUST be exactly these strings (no backticks, no extra quotes):
-${JSON.stringify(columnNames)}
-
-Example insert_row call:
-insert_row({ data: { ${columnNames.map((n) => `"${n}": <value>`).join(", ")} } })
-
-Search the web for real data about this topic. Then call insert_row to fill in 10 rows. Use real data from your search. Fill in any gaps with realistic fake data.`;
+Search the web broadly to find real entities that fit this dataset topic.
+For each lead you find, call investigate_row to hand it off to a subagent for deep research and insertion.`;
 
     console.log(
       `[build-prompt] Built prompt for ${inputData.datasetName} (${inputData.columns.length} columns)`,
@@ -95,6 +94,7 @@ Search the web for real data about this topic. Then call insert_row to fill in 1
       prompt,
       authorizedDatasetId: inputData.datasetId,
       authContext: inputData.authContext,
+      columns: inputData.columns,
     };
   },
 });
@@ -117,6 +117,7 @@ const agentStep = createStep({
     const agent = buildPopulateAgent(
       inputData.authorizedDatasetId,
       inputData.authContext,
+      inputData.columns,
     );
     const result = await agent.generate(inputData.prompt, { maxSteps: 80 });
     return { text: result.text };
