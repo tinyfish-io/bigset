@@ -20,6 +20,7 @@ const CHECKBOX_COL_WIDTH = 40;
 const DEFAULT_COL_WIDTH = 180;
 const MIN_COL_WIDTH = 80;
 const ROW_HEIGHT = 34;
+const GHOST_ROW_COUNT = 50;
 
 const columnHelper = createColumnHelper<DatasetRow>();
 
@@ -108,6 +109,8 @@ export function DatasetTable({
   const headers = table.getHeaderGroups()[0]?.headers ?? [];
   const tableRows = table.getRowModel().rows;
   const columnWidths = useMemo(() => headers.map((h) => h.getSize()), [headers]);
+  const isBuilding = dataset.status === "building";
+  const displayCount = isBuilding ? Math.max(tableRows.length, GHOST_ROW_COUNT) : tableRows.length;
   const totalWidth = columnWidths.reduce((sum, w) => sum + w, 0);
   const resizingColumnId = table.getState().columnSizingInfo.isResizingColumn;
 
@@ -126,8 +129,9 @@ export function DatasetTable({
       columnWidths,
       isSelected: selection.has,
       toggleRow,
+      isBuilding,
     }),
-    [tableRows, dataset.columns, columnWidths, selection.has, toggleRow],
+    [tableRows, dataset.columns, columnWidths, selection.has, toggleRow, isBuilding],
   );
 
   return (
@@ -151,7 +155,7 @@ export function DatasetTable({
 
         <FixedSizeList
           height={Math.max(containerHeight - 32, 200)}
-          itemCount={tableRows.length}
+          itemCount={displayCount}
           itemSize={ROW_HEIGHT}
           width="100%"
           itemData={itemData}
