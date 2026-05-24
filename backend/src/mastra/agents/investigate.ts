@@ -64,6 +64,7 @@ export function buildInvestigateAgent(
     name: "Dataset Investigate Agent",
     instructions: buildInvestigateInstructions(columns),
     model: openrouter("moonshotai/kimi-k2-0905"),
+
     tools: {
       insert_row,
       list_rows,
