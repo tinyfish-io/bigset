@@ -1,45 +1,38 @@
 flowchart LR
-  request["User asks BigSet for a dataset"]
-  populate["BigSet app /populate"]
+  prompt["Frontend prompt + dataset page"]
+  populate["Backend /populate"]
 
-  subgraph mastra["Mastra collection pipeline"]
-    search_agent["Agent 1: search and prioritize sources"]
-    fetch_sources["Fetch selected sources"]
-    browser_decision{"Need browser navigation?"}
-    populate_agent["Agent 2: populate dataset rows"]
+  subgraph planning["Source planning"]
+    planner["Rank sources\ntriage fetched pages"]
+    browser{"Browser-heavy page?"}
+    fetch["TinyFish Search / Fetch"]
   end
 
-  subgraph browser["Browser replay stage"]
-    tinyfish_agent["TinyFish Agent navigates site"]
-    browser_actions["Explicit browser actions"]
-    playwright_script["Draft browser replay script"]
-    cron_future["Scheduled replay future"]
+  subgraph first["First run"]
+    box["BrowserActionBox\nTinyFish Agent + trace recorder"]
+    normalize["Normalize trace\ninto browser actions"]
+    draft["Draft Playwright script\nwhen readiness is ready"]
   end
 
-  subgraph healing["Self-healing layer"]
-    oracle["Output contract: defines good output"]
-    validate["Validate rows, sources, evidence"]
-    promote["Save working extraction plan"]
-    reject["Reject bad candidate"]
-    commit_cap["Write rows to DB with safety throttle"]
-    repair["Repair missing fields across searches"]
+  subgraph replay["Replay / repair"]
+    promoted["Promoted Playwright script exists"]
+    runner{"Replay runner configured?"}
+    replayRun["Replay through BrowserActionBox"]
+    diagnostic["Diagnostic only\nno fake rows"]
+    repair{"Replay failed?"}
+    repairBox["One bounded repair attempt"]
+    validate["Same validation gate"]
+    write["Accepted rows + evidence"]
+    reject["Reject run\nno direct row writes"]
   end
 
-  request --> populate
-  populate --> search_agent
-  search_agent --> fetch_sources
-  fetch_sources --> browser_decision
-  browser_decision -->|"no"| populate_agent
-  browser_decision -->|"yes"| tinyfish_agent
-  tinyfish_agent --> browser_actions
-  browser_actions --> playwright_script
-  playwright_script --> populate_agent
-  playwright_script -. "later" .-> cron_future
-
-  populate_agent --> oracle
-  oracle --> validate
-  validate -->|"good"| promote
-  promote --> commit_cap
-  validate -->|"bad"| reject
-  reject --> repair
-  repair --> search_agent
+  prompt --> populate --> planner --> fetch --> browser
+  browser -- no --> validate
+  browser -- yes --> box --> normalize --> draft --> validate
+  promoted --> runner
+  runner -- yes --> replayRun --> repair
+  runner -- no --> diagnostic --> validate
+  repair -- no --> validate
+  repair -- yes --> repairBox --> validate
+  validate -- pass --> write
+  validate -- fail --> reject

@@ -1,7 +1,7 @@
 import { RunStatus, TinyFish, type Run } from "@tiny-fish/sdk";
 import { config } from "../config.js";
 import type { BrowserActionReport } from "../models/schemas.js";
-import { sleep, withRetry } from "../queue/retry.js";
+import { isRetryableError, sleep, withRetry } from "../queue/retry.js";
 import { mapWithConcurrency } from "../utils/concurrency.js";
 
 let client: TinyFish | null = null;
@@ -46,7 +46,21 @@ export interface TinyfishAgentJob {
 
 export interface TinyfishAgentRunOptions {
   pollTimeoutMs?: number;
+  pollIntervalMs?: number;
+  requestTimeoutMs?: number;
+  readRun?: TinyfishAgentRunReader;
+  cancelRun?: TinyfishAgentRunCanceller;
 }
+
+type TinyfishAgentRunReader = (
+  runId: string,
+  options: { signal: AbortSignal },
+) => Promise<Run>;
+
+type TinyfishAgentRunCanceller = (
+  runId: string,
+  options: { signal: AbortSignal },
+) => Promise<void>;
 
 type TinyfishRunWithTrace = Run & {
   steps?: unknown;
@@ -85,30 +99,20 @@ export function tinyfishAgentRunResultFromRun(run: Run): TinyfishAgentRunResult 
 }
 
 /** Best-effort cancel for async agent runs (POST /v1/runs/{id}/cancel). */
-export async function cancelTinyfishAgentRun(runId: string): Promise<void> {
+export async function cancelTinyfishAgentRun(
+  runId: string,
+  options: { requestTimeoutMs?: number } = {},
+): Promise<void> {
   if (!runId.trim()) return;
 
   try {
     await withRetry(
-      async () => {
-        const response = await fetch(
-          `${TINYFISH_API_BASE}/v1/runs/${encodeURIComponent(runId)}/cancel`,
-          {
-            method: "POST",
-            headers: {
-              "X-API-Key": config.tinyfishApiKey,
-              "Content-Type": "application/json",
-            },
-          },
-        );
-
-        if (!response.ok) {
-          const body = await response.text();
-          throw new Error(
-            `Cancel failed (${response.status})${body ? `: ${body.slice(0, 200)}` : ""}`,
-          );
-        }
-      },
+      () =>
+        withRequestTimeout({
+          timeoutMs: options.requestTimeoutMs ?? config.agentRequestTimeoutMs,
+          label: `TinyFish Agent cancel ${runId}`,
+          action: (signal) => sendTinyfishAgentCancel(runId, { signal }),
+        }),
       {
         maxRetries: 1,
         baseDelayMs: config.retryBaseDelayMs,
@@ -124,9 +128,15 @@ export async function cancelTinyfishAgentRun(runId: string): Promise<void> {
 export async function queueTinyfishAgent(
   url: string,
   goal: string,
+  options: TinyfishAgentRunOptions = {},
 ): Promise<QueueTinyfishAgentResult> {
   const response = await withRetry(
-    () => getClient().agent.queue({ url, goal }),
+    () =>
+      withRequestTimeout({
+        timeoutMs: options.requestTimeoutMs ?? config.agentRequestTimeoutMs,
+        label: `TinyFish Agent queue ${url}`,
+        action: (signal) => getClient().agent.queue({ url, goal }, { signal }),
+      }),
     {
       maxRetries: config.maxRetries,
       baseDelayMs: config.retryBaseDelayMs,
@@ -152,60 +162,62 @@ export async function pollTinyfishAgentUntilDone(
 ): Promise<TinyfishAgentRunResult> {
   const startedAt = Date.now();
   const pollTimeoutMs = options.pollTimeoutMs ?? config.agentPollTimeoutMs;
+  const pollIntervalMs = options.pollIntervalMs ?? config.agentPollIntervalMs;
+  const requestTimeoutMs = options.requestTimeoutMs ?? config.agentRequestTimeoutMs;
+  const readRun = options.readRun ?? fetchTinyfishAgentRun;
+  const cancelRun = options.cancelRun ?? sendTinyfishAgentCancel;
   let lastStatus = RunStatus.PENDING;
+  let lastPollError: string | null = null;
 
   while (true) {
-    const run = await withRetry(
-      () => getClient().runs.get(runId),
-      {
-        maxRetries: config.maxRetries,
-        baseDelayMs: config.retryBaseDelayMs,
-        label: `agent.poll:${runId}`,
-      },
-    );
+    const remainingPollMs = pollTimeoutMs - (Date.now() - startedAt);
+    if (remainingPollMs <= 0) {
+      return timeoutAgentRunResult({
+        runId,
+        pollTimeoutMs,
+        requestTimeoutMs,
+        lastStatus,
+        lastPollError,
+        readRun,
+        cancelRun,
+      });
+    }
 
-    lastStatus = run.status;
+    let run: Run | null = null;
+    try {
+      run = await withRequestTimeout({
+        timeoutMs: Math.min(requestTimeoutMs, remainingPollMs),
+        label: `TinyFish Agent poll ${runId}`,
+        action: (signal) => readRun(runId, { signal }),
+      });
+      lastPollError = null;
+    } catch (error) {
+      lastPollError = error instanceof Error ? error.message : String(error);
+      if (!isRetryableError(error)) {
+        throw error;
+      }
+    }
 
-    if (TERMINAL_STATUSES.has(run.status)) {
-      return tinyfishAgentRunResultFromRun(run);
+    if (run) {
+      lastStatus = run.status;
+      if (TERMINAL_STATUSES.has(run.status)) {
+        return tinyfishAgentRunResultFromRun(run);
+      }
     }
 
     if (Date.now() - startedAt >= pollTimeoutMs) {
-      await cancelTinyfishAgentRun(runId);
-
-      try {
-        const finalRun = await getClient().runs.get(runId);
-        if (TERMINAL_STATUSES.has(finalRun.status)) {
-          const result = tinyfishAgentRunResultFromRun(finalRun);
-          if (finalRun.status === RunStatus.CANCELLED) {
-            return {
-              ...result,
-              error:
-                result.error ??
-                `Agent run cancelled after ${pollTimeoutMs}ms (was ${lastStatus})`,
-            };
-          }
-          return result;
-        }
-      } catch {
-        // Fall through to TIMEOUT result below.
-      }
-
-      return {
-        run_id: runId,
-        status: "TIMEOUT",
-        result: null,
-        error: `Agent run timed out after ${pollTimeoutMs}ms (last status: ${lastStatus}); cancel requested`,
-        agent_step_count: null,
-        has_streaming_url: false,
-        has_recording_url: false,
-        capture_artifact_count: 0,
-        result_keys: [],
-        browser_actions: [],
-      };
+      return timeoutAgentRunResult({
+        runId,
+        pollTimeoutMs,
+        requestTimeoutMs,
+        lastStatus,
+        lastPollError,
+        readRun,
+        cancelRun,
+      });
     }
 
-    await sleep(config.agentPollIntervalMs);
+    await sleep(Math.min(pollIntervalMs, pollTimeoutMs - (Date.now() - startedAt)));
   }
 }
 
@@ -217,7 +229,7 @@ export async function runTinyfishAgent(
   goal: string,
   options: TinyfishAgentRunOptions = {},
 ): Promise<TinyfishAgentRunResult> {
-  const queued = await queueTinyfishAgent(url, goal);
+  const queued = await queueTinyfishAgent(url, goal, options);
   if (queued.error || !queued.run_id) {
     return {
       run_id: null,
@@ -248,7 +260,7 @@ export async function runTinyfishAgentsBatch(
     jobs,
     config.agentQueueConcurrency,
     async (job) => {
-      const queueResult = await queueTinyfishAgent(job.url, job.goal);
+      const queueResult = await queueTinyfishAgent(job.url, job.goal, options);
       return { job, ...queueResult };
     },
   );
@@ -285,6 +297,140 @@ export async function runTinyfishAgentsBatch(
   );
 
   return results;
+}
+
+async function timeoutAgentRunResult(input: {
+  runId: string;
+  pollTimeoutMs: number;
+  requestTimeoutMs: number;
+  lastStatus: string;
+  lastPollError: string | null;
+  readRun: TinyfishAgentRunReader;
+  cancelRun: TinyfishAgentRunCanceller;
+}): Promise<TinyfishAgentRunResult> {
+  await withRequestTimeout({
+    timeoutMs: input.requestTimeoutMs,
+    label: `TinyFish Agent cancel ${input.runId}`,
+    action: (signal) => input.cancelRun(input.runId, { signal }),
+  }).catch(() => undefined);
+
+  try {
+    const finalRun = await withRequestTimeout({
+      timeoutMs: input.requestTimeoutMs,
+      label: `TinyFish Agent final poll ${input.runId}`,
+      action: (signal) => input.readRun(input.runId, { signal }),
+    });
+    if (TERMINAL_STATUSES.has(finalRun.status)) {
+      const result = tinyfishAgentRunResultFromRun(finalRun);
+      if (finalRun.status === RunStatus.CANCELLED) {
+        return {
+          ...result,
+          error:
+            result.error ??
+            `Agent run cancelled after ${input.pollTimeoutMs}ms (was ${input.lastStatus})`,
+        };
+      }
+      return result;
+    }
+  } catch {
+    // Fall through to TIMEOUT result below.
+  }
+
+  const lastPollSuffix = input.lastPollError
+    ? `; last poll error: ${input.lastPollError}`
+    : "";
+  return {
+    run_id: input.runId,
+    status: "TIMEOUT",
+    result: null,
+    error:
+      `Agent run timed out after ${input.pollTimeoutMs}ms (last status: ${input.lastStatus}); cancel requested${lastPollSuffix}`,
+    agent_step_count: null,
+    has_streaming_url: false,
+    has_recording_url: false,
+    capture_artifact_count: 0,
+    result_keys: [],
+    browser_actions: [],
+  };
+}
+
+async function fetchTinyfishAgentRun(
+  runId: string,
+  options: { signal: AbortSignal },
+): Promise<Run> {
+  const response = await fetch(
+    `${TINYFISH_API_BASE}/v1/runs/${encodeURIComponent(runId)}`,
+    {
+      headers: {
+        "X-API-Key": config.tinyfishApiKey,
+        "Content-Type": "application/json",
+      },
+      signal: options.signal,
+    },
+  );
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw httpStatusError(
+      `TinyFish run poll returned HTTP ${response.status}${body ? `: ${body.slice(0, 200)}` : ""}`,
+      response.status,
+    );
+  }
+
+  return await response.json() as Run;
+}
+
+async function sendTinyfishAgentCancel(
+  runId: string,
+  options: { signal: AbortSignal },
+): Promise<void> {
+  const response = await fetch(
+    `${TINYFISH_API_BASE}/v1/runs/${encodeURIComponent(runId)}/cancel`,
+    {
+      method: "POST",
+      headers: {
+        "X-API-Key": config.tinyfishApiKey,
+        "Content-Type": "application/json",
+      },
+      signal: options.signal,
+    },
+  );
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw httpStatusError(
+      `Cancel failed (${response.status})${body ? `: ${body.slice(0, 200)}` : ""}`,
+      response.status,
+    );
+  }
+}
+
+async function withRequestTimeout<T>(input: {
+  timeoutMs: number;
+  label: string;
+  action: (signal: AbortSignal) => Promise<T>;
+}): Promise<T> {
+  const timeoutMs = Math.max(1, Math.floor(input.timeoutMs));
+  const controller = new AbortController();
+
+  return await new Promise<T>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      const error = new Error(`${input.label} timed out after ${timeoutMs}ms`);
+      controller.abort(error);
+      reject(error);
+    }, timeoutMs);
+
+    Promise.resolve()
+      .then(() => input.action(controller.signal))
+      .then(resolve, reject)
+      .finally(() => clearTimeout(timeout));
+  });
+}
+
+function httpStatusError(message: string, status: number): Error & { status: number } {
+  const error = new Error(message) as Error & { status: number };
+  error.status = status;
+  return error;
 }
 
 function browserActionsFromRunSteps(run: TinyfishRunWithTrace): BrowserActionReport[] {

@@ -268,8 +268,8 @@ if [[ "$SHOULD_RUN_BLOCKED_BENCHMARK_SMOKE" -eq 1 ]]; then
 fi
 
 if [[ "$SHOULD_RUN_CONVEX_PUSH" -eq 1 ]]; then
-  if [[ ! -f frontend/.env.local ]]; then
-    mark_blocked "frontend/.env.local missing; cannot run make convex-push"
+  if [[ ! -f .env ]]; then
+    mark_blocked ".env missing; cannot run make convex-push"
   elif ! check_docker_compose_ready; then
     mark_blocked "Docker Compose is not ready; cannot run make convex-push"
   elif ! check_convex_ready "http://127.0.0.1:3210"; then

@@ -18,6 +18,10 @@ import type {
   PopulateRecipeRunResult,
   PopulateRecipeRuntime,
 } from "../src/pipeline/populate-self-healing.js";
+import {
+  createPlaywrightScriptArtifact,
+  populateRuntimeResultFromAgentCompatibleResult,
+} from "../src/pipeline/populate-browser-action-box.js";
 import type { DatasetContext } from "../src/pipeline/populate.js";
 
 const context: DatasetContext = {
@@ -261,6 +265,101 @@ test("Mastra populate recipe runtime keeps Playwright candidate scripts complete
   assert.ok(scriptArtifact.content.length <= 20_000);
   assert.match(scriptArtifact.content, /Omitted 5 lower-priority browser actions/);
   assertJavaScriptModuleParses(scriptArtifact.content);
+});
+
+test("Mastra populate recipe runtime replays promoted Playwright script before agent spend", async () => {
+  let replayCalls = 0;
+  let populateCalls = 0;
+  const promotedScript = createPlaywrightScriptArtifact({
+    sourceUrl: "https://openai.com/news",
+    datasetGoalPrompt: context.description,
+    datasetSchema: {
+      columns: context.columns.map((column) => ({
+        name: column.name,
+        required: true,
+      })),
+    },
+    code: "export async function runDatasetRecipe() { return { records: [] }; }",
+    status: "promoted",
+    createdAt: "2026-05-24T00:00:00.000Z",
+  });
+  const runtime = new MastraPopulateRecipeRuntime({
+    runPopulate: async () => {
+      populateCalls += 1;
+      throw new Error("normal populate should not run before replay");
+    },
+    browserActionBox: {
+      async replay(input) {
+        replayCalls += 1;
+        const agentCompatibleResult = {
+          records: [{
+            entity_name: "OpenAI",
+            latest_post_title: "Release notes from OpenAI",
+            source_url: "https://openai.com/news",
+            evidence_quote: "Release notes from OpenAI",
+            evidence: [{
+              field: "latest_post_title",
+              url: "https://openai.com/news",
+              quote: "Release notes from OpenAI",
+            }],
+          }],
+        };
+        return {
+          agentCompatibleResult,
+          runtimeResult: populateRuntimeResultFromAgentCompatibleResult({
+            agentCompatibleResult,
+            datasetSchema: input.datasetSchema,
+            sourceUrl: input.sourceUrl,
+            replayTrace: {
+              status: "succeeded",
+              startedAt: "2026-05-24T00:00:00.000Z",
+              completedAt: "2026-05-24T00:00:01.000Z",
+              scriptId: input.currentPlaywrightScript.scriptId,
+              sourceUrl: input.sourceUrl,
+              diagnostics: [],
+              steps: [{
+                kind: "browser",
+                label: "playwright-replay",
+                status: "succeeded",
+              }],
+            },
+            diagnosticArtifacts: [{
+              kind: "playwright-replay-result",
+              label: "populate-playwright-replay-result",
+              content: JSON.stringify({ replayStatus: "replay_succeeded" }),
+            }],
+          }),
+          trace: {
+            status: "succeeded",
+            startedAt: "2026-05-24T00:00:00.000Z",
+            completedAt: "2026-05-24T00:00:01.000Z",
+            scriptId: input.currentPlaywrightScript.scriptId,
+            sourceUrl: input.sourceUrl,
+            diagnostics: [],
+            steps: [],
+          },
+          replayStatus: "replay_succeeded",
+          diagnostics: [],
+        };
+      },
+    },
+  });
+
+  const run = await runtime.runRecipe({
+    recipe: recipe({
+      recipeId: "recipe-v1",
+      playwrightScript: promotedScript,
+    }),
+    context,
+  });
+
+  assert.equal(replayCalls, 1);
+  assert.equal(populateCalls, 0);
+  assert.equal(run.runStatus, "succeeded");
+  assert.equal(run.productionValidation.isValid, true);
+  assert.ok(run.artifacts.some((artifact) =>
+    artifact.kind === "playwright-replay-result"
+  ));
 });
 
 test("Mastra populate recipe runtime keeps supplemental fetch misses non-blocking", async () => {
@@ -618,6 +717,69 @@ test("self-healing service repairs a failed active recipe and promotes the candi
   assert.equal(snapshot.recipes.find((item) => item.recipeId === "repair-v2")?.status, "active");
 });
 
+test("self-healing service does not run a second recipe repair after bounded Playwright repair rejects", async () => {
+  const store = new InMemoryPopulateRecipeStore();
+  const promotedScript = createPlaywrightScriptArtifact({
+    sourceUrl: "https://openai.com/news",
+    datasetGoalPrompt: context.description,
+    datasetSchema: {
+      columns: context.columns.map((column) => ({
+        name: column.name,
+        required: true,
+      })),
+    },
+    code: "export async function runDatasetRecipe() { throw new Error('stale selector'); }",
+    status: "promoted",
+    createdAt: "2026-05-24T00:00:00.000Z",
+  });
+  const activeRecipe = {
+    ...recipe({
+      recipeId: "active-playwright-broken",
+      status: "active",
+      playwrightScript: promotedScript,
+    }),
+    lastValidationScore: 1,
+  };
+  await store.saveRecipe(activeRecipe);
+  const author = new FakeRecipeAuthor();
+  const service = new SelfHealingPopulateRecipeService({
+    store,
+    runtime: new FakePopulateRecipeRuntime({
+      "active-playwright-broken": runResult({
+        recipe: activeRecipe,
+        rows: [],
+        validationIssues: ["BrowserActionBox repair_rejected: locator timed out"],
+        criticalIssues: ["BrowserActionBox repair_rejected: locator timed out"],
+        isValid: false,
+        score: 0,
+        artifacts: [{
+          kind: "playwright-repair-diagnostic",
+          label: "populate-playwright-repair-diagnostic",
+          content: JSON.stringify({
+            replayStatus: "repair_rejected",
+            diagnostics: ["locator timed out"],
+          }),
+        }],
+      }),
+    }),
+    author,
+  });
+
+  const result = await service.tick({ datasetId: context.datasetId, context });
+  const snapshot = await store.loadSnapshot(context.datasetId);
+
+  assert.equal(result.action, "candidate_rejected");
+  assert.equal(author.repairCalls, 0);
+  assert.match(result.rejectionReasons.join("\n"), /keeping prior active script/i);
+  assert.equal(
+    snapshot.recipes.find((item) =>
+      item.recipeId === "active-playwright-broken"
+    )?.status,
+    "active"
+  );
+  assert.equal(snapshot.recipes.some((item) => item.recipeId === "repair-v2"), false);
+});
+
 test("self-healing service rejects valid repairs below active recipe baseline", async () => {
   const store = new InMemoryPopulateRecipeStore();
   const activeRecipe = {
@@ -704,17 +866,21 @@ function recipe(input: {
   version?: number;
   status?: PopulateRecipe["status"];
   runtimeInstructions?: string;
+  playwrightScript?: PopulateRecipe["playwrightScript"];
 }): PopulateRecipe {
-  return createPopulateRecipe({
-    recipeId: input.recipeId,
-    datasetId: context.datasetId,
-    version: input.version ?? 1,
-    status: input.status,
-    sourceDescription: context.description,
-    requestedColumns: context.columns.map((column) => column.name),
-    runtimeInstructions: input.runtimeInstructions,
-    createdAt: "2026-05-22T00:00:00.000Z",
-  });
+  return {
+    ...createPopulateRecipe({
+      recipeId: input.recipeId,
+      datasetId: context.datasetId,
+      version: input.version ?? 1,
+      status: input.status,
+      sourceDescription: context.description,
+      requestedColumns: context.columns.map((column) => column.name),
+      runtimeInstructions: input.runtimeInstructions,
+      createdAt: "2026-05-22T00:00:00.000Z",
+    }),
+    playwrightScript: input.playwrightScript,
+  };
 }
 
 function validRun(

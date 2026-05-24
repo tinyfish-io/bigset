@@ -56,11 +56,11 @@ Writes to Convex via `ConvexHttpClient` in `src/convex.ts`. Import `{ convex, ap
 
 ## Environment
 
-Required env vars (see `.env.example`):
+Required env vars (see root `.env.example`):
 - `CONVEX_URL` — Convex instance URL
 - `CONVEX_SELF_HOSTED_ADMIN_KEY` — for system-level Convex writes (internal mutations)
 - `CLERK_SECRET_KEY`, `CLERK_PUBLISHABLE_KEY` — for JWT verification
 - `OPENROUTER_API_KEY` — for AI model calls
 - `TINYFISH_API_KEY` — for web search and fetch (populate agent). Get one at https://agent.tinyfish.ai/api-keys
 
-In Docker, these are interpolated from the root `.env` file via `docker-compose.dev.yml`.
+In Docker, these are loaded from the root `.env` file via `docker-compose.dev.yml`.

@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { tinyfishAgentRunResultFromRun } from "../BigSet_Data_Collection_Agent/src/integrations/tinyfish-agent.js";
+import {
+  pollTinyfishAgentUntilDone,
+  tinyfishAgentRunResultFromRun,
+} from "../BigSet_Data_Collection_Agent/src/integrations/tinyfish-agent.js";
 
 test("TinyFish run normalization keeps safe provenance without streaming URL", () => {
   const normalized = tinyfishAgentRunResultFromRun({
@@ -114,4 +117,46 @@ test("TinyFish run normalization converts documented run steps to browser action
     value_description: "redacted typed value (15 chars)",
   }]);
   assert.equal(JSON.stringify(normalized).includes("secret-password"), false);
+});
+
+test("TinyFish agent poll timeout races hung run reads and cancels promptly", async () => {
+  const startedAt = Date.now();
+  let pollAttempts = 0;
+  let cancelAttempts = 0;
+
+  const result = await pollTinyfishAgentUntilDone("run-hung-poll", {
+    pollTimeoutMs: 40,
+    pollIntervalMs: 1,
+    requestTimeoutMs: 10,
+    readRun: async (_runId, { signal }) => {
+      pollAttempts += 1;
+      await new Promise<never>((_resolve, reject) => {
+        signal.addEventListener(
+          "abort",
+          () =>
+            reject(
+              signal.reason instanceof Error
+                ? signal.reason
+                : new Error("poll aborted"),
+            ),
+          { once: true },
+        );
+      });
+    },
+    cancelRun: async (_runId, { signal }) => {
+      cancelAttempts += 1;
+      assert.equal(signal.aborted, false);
+    },
+  });
+
+  assert.equal(result.status, "TIMEOUT");
+  assert.equal(result.run_id, "run-hung-poll");
+  assert.match(result.error ?? "", /timed out after 40ms/);
+  assert.match(
+    result.error ?? "",
+    /last poll error: TinyFish Agent poll run-hung-poll timed out after \d+ms/,
+  );
+  assert.equal(cancelAttempts, 1);
+  assert.ok(pollAttempts >= 1);
+  assert.ok(Date.now() - startedAt < 300);
 });

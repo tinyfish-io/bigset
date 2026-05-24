@@ -10,6 +10,12 @@ import {
   runPopulateRuntime,
 } from "./populate-runtime.js";
 import {
+  createPlaywrightScriptArtifact,
+  type BrowserActionBox,
+  type BrowserActionBoxDatasetSchema,
+  type PlaywrightScriptArtifact,
+} from "./populate-browser-action-box.js";
+import {
   datasetContextSchema,
   type DatasetContext,
 } from "./populate.js";
@@ -34,7 +40,12 @@ export type PopulateRecipeArtifactKind =
   | "captured-rows"
   | "process-trace"
   | "playwright-candidate-readiness"
-  | "playwright-candidate-script";
+  | "playwright-candidate-script"
+  | "tinyfish-trace"
+  | "playwright-replay-result"
+  | "playwright-repair-diagnostic"
+  | "playwright-repaired-script"
+  | "validation-result";
 
 const MAX_ARTIFACT_TEXT_LENGTH = 20_000;
 const PROCESS_TRACE_ARTIFACT_LIMITS = [
@@ -56,6 +67,7 @@ export interface PopulateRecipe {
   createdBy: "agent" | "human" | "system";
   lastSuccessfulRunAt?: string;
   lastValidationScore?: number;
+  playwrightScript?: PlaywrightScriptArtifact;
 }
 
 export interface PopulateRecipeArtifact {
@@ -175,6 +187,7 @@ export class MastraPopulateRecipeRuntime implements PopulateRecipeRuntime {
       runPopulate?: typeof runPopulateRuntime;
       webTools?: PopulateRuntimeWebTools;
       agentRunner?: PopulateRuntimeAgentRunner;
+      browserActionBox?: Pick<BrowserActionBox, "firstRun" | "replay">;
       maxRows?: number;
     } = {}
   ) {}
@@ -191,12 +204,50 @@ export class MastraPopulateRecipeRuntime implements PopulateRecipeRuntime {
     let failureMessage: string | undefined;
 
     try {
-      result = await runtime({
-        context,
-        webTools: this.input.webTools,
-        agentRunner: this.input.agentRunner,
-        maxRows: this.input.maxRows,
-      });
+      if (input.recipe.playwrightScript && this.input.browserActionBox) {
+        const replayOutput = await this.input.browserActionBox.replay({
+          sourceUrl: input.recipe.playwrightScript.sourceUrl,
+          datasetGoalPrompt: input.context.description,
+          datasetSchema: browserActionBoxDatasetSchemaFromContext(input.context),
+          currentPlaywrightScript: input.recipe.playwrightScript,
+          previousSuccessfulOutputProfile: {
+            fieldsPreviouslyRetrieved: input.recipe.requestedColumns,
+            rowCountRange: { min: 1 },
+            sourceUrls: [input.recipe.playwrightScript.sourceUrl],
+            evidenceRequired: true,
+          },
+          runCaps: {
+            maxReplayAttempts: 1,
+            maxRepairAttempts: 1,
+            timeoutMs: 30_000,
+          },
+        });
+        result = replayOutput.runtimeResult ?? emptyPopulateRuntimeResult([
+          `BrowserActionBox ${replayOutput.replayStatus}: ${replayOutput.diagnostics.join("; ")}`,
+        ]);
+        if (result.debug) {
+          result.debug.diagnosticArtifacts = [
+            ...(result.debug.diagnosticArtifacts ?? []),
+            {
+              kind: "playwright-repair-diagnostic",
+              label: "populate-playwright-repair-diagnostic",
+              content: JSON.stringify({
+                replayStatus: replayOutput.replayStatus,
+                diagnostics: replayOutput.diagnostics,
+                trace: replayOutput.trace,
+              }, null, 2),
+            },
+          ];
+        }
+      } else {
+        result = await runtime({
+          context,
+          webTools: this.input.webTools,
+          agentRunner: this.input.agentRunner,
+          browserActionBox: this.input.browserActionBox,
+          maxRows: this.input.maxRows,
+        });
+      }
     } catch (error) {
       failureMessage = error instanceof Error ? error.message : String(error);
       result = emptyPopulateRuntimeResult([failureMessage]);
@@ -314,6 +365,16 @@ export class SelfHealingPopulateRecipeService {
         activeRecipe: updatedRecipe,
         activeRun,
         rejectionReasons: [],
+      };
+    }
+
+    if (shouldRejectAfterBoundedReplayFailure({ activeRecipe, activeRun })) {
+      return {
+        datasetId: input.datasetId,
+        action: "candidate_rejected",
+        activeRecipe,
+        activeRun,
+        rejectionReasons: replayFailureRejectionReasons(activeRun),
       };
     }
 
@@ -1091,6 +1152,23 @@ function artifactsForRun(input: {
       content: debugNotes.join("\n").slice(0, MAX_ARTIFACT_TEXT_LENGTH),
     });
   }
+  artifacts.push({
+    kind: "validation-result",
+    label: "populate-validation-result",
+    content: JSON.stringify(input.productionValidation, null, 2)
+      .slice(0, MAX_ARTIFACT_TEXT_LENGTH),
+  });
+  for (const artifact of input.result.debug?.diagnosticArtifacts ?? []) {
+    const kind = runtimeDiagnosticArtifactKind(artifact.kind);
+    if (!kind) {
+      continue;
+    }
+    artifacts.push({
+      kind,
+      label: artifact.label,
+      content: artifact.content.slice(0, MAX_ARTIFACT_TEXT_LENGTH),
+    });
+  }
   const capturedSources = input.result.debug?.capturedSources ?? [];
   const capturedRows = input.result.debug?.capturedRows ?? [];
   const processTrace = input.result.debug?.processTrace ?? {
@@ -1158,6 +1236,20 @@ function artifactsForRun(input: {
     }
   }
   return artifacts;
+}
+
+function runtimeDiagnosticArtifactKind(
+  value: string
+): PopulateRecipeArtifactKind | undefined {
+  if (
+    value === "tinyfish-trace" ||
+    value === "playwright-replay-result" ||
+    value === "playwright-repair-diagnostic" ||
+    value === "playwright-repaired-script"
+  ) {
+    return value;
+  }
+  return undefined;
 }
 
 function playwrightCandidateReadinessArtifactContent(
@@ -1316,6 +1408,28 @@ function isHealthyRun(runResult: PopulateRecipeRunResult): boolean {
     runResult.productionValidation.isValid;
 }
 
+function shouldRejectAfterBoundedReplayFailure(input: {
+  activeRecipe: PopulateRecipe;
+  activeRun: PopulateRecipeRunResult;
+}): boolean {
+  return Boolean(input.activeRecipe.playwrightScript) &&
+    input.activeRun.artifacts.some((artifact) =>
+      artifact.kind === "playwright-repair-diagnostic" ||
+      artifact.kind === "playwright-replay-result"
+    );
+}
+
+function replayFailureRejectionReasons(
+  activeRun: PopulateRecipeRunResult
+): string[] {
+  return Array.from(new Set([
+    ...activeRun.productionValidation.criticalIssues,
+    ...activeRun.validationIssues,
+    ...activeRun.productionValidation.warnings,
+    "Promoted Playwright replay/repair failed; keeping prior active script.",
+  ])).filter(Boolean);
+}
+
 function shouldPromoteCandidate(input: {
   activeRecipe: PopulateRecipe;
   activeRun: PopulateRecipeRunResult;
@@ -1347,6 +1461,18 @@ function rejectionReasonsForCandidate(input: {
   return Array.from(new Set(reasons));
 }
 
+function browserActionBoxDatasetSchemaFromContext(
+  context: DatasetContext
+): BrowserActionBoxDatasetSchema {
+  return {
+    columns: context.columns.map((column) => ({
+      name: column.name,
+      description: column.description,
+      required: column.nullable !== true,
+    })),
+  };
+}
+
 function successfulRecipe(
   recipe: PopulateRecipe,
   runResult: PopulateRecipeRunResult
@@ -1356,7 +1482,49 @@ function successfulRecipe(
     status: "active",
     lastSuccessfulRunAt: runResult.completedAt,
     lastValidationScore: runResult.productionValidation.score,
+    playwrightScript: promotedPlaywrightScriptFromRunResult(recipe, runResult),
   };
+}
+
+function promotedPlaywrightScriptFromRunResult(
+  recipe: PopulateRecipe,
+  runResult: PopulateRecipeRunResult
+): PlaywrightScriptArtifact | undefined {
+  const scriptArtifact = runResult.artifacts.find((artifact) =>
+    artifact.kind === "playwright-repaired-script"
+  ) ?? runResult.artifacts.find((artifact) =>
+    artifact.kind === "playwright-candidate-script"
+  );
+  if (!scriptArtifact?.content.trim()) {
+    return recipe.playwrightScript;
+  }
+  const sourceUrl = firstRunSourceUrl(runResult);
+  if (!sourceUrl) {
+    return recipe.playwrightScript;
+  }
+  return createPlaywrightScriptArtifact({
+    sourceUrl,
+    datasetGoalPrompt: recipe.sourceDescription,
+    datasetSchema: {
+      columns: recipe.requestedColumns.map((name) => ({
+        name,
+        required: true,
+      })),
+    },
+    code: scriptArtifact.content,
+    status: "promoted",
+    createdAt: runResult.completedAt,
+    diagnostics: [],
+  });
+}
+
+function firstRunSourceUrl(
+  runResult: PopulateRecipeRunResult
+): string | undefined {
+  return runResult.rows.flatMap((row) => row.sourceUrls)[0] ??
+    runResult.debug?.processTrace.sourceArtifacts.find((artifact) =>
+      artifact.status === "succeeded"
+    )?.url;
 }
 
 function runRecordFromRunResult(

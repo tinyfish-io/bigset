@@ -11,6 +11,15 @@ import {
   datasetContextSchema,
   type DatasetContext,
 } from "./populate.js";
+import {
+  buildPopulateFetchPlan,
+  triageFetchedPageForPopulate,
+  rankPopulateSearchResults,
+} from "./populate-source-planner.js";
+import type {
+  BrowserActionBox,
+  BrowserActionBoxDatasetSchema,
+} from "./populate-browser-action-box.js";
 
 export type PopulateCellValue =
   | string
@@ -114,6 +123,11 @@ export interface PopulateRuntimeDebug {
     | "none";
   notes: string[];
   processTrace: PopulateProcessTrace;
+  diagnosticArtifacts?: Array<{
+    kind: string;
+    label: string;
+    content: string;
+  }>;
 }
 
 export interface PopulateRuntimeResult {
@@ -177,7 +191,12 @@ export async function runPopulateRuntime(input: {
   context: DatasetContext;
   webTools?: PopulateRuntimeWebTools;
   agentRunner?: PopulateRuntimeAgentRunner;
+  browserActionBox?: Pick<BrowserActionBox, "firstRun">;
   maxRows?: number;
+  sourcePlanner?: {
+    enabled?: boolean;
+    fetchLimit?: number;
+  };
 }): Promise<PopulateRuntimeResult> {
   const parsedContext = datasetContextSchema.parse(input.context);
   const clarificationResult = clarificationResultForContext(parsedContext);
@@ -190,6 +209,8 @@ export async function runPopulateRuntime(input: {
   const processTraceSteps: PopulateRuntimeTraceStep[] = [];
   const validationIssues: string[] = [];
   const debugNotes: string[] = [];
+  const diagnosticArtifacts: NonNullable<PopulateRuntimeDebug["diagnosticArtifacts"]> = [];
+  const browserActionRows: PopulateRuntimeRow[] = [];
   const metrics = emptyMetrics();
   const webTools = input.webTools ?? createTinyFishWebTools();
   const tools = createPopulateRuntimeTools({
@@ -201,6 +222,29 @@ export async function runPopulateRuntime(input: {
     webTools,
     maxRows: input.maxRows ?? 10,
     processTraceSteps,
+  });
+  if (input.sourcePlanner?.enabled ?? !input.agentRunner) {
+    await seedCapturedSourcesFromPlannedSearches({
+      context: parsedContext,
+      webTools,
+      capturedSources,
+      validationIssues,
+      metrics,
+      processTraceSteps,
+      fetchLimit: input.sourcePlanner?.fetchLimit ?? 6,
+    });
+  }
+  await runBrowserActionBoxForDeferredSources({
+    context: parsedContext,
+    capturedSources,
+    browserActionBox: input.browserActionBox,
+    browserActionRows,
+    processTraceSteps,
+    validationIssues,
+    debugNotes,
+    diagnosticArtifacts,
+    metrics,
+    maxRows: input.maxRows ?? 10,
   });
   await seedCapturedSourcesFromContextUrls({
     context: parsedContext,
@@ -240,6 +284,7 @@ export async function runPopulateRuntime(input: {
         selectedRowSource: "structured_recovery",
         notes: debugNotes,
         processTrace,
+        diagnosticArtifacts,
       },
     };
   }
@@ -400,7 +445,10 @@ export async function runPopulateRuntime(input: {
   }
   const fallbackStructuredRows = shouldUseDeterministicRows
     ? deterministicRows
-    : structuredRows;
+    : [
+      ...browserActionRows,
+      ...structuredRows,
+    ];
   const structuredRowIssues = validateRuntimeRows(fallbackStructuredRows);
   if (
     insertedRows.length > 0 &&
@@ -444,6 +492,7 @@ export async function runPopulateRuntime(input: {
       selectedRowSource,
       notes: debugNotes,
       processTrace,
+      diagnosticArtifacts,
     },
   };
 }
@@ -460,6 +509,213 @@ function createRuntimePopulateAgent(input: { tools: Record<string, unknown> }) {
     model: openrouter("anthropic/claude-sonnet-4-6"),
     tools: input.tools as ConstructorParameters<typeof Agent>[0]["tools"],
   });
+}
+
+async function seedCapturedSourcesFromPlannedSearches(input: {
+  context: DatasetContext;
+  webTools: PopulateRuntimeWebTools;
+  capturedSources: PopulateRuntimeCapturedSource[];
+  validationIssues: string[];
+  metrics: PopulateRuntimeResult["metrics"];
+  processTraceSteps: PopulateRuntimeTraceStep[];
+  fetchLimit: number;
+}): Promise<void> {
+  if (urlsFromText(userPromptDescription(input.context.description)).length > 0) {
+    return;
+  }
+
+  const searchResults: PopulateWebSearchResult[] = [];
+  for (const query of plannedSourceSearchQueries(input.context)) {
+    input.metrics.searchCalls += 1;
+    try {
+      const results = await input.webTools.search({ query });
+      searchResults.push(...results);
+      input.processTraceSteps.push({
+        kind: "search",
+        label: "source-planner-search",
+        status: "succeeded",
+        input: { query },
+        output: {
+          resultCount: results.length,
+          urls: results.map((result) => result.url).slice(0, 10),
+        },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      input.validationIssues.push(`Source planner search failed: ${message}`);
+      input.processTraceSteps.push({
+        kind: "search",
+        label: "source-planner-search",
+        status: "failed",
+        input: { query },
+        error: message,
+      });
+    }
+  }
+
+  const ranked = rankPopulateSearchResults({
+    context: input.context,
+    results: searchResults,
+  });
+  const fetchUrls = buildPopulateFetchPlan({
+    rankedResults: ranked,
+    fetchLimit: input.fetchLimit,
+  });
+  for (const url of fetchUrls) {
+    input.metrics.fetchCalls += 1;
+    try {
+      const page = await input.webTools.fetch({ url });
+      input.capturedSources.push({
+        url,
+        text: [page.title, page.text].filter(Boolean).join("\n"),
+        source: "fetch",
+      });
+      input.processTraceSteps.push({
+        kind: "fetch",
+        label: "source-planner-fetch",
+        status: "succeeded",
+        input: { url },
+        output: {
+          title: page.title,
+          textCharacters: page.text?.length ?? 0,
+          expectationScore: ranked.find((result) =>
+            result.canonicalUrl === url
+          )?.expectationScore,
+        },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      input.validationIssues.push(`Source planner fetch failed for ${url}: ${message}`);
+      input.processTraceSteps.push({
+        kind: "fetch",
+        label: "source-planner-fetch",
+        status: "failed",
+        input: { url },
+        error: message,
+      });
+    }
+  }
+}
+
+function plannedSourceSearchQueries(context: DatasetContext): string[] {
+  const searchPhrase = taskSearchPhrase(context);
+  const entities = entityCandidatesFromDescription(
+    userPromptDescription(context.description)
+  ).slice(0, 3);
+  const queries = entities.length > 0
+    ? entities.map((entity) => `${entity} ${searchPhrase} official source`)
+    : [`${searchPhrase} official source`];
+  return Array.from(new Set(queries)).slice(0, 4);
+}
+
+async function runBrowserActionBoxForDeferredSources(input: {
+  context: DatasetContext;
+  capturedSources: PopulateRuntimeCapturedSource[];
+  browserActionBox?: Pick<BrowserActionBox, "firstRun">;
+  browserActionRows: PopulateRuntimeRow[];
+  processTraceSteps: PopulateRuntimeTraceStep[];
+  validationIssues: string[];
+  debugNotes: string[];
+  diagnosticArtifacts: NonNullable<PopulateRuntimeDebug["diagnosticArtifacts"]>;
+  metrics: PopulateRuntimeResult["metrics"];
+  maxRows: number;
+}): Promise<void> {
+  const candidates = input.capturedSources
+    .filter((source) => source.source === "fetch")
+    .map((source) => ({
+      source,
+      triage: triageFetchedPageForPopulate({
+        context: input.context,
+        url: source.url,
+        page: {
+          title: firstUsefulSourceTitle(source.text),
+          text: source.text,
+        },
+      }),
+    }));
+
+  for (const candidate of candidates) {
+    input.processTraceSteps.push({
+      kind: "validation",
+      label: "source-fetch-triage",
+      status: "succeeded",
+      input: {
+        url: candidate.source.url,
+      },
+      output: {
+        status: candidate.triage.status,
+        confidence: candidate.triage.confidence,
+        reason: candidate.triage.reason,
+      },
+    });
+  }
+
+  const browserCandidate = candidates.find((candidate) =>
+    candidate.triage.status === "requires_navigation" ||
+    candidate.triage.status === "requires_form_submission" ||
+    candidate.triage.status === "requires_detail_page_followup"
+  );
+  if (!browserCandidate) {
+    return;
+  }
+
+  if (!input.browserActionBox) {
+    input.debugNotes.push(
+      `BrowserActionBox not configured for ${browserCandidate.source.url}; replay readiness remains not_ready until a real browser-action trace exists.`
+    );
+    return;
+  }
+
+  try {
+    const output = await input.browserActionBox.firstRun({
+      sourceUrl: browserCandidate.source.url,
+      datasetGoalPrompt: userPromptDescription(input.context.description),
+      datasetSchema: browserActionBoxDatasetSchemaFromContext(input.context),
+      runCaps: {
+        maxAgentSteps: 20,
+        maxDurationSeconds: 120,
+        captureHtml: true,
+        captureScreenshots: true,
+      },
+    });
+    input.browserActionRows.push(...output.runtimeResult.rows.slice(0, input.maxRows));
+    input.validationIssues.push(...output.runtimeResult.validationIssues);
+    input.metrics.browserCalls += 1;
+    input.metrics.agentRuns += 1;
+    input.metrics.agentSteps += output.trace.runSteps.length;
+    input.processTraceSteps.push(...(output.runtimeResult.debug?.processTrace.steps ?? []));
+    input.debugNotes.push(
+      `BrowserActionBox first run for ${browserCandidate.source.url}: replay_${output.replayReadiness.status}.`
+    );
+    input.debugNotes.push(...output.diagnostics);
+    input.diagnosticArtifacts.push(...(output.runtimeResult.debug?.diagnosticArtifacts ?? []));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    input.validationIssues.push(
+      `BrowserActionBox first run failed for ${browserCandidate.source.url}: ${message}`
+    );
+    input.processTraceSteps.push({
+      kind: "agent",
+      label: "browser-action-box-first-run",
+      status: "failed",
+      input: {
+        url: browserCandidate.source.url,
+      },
+      error: message,
+    });
+  }
+}
+
+function browserActionBoxDatasetSchemaFromContext(
+  context: DatasetContext
+): BrowserActionBoxDatasetSchema {
+  return {
+    columns: context.columns.map((column) => ({
+      name: column.name,
+      description: column.description,
+      required: column.nullable !== true,
+    })),
+  };
 }
 
 function clarificationResultForContext(
@@ -519,7 +775,9 @@ async function enrichCapturedSourcesForStructuredFallback(input: {
   metrics: PopulateRuntimeResult["metrics"];
   webTools: PopulateRuntimeWebTools;
 }) {
-  const entities = entityCandidatesFromDescription(input.context.description);
+  const entities = entityCandidatesFromDescription(
+    userPromptDescription(input.context.description)
+  );
   const newSources: PopulateRuntimeCapturedSource[] = [];
   for (const entity of entities.slice(0, 4)) {
     let results: PopulateWebSearchResult[] = [];
@@ -693,14 +951,20 @@ function taskSearchPhrase(context: DatasetContext): string {
   if (/\b(latest|blog|post|release|date)\b/i.test(taskText)) {
     return "latest official source title date URL";
   }
-  return truncateForPrompt(context.description, 120);
+  return truncateForPrompt(userPromptDescription(context.description), 120);
 }
 
 function contextText(context: DatasetContext): string {
   return [
-    context.description,
+    userPromptDescription(context.description),
     ...context.columns.map((column) => `${column.name} ${column.description ?? ""}`),
   ].join(" ");
+}
+
+function userPromptDescription(description: string): string {
+  return description
+    .split(/\n\s*Durable recipe instructions:\s*/i)[0]
+    ?.trim() || description.trim();
 }
 
 function uniqueSearchResults(results: PopulateWebSearchResult[]): PopulateWebSearchResult[] {
@@ -801,7 +1065,9 @@ function buildStructuredRowsPrompt(input: {
     nullable: column.nullable === true,
     description: column.description ?? "",
   }));
-  const entities = entityCandidatesFromDescription(input.context.description);
+  const entities = entityCandidatesFromDescription(
+    userPromptDescription(input.context.description)
+  );
   const officialHints = Object.fromEntries(
     entities.map((entity) => [
       entity,
@@ -982,6 +1248,20 @@ export function populateProcessTraceFromSteps(input: {
             url: sourceUrl,
             status: step.status,
             source: "fetch" as const,
+            label: step.label,
+            error: step.error,
+          }]
+          : [];
+      }),
+    ...input.steps
+      .filter((step) => step.kind === "agent")
+      .flatMap((step) => {
+        const sourceUrl = stringValue(step.input?.url);
+        return sourceUrl
+          ? [{
+            url: sourceUrl,
+            status: step.status,
+            source: "agent" as const,
             label: step.label,
             error: step.error,
           }]
@@ -1210,7 +1490,9 @@ async function seedCapturedSourcesFromContextUrls(input: {
   metrics: PopulateRuntimeResult["metrics"];
   processTraceSteps: PopulateRuntimeTraceStep[];
 }): Promise<void> {
-  const urls = urlsFromText(input.context.description).slice(0, 5);
+  const urls = urlsFromText(
+    userPromptDescription(input.context.description)
+  ).slice(0, 5);
   for (const url of urls) {
     input.metrics.fetchCalls += 1;
     try {
@@ -1396,7 +1678,9 @@ function deterministicRowsFromCapturedSources(input: {
   capturedSources: PopulateRuntimeCapturedSource[];
   maxRows: number;
 }): PopulateRuntimeRow[] {
-  const explicitSourceUrls = urlsFromText(input.context.description);
+  const explicitSourceUrls = urlsFromText(
+    userPromptDescription(input.context.description)
+  );
   const titleColumn = input.context.columns.find((column) =>
     /title|name/i.test(column.name)
   );
@@ -1516,7 +1800,7 @@ function capturedSourceRelevanceScore(
   context: DatasetContext
 ): number {
   const text = `${source.url}\n${source.text}`.toLowerCase();
-  const descriptionTokens = context.description
+  const descriptionTokens = userPromptDescription(context.description)
     .toLowerCase()
     .split(/[^a-z0-9]+/)
     .filter((token) =>
@@ -1538,7 +1822,7 @@ function capturedSourceRelevanceScore(
   if (/openai\.com\/news\/?$|openai\.com\/news\/(product-releases|research|company-announcements)\/?$/i.test(source.url)) {
     score -= 3;
   }
-  if (/mcp/i.test(source.url) && !/mcp/i.test(context.description)) {
+  if (/mcp/i.test(source.url) && !/mcp/i.test(userPromptDescription(context.description))) {
     score -= 4;
   }
   return score;
@@ -1696,7 +1980,9 @@ function selectRepresentativeRows(
   rows: PopulateRuntimeRow[],
   context: DatasetContext
 ): PopulateRuntimeRow[] {
-  const entities = entityCandidatesFromDescription(context.description);
+  const entities = entityCandidatesFromDescription(
+    userPromptDescription(context.description)
+  );
   if (entities.length < 2 || rows.length <= entities.length) {
     return rows;
   }

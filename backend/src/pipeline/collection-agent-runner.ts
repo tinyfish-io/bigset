@@ -157,7 +157,7 @@ const AGENT_REQUIRED_TRIAGE_STATUSES = new Set([
   "requires_detail_page_followup",
 ]);
 
-const DEFAULT_COLLECTION_AGENT_POLL_TIMEOUT_MS = 480_000;
+const DEFAULT_COLLECTION_AGENT_POLL_TIMEOUT_MS = 1_200_000;
 
 export const runCollectionPopulatePipeline: CollectionPopulatePipelineRunner =
   async (input) => {

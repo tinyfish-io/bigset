@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>BigSet PR67 Populate Flow</title>
+  <title>BigSet PR67 Self-Healing Flow</title>
   <style>
     :root {
       --paper: #f7f7f2;
@@ -227,18 +227,17 @@
   <main>
     <header>
       <div>
-        <h1>BigSet PR67 Populate Flow</h1>
+        <h1>BigSet PR67 Self-Healing Flow</h1>
         <p class="subtitle">
-          Public-safe architecture artifact for the in-app populate path. It shows the
-          original auth break, the fixed target loop, and the validation gate that keeps
-          rejected runs from writing fake rows.
+          Public-safe note for the in-app populate path. It covers source planning,
+          TinyFish trace normalization, and the BrowserActionBox replay loop that still
+          goes through the same validation gate before any row write.
         </p>
       </div>
       <div class="status" aria-label="Current PR67 status">
-        <span class="pill good">Auth break fixed</span>
-        <span class="pill good">Rejected runs visible</span>
-        <span class="pill good">Accepted rows proven</span>
-        <span class="pill warn">Browser replay not ready</span>
+        <span class="pill good">Source planning in backend</span>
+        <span class="pill good">TinyFish trace canary</span>
+        <span class="pill good">Chromium replay runner</span>
       </div>
     </header>
 
@@ -246,86 +245,72 @@
       <article class="panel">
         <b>Backend</b>
         <p>
-          `/populate` uses a trusted internal Convex owner lookup, then compares
-          `ownerId` to the authenticated request user before runtime execution.
+          `/populate` now runs source planning, ranking, and triage in
+          `backend/src/pipeline/populate-source-planner.ts` before browser work starts.
         </p>
       </article>
       <article class="panel">
-        <b>Rows</b>
+        <b>Traces</b>
         <p>
-          Accepted rows are written through the internal row writer with source URLs
-          and evidence quotes preserved in Convex. Partial-safe rows can be written
-          without promoting a full recipe.
+          `backend/src/pipeline/populate-tinyfish-trace-recorder.ts` normalizes TinyFish
+          raw run steps and artifacts into replayable browser actions when the trace has
+          enough signal.
         </p>
       </article>
       <article class="panel">
-        <b>UI</b>
+        <b>Replay</b>
         <p>
-          The dataset page surfaces accepted or rejected populate state, validation
-          score, first issue, source links, and evidence snippets.
+          `backend/src/pipeline/populate-browser-action-box.ts` covers first run,
+          replay, and one bounded repair attempt. The backend Docker image includes
+          `playwright-core` and system Chromium for local replay.
         </p>
       </article>
     </section>
 
     <section>
-      <h2>Smoke Result</h2>
+      <h2>Trust Shell</h2>
+      <p class="callout">
+        Validation is mandatory. Replay or repair can promote a script, but they still
+        flow through the same validation gate before any row write.
+      </p>
       <div class="grid">
         <article class="panel">
-          <b>Ready checks</b>
-          <ul>
-            <li>`make dev` rebuilt and pushed Convex functions.</li>
-            <li>Frontend, backend, Mastra, Convex, and Postgres were reachable.</li>
-            <li>Chrome-for-testing had a signed-in BigSet session.</li>
-          </ul>
+          <b>First run</b>
+          <p>
+            BrowserActionBox records the TinyFish trace, normalizes browser actions, and
+            drafts a Playwright script when readiness is `ready`.
+          </p>
         </article>
         <article class="panel">
-          <b>Rejected prompt</b>
-          <ul>
-            <li>Underspecified prompt returned `422`.</li>
-            <li>Committed rows stayed at 0.</li>
-            <li>UI showed "Rejected: no rows written".</li>
-          </ul>
+          <b>Replay</b>
+          <p>
+            A promoted Playwright script can replay for the same source URL, schema, and
+            goal through local Chromium. A failed replay gets one bounded repair attempt,
+            and disabled replay still records diagnostics instead of fake rows.
+          </p>
         </article>
         <article class="panel">
-          <b>Accepted prompt</b>
-          <ul>
-            <li>Frontend created `Openai Api Docs Pages`.</li>
-            <li>`/populate` committed 2 rows.</li>
-            <li>UI showed `Accepted full`, score `1.00`, links, and evidence.</li>
-          </ul>
+          <b>Artifacts</b>
+          <p>
+            Public artifacts now include `tinyfish-trace`,
+            `playwright-replay-result`, `playwright-repair-diagnostic`,
+            `playwright-repaired-script`, and `validation-result`.
+          </p>
         </article>
       </div>
-      <p class="callout">
-        The old blocker was an anonymous private Convex read before extraction. PR67 moves
-        past that. Search/fetch-only traces are still marked replay `not_ready`; browser replay
-        requires explicit browser actions instead of a fabricated script.
-      </p>
     </section>
 
     <section aria-label="Rendered diagrams">
       <figure>
         <figcaption>
           <div>
-            <h3>Before State: Auth Break</h3>
-            <p>The backend reached `/populate`, then failed while reading a private dataset anonymously.</p>
-          </div>
-          <a href="assets/bigset-populate-before-state.svg">Open SVG</a>
-        </figcaption>
-        <div class="diagram">
-          <img src="assets/bigset-populate-before-state.svg" alt="Before-state populate auth break diagram">
-        </div>
-      </figure>
-
-      <figure>
-        <figcaption>
-          <div>
-            <h3>Target App Loop</h3>
-            <p>Signed-in UI, ownership-safe backend load, Mastra runtime, validation, safe commit, and artifacts.</p>
+            <h3>BrowserActionBox Flow</h3>
+            <p>Source planning feeds first-run tracing, then replay or one repair attempt goes back through the same validation gate.</p>
           </div>
           <a href="assets/bigset-populate-target-loop.svg">Open SVG</a>
         </figcaption>
         <div class="diagram">
-          <img src="assets/bigset-populate-target-loop.svg" alt="Target app populate loop diagram">
+          <img src="assets/bigset-populate-target-loop.svg" alt="BrowserActionBox first-run and second-run populate flow diagram">
         </div>
       </figure>
 

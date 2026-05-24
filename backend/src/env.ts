@@ -1,4 +1,7 @@
-import "dotenv/config";
+import { config as loadDotenv } from "dotenv";
+import { fileURLToPath } from "node:url";
+
+loadDotenv({ path: fileURLToPath(new URL("../../.env", import.meta.url)) });
 
 function required(name: string): string {
   const value = process.env[name];
@@ -21,7 +24,9 @@ export const env = {
   // Used by ./clerk-auth.ts to verify JWTs on protected routes (e.g.
   // /infer-schema). Required for the backend to function.
   CLERK_SECRET_KEY: process.env.CLERK_SECRET_KEY,
-  CLERK_PUBLISHABLE_KEY: process.env.CLERK_PUBLISHABLE_KEY,
+  CLERK_PUBLISHABLE_KEY:
+    process.env.CLERK_PUBLISHABLE_KEY ??
+    process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY,
 
   OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY,
   TINYFISH_API_KEY: process.env.TINYFISH_API_KEY,

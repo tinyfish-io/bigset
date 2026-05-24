@@ -3,10 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
-    "lint": "eslint"
+    "dev": "node ../scripts/with-root-env.mjs next dev",
+    "build": "node ../scripts/with-root-env.mjs next build",
+    "start": "node ../scripts/with-root-env.mjs next start",
+    "lint": "node ../scripts/with-root-env.mjs eslint"
   },
   "dependencies": {
     "@clerk/nextjs": "^7.3.7",

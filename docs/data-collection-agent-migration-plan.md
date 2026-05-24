@@ -307,7 +307,8 @@ Agent explicitly enabled:
 
 ```bash
 COLLECTION_AGENT_ENABLE_AGENT=true \
-COLLECTION_AGENT_POLL_TIMEOUT_MS=480000 \
+COLLECTION_AGENT_POLL_TIMEOUT_MS=1200000 \
+AGENT_REQUEST_TIMEOUT_MS=15000 \
 COLLECTION_AGENT_PIPELINE_MODULE=./backend/BigSet_Data_Collection_Agent/src/orchestrator/pipeline.ts \
 BIGSET_COLLECTION_BENCHMARK_RUNNER_MODULE=./backend/src/pipeline/collection-agent-runner.ts \
 node benchmarks/dataset-agent/run-benchmark.mjs \
@@ -378,7 +379,9 @@ The BigSet runner keeps TinyFish Agent/browser calls disabled unless
 `COLLECTION_AGENT_ENABLE_AGENT=true`. This makes cron and benchmark reruns cheap
 and repeatable first. Agent-enabled runs should also set
 `COLLECTION_AGENT_POLL_TIMEOUT_MS` or `AGENT_POLL_TIMEOUT_MS` so a browser run
-cannot outlive the benchmark/job budget.
+cannot outlive the benchmark/job budget. `AGENT_REQUEST_TIMEOUT_MS` caps each
+TinyFish Agent queue/poll/cancel HTTP request so one hung `runs.get` call cannot
+outlive the app-level poll timeout.
 
 Do not switch the default runtime from Mastra to collection until the
 self-healing-wrapped collection benchmark has better evidence than the current

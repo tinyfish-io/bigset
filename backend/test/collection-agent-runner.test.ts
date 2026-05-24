@@ -74,7 +74,7 @@ test("collection agent runner maps explicit browser action reports into process 
   process.env.COLLECTION_AGENT_ENABLE_AGENT = "true";
   delete process.env.COLLECTION_AGENT_POLL_TIMEOUT_MS;
   process.env.COLLECTION_AGENT_PIPELINE_MODULE = fakeCollectionPipelineModuleUrl({
-    expectedCalls: [{ agentEnabled: true, pollTimeoutMs: 480_000 }],
+    expectedCalls: [{ agentEnabled: true, pollTimeoutMs: 1_200_000 }],
     browserActions: [
       {
         action: "hover",
@@ -141,7 +141,7 @@ test("collection agent runner surfaces Agent provenance when actions are missing
   process.env.COLLECTION_AGENT_ENABLE_AGENT = "true";
   delete process.env.COLLECTION_AGENT_POLL_TIMEOUT_MS;
   process.env.COLLECTION_AGENT_PIPELINE_MODULE = fakeCollectionPipelineModuleUrl({
-    expectedCalls: [{ agentEnabled: true, pollTimeoutMs: 480_000 }],
+    expectedCalls: [{ agentEnabled: true, pollTimeoutMs: 1_200_000 }],
     agentReportedStepCount: 4,
     agentRunsWithStreamingUrl: 1,
     agentRunsWithExplicitBrowserActions: 0,

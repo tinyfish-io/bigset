@@ -10,6 +10,7 @@ export interface DatasetCardData {
   cadence: string;
   columns: { name: string; type: string }[];
   previewRows: Record<string, unknown>[];
+  rowCount?: number;
   visibility?: "public" | "private";
 }
 
@@ -49,7 +50,7 @@ export function DatasetCard({ dataset }: { dataset: DatasetCardData }) {
               <span className="text-[11px] text-muted">{dataset.cadence}</span>
             </div>
             <span className="text-[11px] text-muted">
-              {dataset.previewRows?.length ?? 0} rows
+              {dataset.rowCount ?? dataset.previewRows?.length ?? 0} rows
             </span>
           </div>
         </div>

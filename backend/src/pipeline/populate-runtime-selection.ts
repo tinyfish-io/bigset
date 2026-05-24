@@ -10,6 +10,11 @@ import {
   MastraPopulateRecipeRuntime,
   type PopulateRecipeRuntime,
 } from "./populate-self-healing.js";
+import { createTinyFishBrowserActionBox } from "./populate-browser-action-box.js";
+import {
+  createDeterministicPlaywrightRepair,
+  createLocalPlaywrightReplayRunner,
+} from "./populate-playwright-replay-runner.js";
 
 export type PopulateAgentRuntimeName = "mastra" | "collection";
 
@@ -44,7 +49,10 @@ export async function createPopulateRecipeRuntime(
 ): Promise<PopulateRecipeRuntime> {
   const runtimeName = selectedPopulateRuntimeName(input.env);
   if (runtimeName === "mastra") {
-    return new MastraPopulateRecipeRuntime({ maxRows: input.maxRows });
+    return new MastraPopulateRecipeRuntime({
+      maxRows: input.maxRows,
+      browserActionBox: browserActionBoxFromEnv(input.env),
+    });
   }
   const collectionRunner =
     input.collectionRunner ?? await loadCollectionRunnerFromEnv(input.env);
@@ -58,6 +66,45 @@ export async function createPopulateRecipeRuntime(
     targetRows: input.maxRows,
     benchmarkMetadata: collectionBenchmarkMetadataFromEnv(input.env),
   });
+}
+
+function browserActionBoxFromEnv(env: NodeJS.ProcessEnv) {
+  const enabled = booleanEnv(env.POPULATE_ENABLE_BROWSER_ACTION_BOX, true);
+  const apiKey = env.TINYFISH_API_KEY?.trim();
+  if (!enabled || !apiKey) {
+    return undefined;
+  }
+  return createTinyFishBrowserActionBox({
+    apiKey,
+    pollIntervalMs: positiveIntEnv(
+      env.POPULATE_BROWSER_ACTION_BOX_POLL_INTERVAL_MS,
+      3_000
+    ),
+    runPlaywrightScript: booleanEnv(env.POPULATE_ENABLE_PLAYWRIGHT_REPLAY, true)
+      ? createLocalPlaywrightReplayRunner({
+        executablePath: env.POPULATE_PLAYWRIGHT_EXECUTABLE_PATH?.trim() || undefined,
+        headless: booleanEnv(env.POPULATE_PLAYWRIGHT_HEADLESS, true),
+      })
+      : undefined,
+    repairPlaywrightScript: booleanEnv(env.POPULATE_ENABLE_PLAYWRIGHT_REPAIR, true)
+      ? createDeterministicPlaywrightRepair()
+      : undefined,
+  });
+}
+
+function booleanEnv(value: string | undefined, fallback: boolean): boolean {
+  if (value === undefined) {
+    return fallback;
+  }
+  return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
+}
+
+function positiveIntEnv(value: string | undefined, fallback: number): number {
+  if (!value?.trim()) {
+    return fallback;
+  }
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 async function loadCollectionRunnerFromEnv(

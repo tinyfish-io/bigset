@@ -9,7 +9,9 @@ bun install
 bun dev --port 3500
 ```
 
-Opens on [localhost:3500](http://localhost:3500). Expects the backend running on 3501 (auth requests are proxied via Next.js rewrites).
+Opens on [localhost:3500](http://localhost:3500). Package scripts load root
+`.env` before starting Next.js. The supported full-stack dev path is still
+`make dev` from the repo root.
 
 ## Key Paths
 

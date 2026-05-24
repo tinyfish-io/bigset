@@ -29,10 +29,17 @@ async function attachPreview(ctx: QueryCtx, dataset: Doc<"datasets">) {
   const rows = await ctx.db
     .query("datasetRows")
     .withIndex("by_dataset", (q) => q.eq("datasetId", dataset._id))
-    .take(PREVIEW_ROW_COUNT);
+    .collect();
+  const truthfulStatus = dataset.status === "building"
+    ? rows.length > 0
+      ? "live"
+      : "paused"
+    : dataset.status;
   return {
     ...dataset,
-    previewRows: rows.map((r) => r.data),
+    status: truthfulStatus,
+    rowCount: rows.length,
+    previewRows: rows.slice(0, PREVIEW_ROW_COUNT).map((r) => r.data),
   };
 }
 
@@ -109,7 +116,7 @@ export const create = mutation({
     return await ctx.db.insert("datasets", {
       ...args,
       ownerId: identity.subject,
-      status: "building",
+      status: "paused",
       visibility: "private",
     });
   },

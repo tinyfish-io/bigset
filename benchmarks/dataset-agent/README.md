@@ -59,7 +59,7 @@ source-evidence misses:
 
 ```bash
 COLLECTION_AGENT_ENABLE_AGENT=true \
-COLLECTION_AGENT_POLL_TIMEOUT_MS=480000 \
+COLLECTION_AGENT_POLL_TIMEOUT_MS=1200000 \
 COLLECTION_AGENT_PIPELINE_MODULE=./backend/BigSet_Data_Collection_Agent/src/orchestrator/pipeline.ts \
 BIGSET_COLLECTION_BENCHMARK_RUNNER_MODULE=./backend/src/pipeline/collection-agent-runner.ts \
 node benchmarks/dataset-agent/run-benchmark.mjs \
@@ -177,7 +177,7 @@ actionable browser steps, source anchors, and no Agent-disabled diagnostic.
 
 ```bash
 COLLECTION_AGENT_ENABLE_AGENT=true \
-COLLECTION_AGENT_POLL_TIMEOUT_MS=480000 \
+COLLECTION_AGENT_POLL_TIMEOUT_MS=1200000 \
 COLLECTION_AGENT_PIPELINE_MODULE=./backend/BigSet_Data_Collection_Agent/src/orchestrator/pipeline.ts \
 BIGSET_COLLECTION_BENCHMARK_RUNNER_MODULE=./backend/src/pipeline/collection-agent-runner.ts \
 node benchmarks/dataset-agent/run-benchmark.mjs \
@@ -208,10 +208,9 @@ bash scripts/verify-self-healing-stack.sh --convex-push --dataset-id <dataset-id
 bash scripts/verify-self-healing-stack.sh --convex-push --dataset-id <dataset-id> --commit
 ```
 
-The live benchmark and dataset smoke expect required env vars to already be
-exported in the shell. They print only missing key names and never print secret
-values. The `--convex-push` mode still uses the existing `make convex-push`
-target, which requires `frontend/.env.local`.
+The live benchmark and dataset smoke load root `.env` when present. They print
+only missing key names and never print secret values. The `--convex-push` mode
+uses `make convex-push`, which also reads root `.env`.
 
 ## Benchmark Env
 

@@ -3,14 +3,17 @@
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useQuery, useConvexAuth } from "convex/react";
+import { useMutation, useQuery, useConvexAuth } from "convex/react";
 import { useAuth } from "@clerk/nextjs";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { DatasetTable } from "@/components/table";
 import { useSelection } from "@/components/table/use-selection";
 import { ThemeToggle } from "@/components/ThemeToggle";
-import { StatusBadge } from "@/components/dataset/StatusBadge";
+import {
+  StatusBadge,
+  type DatasetStatus,
+} from "@/components/dataset/StatusBadge";
 import { downloadCSV, downloadXLSX } from "@/lib/export";
 import {
   PopulateApiError,
@@ -21,7 +24,7 @@ import { EVENTS, captureException, track } from "@/lib/analytics";
 
 type PopulateStatus =
   | { state: "idle" }
-  | { state: "running" }
+  | { state: "running"; startedAt: number }
   | { state: "accepted"; summary: PopulateRunSummary }
   | { state: "rejected"; message: string; summary?: PopulateRunSummary }
   | { state: "failed"; message: string; summary?: PopulateRunSummary };
@@ -35,6 +38,7 @@ export default function DatasetPage() {
   const [populateStatus, setPopulateStatus] = useState<PopulateStatus>({
     state: "idle",
   });
+  const [clockNow, setClockNow] = useState(() => Date.now());
 
   const datasetId = params.id as Id<"datasets">;
   const dataset = useQuery(
@@ -45,6 +49,7 @@ export default function DatasetPage() {
     api.datasetRows.listByDataset,
     authLoading ? "skip" : { datasetId },
   );
+  const updateDatasetStatus = useMutation(api.datasets.updateStatus);
 
   const rowIds = useMemo(() => (rows ?? []).map((r) => r._id), [rows]);
   const selection = useSelection(rowIds);
@@ -64,6 +69,25 @@ export default function DatasetPage() {
       });
     }
   }, [dataset, userId]);
+
+  useEffect(() => {
+    if (populateStatus.state !== "running") {
+      return;
+    }
+    const intervalId = window.setInterval(() => {
+      setClockNow(Date.now());
+    }, 1_000);
+    return () => window.clearInterval(intervalId);
+  }, [populateStatus.state]);
+
+  async function setDatasetStatusSafely(status: "live" | "paused") {
+    if (!dataset) return;
+    try {
+      await updateDatasetStatus({ id: dataset._id, status });
+    } catch (err) {
+      console.warn("[populate] failed to update dataset status", err);
+    }
+  }
 
   async function handleExport(format: "csv" | "xlsx") {
     if (!dataset || !rows || exporting) return;
@@ -107,8 +131,10 @@ export default function DatasetPage() {
 
   async function handlePopulate() {
     if (!dataset || populating) return;
+    const startedAt = Date.now();
+    setClockNow(startedAt);
     setPopulating(true);
-    setPopulateStatus({ state: "running" });
+    setPopulateStatus({ state: "running", startedAt });
     try {
       const token = await getToken();
       if (!token) throw new Error("Not authenticated");
@@ -121,22 +147,45 @@ export default function DatasetPage() {
         token,
       );
       setPopulateStatus({ state: "accepted", summary: response.result });
+      await setDatasetStatusSafely(
+        (response.result.committedRows?.insertedRowCount ?? 0) > 0
+          ? "live"
+          : "paused",
+      );
       track(EVENTS.DATASET_POPULATED, {
         datasetId: dataset._id,
         column_count: dataset.columns.length,
         committed_row_count: response.result.committedRows?.insertedRowCount ?? 0,
       });
     } catch (err) {
-      console.error("[populate] failed", err);
       const message = err instanceof Error
         ? err.message
         : "Failed to populate dataset.";
       const summary = err instanceof PopulateApiError ? err.result : undefined;
+      if (err instanceof PopulateApiError && summary?.success === false) {
+        console.warn("[populate] rejected", {
+          status: err.status,
+          action: summary.action,
+          validationState: summary.validationState,
+          validationIssues: summary.validationIssues,
+          rejectionReasons: summary.rejectionReasons,
+        });
+        setPopulateStatus({
+          state: "rejected",
+          message,
+          summary,
+        });
+        await setDatasetStatusSafely("paused");
+        return;
+      }
+
+      console.error("[populate] failed", err);
       setPopulateStatus({
-        state: summary?.success === false ? "rejected" : "failed",
+        state: "failed",
         message,
         summary,
       });
+      await setDatasetStatusSafely("paused");
       captureException(err, {
         operation: "dataset_populate",
         datasetId: dataset._id,
@@ -160,6 +209,9 @@ export default function DatasetPage() {
 
   const exportDisabled = exporting !== null || rows.length === 0;
   const trustSummary = trustSummaryForRows(rows);
+  const elapsedSeconds = populateStatus.state === "running"
+    ? Math.max(0, Math.floor((Math.max(clockNow, populateStatus.startedAt) - populateStatus.startedAt) / 1_000))
+    : 0;
   const csvLabel =
     exporting === "csv"
       ? "Exporting…"
@@ -172,6 +224,11 @@ export default function DatasetPage() {
       : selectedCount > 0
         ? `Export XLSX (${selectedCount})`
         : "Export XLSX";
+  const displayStatus = statusForCurrentPopulateState({
+    storedStatus: dataset.status,
+    isPopulateRequestOpen: populateStatus.state === "running",
+    rowCount: rows.length,
+  });
 
   return (
     <div className="flex flex-1 flex-col h-screen">
@@ -185,7 +242,7 @@ export default function DatasetPage() {
           <h1 className="text-sm font-semibold tracking-tight truncate max-w-md">
             {dataset.name}
           </h1>
-          <StatusBadge status={dataset.status} />
+          <StatusBadge status={displayStatus} />
         </div>
         <div className="flex items-center gap-2">
           <span className="text-[11px] text-muted mr-2">
@@ -249,6 +306,7 @@ export default function DatasetPage() {
       <PopulateTrustStrip
         populateStatus={populateStatus}
         trustSummary={trustSummary}
+        elapsedSeconds={elapsedSeconds}
       />
 
       <DatasetTable
@@ -259,6 +317,24 @@ export default function DatasetPage() {
       />
     </div>
   );
+}
+
+function statusForCurrentPopulateState({
+  storedStatus,
+  isPopulateRequestOpen,
+  rowCount,
+}: {
+  storedStatus: DatasetStatus;
+  isPopulateRequestOpen: boolean;
+  rowCount: number;
+}): DatasetStatus {
+  if (isPopulateRequestOpen) {
+    return "building";
+  }
+  if (storedStatus === "building") {
+    return rowCount > 0 ? "live" : "paused";
+  }
+  return storedStatus;
 }
 
 function trustSummaryForRows(rows: NonNullable<ReturnType<typeof useQuery>>[]) {
@@ -286,6 +362,7 @@ function uniqueStrings(values: string[]): string[] {
 function PopulateTrustStrip({
   populateStatus,
   trustSummary,
+  elapsedSeconds,
 }: {
   populateStatus: PopulateStatus;
   trustSummary: {
@@ -296,6 +373,7 @@ function PopulateTrustStrip({
       quote: string;
     }>;
   };
+  elapsedSeconds: number;
 }) {
   const summary = "summary" in populateStatus
     ? populateStatus.summary
@@ -328,6 +406,11 @@ function PopulateTrustStrip({
         <span className={`border px-2 py-1 font-medium ${statusTone}`}>
           {populateStatusLabel(populateStatus, summary)}
         </span>
+        {populateStatus.state === "running" && (
+          <span className="text-muted">
+            waiting for backend response · {elapsedSeconds}s elapsed
+          </span>
+        )}
         {summary?.productionValidation && (
           <span className="text-muted">
             validation {validationStateLabel(summary.productionValidation.state)}
@@ -374,7 +457,7 @@ function populateStatusLabel(
   summary?: PopulateRunSummary,
 ): string {
   if (populateStatus.state === "running") {
-    return "Populate running";
+    return "Populate request open";
   }
   if (populateStatus.state === "accepted") {
     const rowCount = summary?.committedRows?.insertedRowCount ??
