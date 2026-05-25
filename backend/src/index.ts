@@ -289,7 +289,6 @@ await fastify.register(async (instance) => {
         return reply.code(401).send({ error: "Authentication required" });
       }
 
-      const run = await populateWorkflow.createRun();
       const populateOutcome = await beginDatasetPopulate(
         parsed.data.datasetId,
         auth.userId,
@@ -307,6 +306,8 @@ await fastify.register(async (instance) => {
       if (populateOutcome !== "started") {
         throw new Error(`Unexpected populate claim outcome: ${populateOutcome}`);
       }
+
+      const run = await populateWorkflow.createRun();
 
       void runPopulateWorkflowInBackground({
         input: parsed.data,
