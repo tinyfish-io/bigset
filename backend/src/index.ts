@@ -21,6 +21,11 @@ function emailDomain(email: string): string {
 }
 
 type DatasetPopulateStatus = "building" | "live" | "failed";
+type DatasetPopulateBeginOutcome =
+  | "started"
+  | "not_found"
+  | "forbidden"
+  | "already_building";
 type PopulateWorkflowRun = Awaited<ReturnType<typeof populateWorkflow.createRun>>;
 
 function statusErrorMessage(err: unknown): string {
@@ -38,6 +43,18 @@ async function setDatasetPopulateStatus(
     status,
     lastStatusError,
   });
+}
+
+async function beginDatasetPopulate(
+  datasetId: string,
+  ownerId: string,
+): Promise<DatasetPopulateBeginOutcome> {
+  const claim = await convex.mutation(internal.datasets.beginPopulateInternal, {
+    id: datasetId,
+    ownerId,
+  });
+
+  return claim.outcome;
 }
 
 async function sendDatasetReadyNotification({
@@ -272,28 +289,25 @@ await fastify.register(async (instance) => {
         return reply.code(401).send({ error: "Authentication required" });
       }
 
-      // Ownership check uses the INTERNAL (admin-callable, no-authz) getter.
-      // We can't use `api.datasets.get` here because that runs through
-      // `loadReadableDataset`, which requires either a Clerk-identified
-      // caller OR visibility="public". The backend's ConvexHttpClient is
-      // admin-authed but does NOT impersonate a user, so private datasets
-      // (the typical case) get rejected as `anonymous_private`.
-      //
-      // The /populate route enforces ownership against `req.auth.userId`
-      // (from the verified Clerk JWT) immediately below — that's the
-      // authoritative check, not Convex's user-identity authz.
-      const dataset = await convex.query(internal.datasets.getInternal, {
-        id: parsed.data.datasetId,
-      });
-      if (!dataset) {
+      const run = await populateWorkflow.createRun();
+      const populateOutcome = await beginDatasetPopulate(
+        parsed.data.datasetId,
+        auth.userId,
+      );
+
+      if (populateOutcome === "not_found") {
         return reply.code(404).send({ error: "Dataset not found" });
       }
-      if (dataset.ownerId !== auth.userId) {
+      if (populateOutcome === "forbidden") {
         return reply.code(403).send({ error: "Not authorized to populate this dataset" });
       }
+      if (populateOutcome === "already_building") {
+        return reply.code(409).send({ error: "Dataset is already being populated" });
+      }
+      if (populateOutcome !== "started") {
+        throw new Error(`Unexpected populate claim outcome: ${populateOutcome}`);
+      }
 
-      const run = await populateWorkflow.createRun();
-      await setDatasetPopulateStatus(parsed.data.datasetId, "building");
       void runPopulateWorkflowInBackground({
         input: parsed.data,
         run,

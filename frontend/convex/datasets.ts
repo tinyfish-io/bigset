@@ -115,6 +115,38 @@ export const getInternal = internalQuery({
 });
 
 /**
+ * Atomically claims a user-requested populate run for a dataset.
+ *
+ * This is the concurrency gate for backend /populate calls. The workflow
+ * starts by clearing existing rows, so duplicate background runs for the same
+ * dataset must be rejected before either one reaches the row-clearing step.
+ */
+export const beginPopulateInternal = internalMutation({
+  args: {
+    id: v.id("datasets"),
+    ownerId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const dataset = await ctx.db.get(args.id);
+    if (!dataset) {
+      return { outcome: "not_found" as const };
+    }
+    if (dataset.ownerId !== args.ownerId) {
+      return { outcome: "forbidden" as const };
+    }
+    if (dataset.status === "building") {
+      return { outcome: "already_building" as const };
+    }
+
+    await ctx.db.patch(dataset._id, {
+      status: "building",
+      lastStatusError: undefined,
+    });
+    return { outcome: "started" as const };
+  },
+});
+
+/**
  * Admin-only status transition. Used by the backend orchestration layer
  * to move a dataset between lifecycle states after a workflow completes.
  *
@@ -124,7 +156,7 @@ export const getInternal = internalQuery({
  *
  * Lifecycle today:
  *   - "paused"   : default for newly created datasets before first run
- *   - "building" : set by /populate after ownership passes
+ *   - "building" : set by beginPopulateInternal after ownership passes
  *   - "live"     : set by background populate after rows exist
  *   - "failed"   : set by background populate on workflow failure
  *
