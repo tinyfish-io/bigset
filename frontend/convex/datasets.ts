@@ -30,13 +30,25 @@ const columnValidator = v.object({
 const PREVIEW_ROW_COUNT = 5;
 
 async function attachPreview(ctx: QueryCtx, dataset: Doc<"datasets">) {
-  const rows = await ctx.db
+  // Mini-table preview: just the first N rows. `.take` keeps the
+  // subscription's read set small — the dashboard's reactivity for the
+  // row count does NOT depend on this query. It depends on the
+  // denormalized `rowCount` field on the dataset doc itself, maintained
+  // by datasetRows.{insert,remove,clearByDataset}. That field is part of
+  // `dataset`, which is part of the query's read set, so patches to it
+  // invalidate the subscription and the card re-renders with the new
+  // count even after the first PREVIEW_ROW_COUNT rows.
+  const previewRows = await ctx.db
     .query("datasetRows")
     .withIndex("by_dataset", (q) => q.eq("datasetId", dataset._id))
     .take(PREVIEW_ROW_COUNT);
   return {
     ...dataset,
-    previewRows: rows.map((r) => r.data),
+    previewRows: previewRows.map((r) => r.data),
+    // Fallback to the preview length only when the dataset doc predates
+    // the `rowCount` field. Write paths self-heal on the next insert /
+    // remove; `datasets.backfillRowCounts` migrates every doc at once.
+    rowCount: dataset.rowCount ?? previewRows.length,
   };
 }
 
@@ -160,6 +172,7 @@ export const create = mutation({
       ownerId: identity.subject,
       status: "building",
       visibility: "private",
+      rowCount: 0,
     });
   },
 });
@@ -192,5 +205,40 @@ export const remove = mutation({
       await ctx.db.delete(row._id);
     }
     await ctx.db.delete(dataset._id);
+  },
+});
+
+/**
+ * One-shot migration: scan every dataset, count its rows, and patch
+ * `rowCount` to the true value. Idempotent and safe to re-run.
+ *
+ * Needed once after deploying the `rowCount` field — write paths
+ * self-heal on first hit, but datasets that haven't been written to
+ * since the field landed keep showing the preview-length fallback
+ * (capped at PREVIEW_ROW_COUNT). Running this promotes every doc to
+ * the fast path in one shot.
+ *
+ * Cost is O(total rows). Run from the convex CLI:
+ *   npx convex run datasets:backfillRowCounts
+ */
+export const backfillRowCounts = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const datasets = await ctx.db.query("datasets").collect();
+    let patched = 0;
+    let alreadyCorrect = 0;
+    for (const ds of datasets) {
+      const rows = await ctx.db
+        .query("datasetRows")
+        .withIndex("by_dataset", (q) => q.eq("datasetId", ds._id))
+        .collect();
+      if (ds.rowCount === rows.length) {
+        alreadyCorrect++;
+        continue;
+      }
+      await ctx.db.patch(ds._id, { rowCount: rows.length });
+      patched++;
+    }
+    return { patched, alreadyCorrect, total: datasets.length };
   },
 });
