@@ -147,6 +147,29 @@ await fastify.register(async (instance) => {
             "Dataset no longer exists post-workflow; skipping notification",
           );
         } else {
+          // ── Prune incomplete rows ────────────────────────────────────
+          // Delete any row the agent inserted but never fully filled.
+          // Best-effort: log and continue on failure — the dataset is
+          // usable even if a few incomplete rows slip through.
+          try {
+            const columnNames = parsed.data.columns.map((c) => c.name);
+            const { deletedCount } = await convex.mutation(
+              internal.datasetRows.deleteIncomplete,
+              { datasetId: notifyDatasetId, columnNames },
+            );
+            if (deletedCount > 0) {
+              req.log.info(
+                { deletedCount, datasetId: notifyDatasetId },
+                "Pruned incomplete rows post-workflow",
+              );
+            }
+          } catch (pruneErr) {
+            req.log.warn(
+              { err: pruneErr, datasetId: notifyDatasetId },
+              "Failed to prune incomplete rows; proceeding with notification anyway",
+            );
+          }
+
           const rowCount = await convex.query(
             internal.datasetRows.countByDataset,
             { datasetId: notifyDatasetId },
@@ -154,7 +177,7 @@ await fastify.register(async (instance) => {
           if (rowCount === 0) {
             req.log.info(
               { datasetId: notifyDatasetId },
-              "Populate workflow succeeded but produced 0 rows; skipping notification",
+              "Populate workflow succeeded but produced 0 complete rows; skipping notification",
             );
           } else {
             // ── Lifecycle transition ─────────────────────────────────

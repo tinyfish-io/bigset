@@ -7,6 +7,7 @@ const searchResultSchema = z.object({
   title: z.string(),
   snippet: z.string(),
   url: z.string(),
+  site_name: z.string().optional(),
 });
 
 export const searchWebTool = createTool({
@@ -55,6 +56,7 @@ export const searchWebTool = createTool({
         title: r.title as string,
         snippet: r.snippet as string,
         url: r.url as string,
+        site_name: r.site_name as string | undefined,
       }));
 
       console.log(`[search_web] Got ${results.length} results`);

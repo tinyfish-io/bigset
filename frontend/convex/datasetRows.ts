@@ -168,6 +168,48 @@ export const remove = internalMutation({
 });
 
 /**
+ * Delete rows from a dataset that are incomplete — i.e. any row where at
+ * least one of the required column names is missing, null, or an empty
+ * string in its data record.
+ *
+ * Called by the backend after the populate workflow completes so that only
+ * fully-filled rows appear in the live dataset. Best-effort: the backend
+ * catches and logs failures rather than failing the whole populate response.
+ *
+ * columnNames must be the FULL list of required columns for this dataset
+ * (not a subset). Internal _-prefixed fields (e.g. _confidence, _sources)
+ * are never treated as required columns.
+ *
+ * Returns { deletedCount } for backend logging.
+ */
+export const deleteIncomplete = internalMutation({
+  args: {
+    datasetId: v.id("datasets"),
+    columnNames: v.array(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const rows = await ctx.db
+      .query("datasetRows")
+      .withIndex("by_dataset", (q) => q.eq("datasetId", args.datasetId))
+      .collect();
+
+    let deletedCount = 0;
+    for (const row of rows) {
+      const data = row.data as Record<string, unknown>;
+      const isComplete = args.columnNames.every((col) => {
+        const val = data[col];
+        return val !== null && val !== undefined && val !== "";
+      });
+      if (!isComplete) {
+        await ctx.db.delete(row._id);
+        deletedCount++;
+      }
+    }
+    return { deletedCount };
+  },
+});
+
+/**
  * Admin-only row listing for a dataset. Used by the populate agent's
  * `list_rows` tool to see what's already been inserted in the dataset
  * it's authorized for (so the LLM can diff/append rather than dup).
