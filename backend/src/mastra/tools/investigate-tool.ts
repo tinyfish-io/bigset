@@ -43,7 +43,7 @@ function parseInvestigateResult(
   const reasonMatch = text.match(/REASON:\s*(.+?)$/is);
 
   return {
-    inserted: insertedMatch?.[1]?.toLowerCase() === "true" ?? false,
+    inserted: insertedMatch?.[1]?.toLowerCase() === "true",
     row_summary: summaryMatch?.[1]?.trim() || undefined,
     clues: cluesMatch?.[1]?.trim() || undefined,
     reason: reasonMatch?.[1]?.trim() || text.slice(0, 300),

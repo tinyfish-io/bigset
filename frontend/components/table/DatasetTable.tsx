@@ -150,7 +150,7 @@ export function DatasetTable({
           allState={selection.allState}
           toggleAll={selection.toggleAll}
           resizingColumnId={resizingColumnId}
-          tableContainerRef={tableContainerRef}
+          containerHeight={containerHeight}
         />
 
         <FixedSizeList

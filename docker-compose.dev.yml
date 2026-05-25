@@ -20,6 +20,8 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile.dev
+    env_file:
+      - .env
     ports:
       - "3501:3501"
     volumes:
@@ -48,6 +50,8 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile.mastra
+    env_file:
+      - .env
     ports:
       - "4111:4111"
     volumes:
@@ -67,6 +71,8 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile.dev
+    env_file:
+      - .env
     ports:
       - "3500:3500"
     volumes:

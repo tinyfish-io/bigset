@@ -30,9 +30,8 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
+# env files (root .env is canonical)
 .env*
-!.env.example
 
 # package manager: this project uses bun (bun.lock is the source of truth).
 # Reject npm/yarn lockfiles so they don't drift from bun's resolution.
