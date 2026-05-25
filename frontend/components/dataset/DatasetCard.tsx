@@ -9,7 +9,12 @@ export interface DatasetCardData {
   status: DatasetStatus;
   cadence: string;
   columns: { name: string; type: string }[];
+  // Preview is capped at 5 rows for the mini-table. The total row count
+  // is on `rowCount` (denormalized counter maintained by the row write
+  // mutations in convex/datasetRows.ts) so the footer stays reactive
+  // past the first 5 inserts.
   previewRows: Record<string, unknown>[];
+  rowCount: number;
   visibility?: "public" | "private";
 }
 
@@ -49,7 +54,7 @@ export function DatasetCard({ dataset }: { dataset: DatasetCardData }) {
               <span className="text-[11px] text-muted">{dataset.cadence}</span>
             </div>
             <span className="text-[11px] text-muted">
-              {dataset.previewRows?.length ?? 0} rows
+              {dataset.rowCount ?? 0} rows
             </span>
           </div>
         </div>

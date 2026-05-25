@@ -1,7 +1,27 @@
 import { query, internalMutation, internalQuery } from "./_generated/server.js";
+import type { MutationCtx } from "./_generated/server.js";
 import { v } from "convex/values";
+import type { Id } from "./_generated/dataModel.js";
 import { assertRowInDataset, loadReadableDataset } from "./lib/authz.js";
 import { consumeQuotaForDataset } from "./lib/quota.js";
+
+/**
+ * Authoritative row count for a dataset. O(N), so use only on the slow
+ * paths: self-heal in `insert` / `remove` when the dataset doc predates
+ * the `rowCount` field, or the explicit `datasets.backfillRowCounts`
+ * migration. Steady-state writes hit the cached counter and never call
+ * this.
+ */
+async function actualRowCount(
+  ctx: MutationCtx,
+  datasetId: Id<"datasets">,
+): Promise<number> {
+  const rows = await ctx.db
+    .query("datasetRows")
+    .withIndex("by_dataset", (q) => q.eq("datasetId", datasetId))
+    .collect();
+  return rows.length;
+}
 
 /**
  * Read all rows of a dataset.
@@ -46,8 +66,26 @@ export const insert = internalMutation({
     sources: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
-    await consumeQuotaForDataset(ctx, args.datasetId, 1);
-    return await ctx.db.insert("datasetRows", args);
+    // `consumeQuotaForDataset` returns the dataset doc so we don't
+    // double-read it.
+    const dataset = await consumeQuotaForDataset(ctx, args.datasetId, 1);
+
+    // Pre-insert count is either the cached counter (fast path) or — for
+    // datasets whose docs predate the rowCount field — recomputed once
+    // here. Subsequent inserts on the same dataset hit the fast path.
+    const previousCount =
+      typeof dataset.rowCount === "number"
+        ? dataset.rowCount
+        : await actualRowCount(ctx, args.datasetId);
+
+    const rowId = await ctx.db.insert("datasetRows", args);
+
+    // Maintain the denormalized counter the dashboard reads from. Same
+    // transaction as the row insert → atomic; quota-rejected inserts
+    // never bump the counter.
+    await ctx.db.patch(args.datasetId, { rowCount: previousCount + 1 });
+
+    return rowId;
   },
 });
 
@@ -114,6 +152,9 @@ export const clearByDataset = internalMutation({
     for (const row of rows) {
       await ctx.db.delete(row._id);
     }
+    // Reset the cached counter. We know the post-state exactly, so this
+    // doesn't need the read-then-add dance that `insert` / `remove` use.
+    await ctx.db.patch(args.datasetId, { rowCount: 0 });
     return rows.length;
   },
 });
@@ -163,6 +204,24 @@ export const remove = internalMutation({
   },
   handler: async (ctx, args) => {
     await assertRowInDataset(ctx, args.id, args.expectedDatasetId);
+
+    // Decrement the cached counter, self-healing if the dataset doc
+    // predates the rowCount field. `dataset` is guaranteed to exist —
+    // assertRowInDataset above verified the row belongs to it.
+    const dataset = await ctx.db.get(args.expectedDatasetId);
+    if (dataset) {
+      const previousCount =
+        typeof dataset.rowCount === "number"
+          ? dataset.rowCount
+          : await actualRowCount(ctx, args.expectedDatasetId);
+      await ctx.db.patch(args.expectedDatasetId, {
+        // clamp at 0 as a paranoid guard — counter should never go
+        // negative because we just confirmed the row exists, but a bug
+        // that drove it negative would manifest as an even weirder UI.
+        rowCount: Math.max(0, previousCount - 1),
+      });
+    }
+
     await ctx.db.delete(args.id);
   },
 });
