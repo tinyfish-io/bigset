@@ -307,7 +307,14 @@ await fastify.register(async (instance) => {
         throw new Error(`Unexpected populate claim outcome: ${populateOutcome}`);
       }
 
-      const run = await populateWorkflow.createRun();
+      let run: Awaited<ReturnType<typeof populateWorkflow.createRun>>;
+      try {
+        run = await populateWorkflow.createRun();
+      } catch (runErr) {
+        req.log.error(runErr, "Failed to create workflow run; releasing dataset claim");
+        await setDatasetPopulateStatus(parsed.data.datasetId, "failed", statusErrorMessage(runErr));
+        return reply.code(502).send({ error: "Failed to populate dataset. Please try again." });
+      }
 
       void runPopulateWorkflowInBackground({
         input: parsed.data,
