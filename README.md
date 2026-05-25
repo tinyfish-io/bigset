@@ -33,7 +33,7 @@ Any dataset. Any source. Always fresh. That's the idea.
 
 ## 🚀 Quick Start
 
-**Prerequisites:** [Docker](https://docs.docker.com/get-docker/), [Make](https://www.gnu.org/software/make/), and a free [Clerk](https://dashboard.clerk.com) account
+**Prerequisites:** [Docker](https://docs.docker.com/get-docker/), [Make](https://www.gnu.org/software/make/), [Node.js](https://nodejs.org) (for the Convex CLI on your machine), and a free [Clerk](https://dashboard.clerk.com) account
 
 ### 1. Clone and set up Clerk
 
@@ -60,7 +60,17 @@ cp frontend/.env.example frontend/.env.local
 
 > **Optional:** to enable [PostHog](https://posthog.com) product analytics + session replay + error tracking, set `NEXT_PUBLIC_POSTHOG_KEY` and `NEXT_PUBLIC_POSTHOG_HOST`. Leave blank to disable cleanly (the app no-ops every event).
 
-### 3. Start everything
+### 3. Install frontend dependencies (host)
+
+`make dev` deploys Convex functions from your machine (not inside Docker), so the `convex` package must be installed locally:
+
+```bash
+cd frontend
+bun install   # or: npm install
+cd ..
+```
+
+### 4. Start everything
 
 ```bash
 make dev
@@ -72,7 +82,7 @@ This starts all Docker services, waits for Convex to be healthy, and deploys Con
 - Convex dashboard: http://localhost:6791
 - [Mastra Studio](https://mastra.ai) (workflow inspector): http://localhost:4111
 
-### 4. Generate Convex admin key (first time only)
+### 5. Generate Convex admin key (first time only)
 
 ```bash
 docker compose exec convex ./generate_admin_key.sh
@@ -80,7 +90,7 @@ docker compose exec convex ./generate_admin_key.sh
 
 Paste the output into `frontend/.env.local` as `CONVEX_SELF_HOSTED_ADMIN_KEY`, then re-run `make dev`.
 
-### 5. Load curated public datasets
+### 6. Load curated public datasets
 
 The landing page and the dashboard's "Curated" section read from a set of 9 system-owned datasets. Load them with:
 
