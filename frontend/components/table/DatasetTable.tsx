@@ -21,6 +21,7 @@ const DEFAULT_COL_WIDTH = 180;
 const MIN_COL_WIDTH = 80;
 const ROW_HEIGHT = 34;
 const GHOST_ROW_COUNT = 50;
+const LAST_COLUMN_RESIZE_GUTTER = 160;
 
 const columnHelper = createColumnHelper<DatasetRow>();
 
@@ -68,6 +69,7 @@ export function DatasetTable({
   selection: Selection;
 }) {
   const tableContainerRef = useRef<HTMLDivElement>(null);
+  const previousResizingColumnIdRef = useRef<string | false>(false);
   const [containerHeight, setContainerHeight] = useState(600);
 
   useEffect(() => {
@@ -112,7 +114,15 @@ export function DatasetTable({
   const isBuilding = dataset.status === "building";
   const displayCount = isBuilding ? Math.max(tableRows.length, GHOST_ROW_COUNT) : tableRows.length;
   const totalWidth = columnWidths.reduce((sum, w) => sum + w, 0);
+  const tableContentWidth = totalWidth + LAST_COLUMN_RESIZE_GUTTER;
   const resizingColumnId = table.getState().columnSizingInfo.isResizingColumn;
+
+  useEffect(() => {
+    if (previousResizingColumnIdRef.current && !resizingColumnId) {
+      persistWidths();
+    }
+    previousResizingColumnIdRef.current = resizingColumnId;
+  }, [resizingColumnId, persistWidths]);
 
   const toggleRow = useCallback(
     (id: string, shiftKey: boolean) => {
@@ -143,7 +153,7 @@ export function DatasetTable({
         if (resizingColumnId) persistWidths();
       }}
     >
-      <div style={{ minWidth: totalWidth }}>
+      <div style={{ minWidth: tableContentWidth }}>
         <TableHeader
           headers={headers}
           columns={dataset.columns}
