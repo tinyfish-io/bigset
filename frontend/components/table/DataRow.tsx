@@ -68,16 +68,37 @@ function DataRowImpl({
       }`}
     >
       <div
-        className="shrink-0 flex items-center justify-center border-r border-border"
+        className="group/shrinkcell shrink-0 flex items-center justify-center border-r border-border"
         style={{ width: floorWidth(columnWidths[0] ?? 40) }}
       >
-        <input
-          type="checkbox"
-          checked={selected}
-          readOnly
+        <button
+          type="button"
           onClick={(e) => toggleRow(row.original._id, e.shiftKey)}
-          className="h-3.5 w-3.5 accent-foreground cursor-pointer"
-        />
+          aria-label={`Select row ${index + 1}`}
+          aria-pressed={selected}
+          className={`relative flex h-5 w-5 items-center justify-center text-[11px] leading-none transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground focus-visible:ring-offset-1 ${
+            selected
+              ? "rounded-sm bg-foreground text-background"
+              : "text-foreground/60 hover:text-foreground"
+          }`}
+        >
+          <span
+            className={`transition-opacity ${
+              selected ? "hidden" : "group-hover/shrinkcell:hidden"
+            }`}
+          >
+            {index + 1}
+          </span>
+          <span
+            className={`absolute flex h-3.5 w-3.5 items-center justify-center rounded-[3px] border transition-opacity ${
+              selected
+                ? "border-foreground bg-foreground text-background"
+                : "border-foreground/35 bg-background opacity-0 group-hover/shrinkcell:opacity-100"
+            }`}
+          >
+            {selected ? <span className="text-[10px] leading-none">✓</span> : null}
+          </span>
+        </button>
       </div>
 
       {columns.map((col, cellIdx) => {
