@@ -52,12 +52,17 @@ test("Convex populate row writer uses one atomic replace mutation", async () => 
   assert.equal(calls[0]?.functionReference, replaceByDataset);
   assert.deepEqual(calls[0]?.args, {
     datasetId: "dataset-ai-posts",
-    rows: [{
-      data: {
-        entity_name: "OpenAI",
-        source_url: "https://openai.com/news",
-      },
-      sources: ["https://openai.com/news"],
-    }],
-  });
+      rows: [{
+        data: {
+          entity_name: "OpenAI",
+          source_url: "https://openai.com/news",
+        },
+        sources: ["https://openai.com/news"],
+        evidence: [{
+          columnName: "entity_name",
+          sourceUrl: "https://openai.com/news",
+          quote: "OpenAI",
+        }],
+      }],
+    });
 });

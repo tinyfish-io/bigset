@@ -122,6 +122,63 @@ test("prompt source policy prefers entity-owned domains over third-party proof",
   );
 });
 
+test("prompt source policy trusts explicit source URLs from the user's prompt", () => {
+  const policy = derivePromptSourcePolicy(
+    "make a table from these public OpenAI API docs pages with only page title and page URL: https://developers.openai.com/api/docs/mcp https://developers.openai.com/api/docs/guides/tools-connectors-mcp",
+  );
+  const triage: SourceTriageResult = {
+    url: "https://developers.openai.com/api/docs/mcp",
+    final_url: "https://developers.openai.com/api/docs/mcp",
+    title: "Building MCP servers for ChatGPT Apps and API integrations",
+    status: "extract_now",
+    confidence: 0.9,
+    source_data_confidence: 0.8,
+    expected_yield: "complete",
+    reasoning: "User provided this exact source URL.",
+  };
+  const spec: DatasetSpec = {
+    intent_summary: "Collect docs pages.",
+    target_row_count: 2,
+    row_grain: "one row per docs page",
+    columns: [
+      {
+        name: "page_url",
+        type: "string",
+        description: "Page URL.",
+        required: true,
+      },
+      {
+        name: "page_title",
+        type: "string",
+        description: "Page title.",
+        required: true,
+      },
+    ],
+    dedupe_keys: ["page_url"],
+    search_queries: [],
+    extraction_hints: "",
+  };
+  const record: ExtractedRecord = {
+    row: {
+      page_url: "https://developers.openai.com/api/docs/mcp",
+      page_title: "Building MCP servers for ChatGPT Apps and API integrations",
+    },
+    evidence: [],
+    source_urls: ["https://developers.openai.com/api/docs/mcp"],
+  };
+
+  assert.deepEqual(policy.explicitSourceUrls, [
+    "https://developers.openai.com/api/docs/mcp",
+    "https://developers.openai.com/api/docs/guides/tools-connectors-mcp",
+  ]);
+  assert.equal(
+    urlMatchesPromptSourcePolicy("https://developers.openai.com/api/docs/mcp", policy),
+    true,
+  );
+  assert.equal(applyPromptSourcePolicyToTriageResult(triage, policy).status, "extract_now");
+  assert.equal(recordMatchesPromptSourcePolicy(record, spec, policy), true);
+});
+
 test("prompt source policy downgrades third-party extraction triage", () => {
   const policy = derivePromptSourcePolicy(
     "For Stripe, Paddle, and Chargebee, collect the official pricing page URL and plan names.",

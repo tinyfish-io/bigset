@@ -34,6 +34,7 @@ export class ConvexPopulateDatasetRowWriter implements PopulateDatasetRowWriter 
         rows: input.rows.map((row) => ({
           data: row.cells,
           sources: row.sourceUrls,
+          evidence: row.evidence,
         })),
       }
     );

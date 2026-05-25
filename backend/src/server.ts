@@ -17,6 +17,7 @@ import {
   createPopulateRecipeRuntime,
   type CreatePopulateRecipeRuntimeInput,
 } from "./pipeline/populate-runtime-selection.js";
+import { DEFAULT_COMMIT_ROW_LIMIT_PER_HOUR } from "./pipeline/populate-self-healing-command.js";
 
 export interface BigSetServerEnv {
   CLIENT_ORIGIN: string;
@@ -25,6 +26,7 @@ export interface BigSetServerEnv {
   OPENROUTER_API_KEY?: string;
   TINYFISH_API_KEY?: string;
   POPULATE_RECIPE_STORE_DIR: string;
+  POPULATE_COMMIT_ROW_LIMIT_PER_HOUR?: string;
 }
 
 export interface BigSetPopulateDataset {
@@ -134,6 +136,10 @@ export async function createBigSetServer(
           rowWriter: input.populateRowWriter,
           shouldCommitRows: true,
           runtime,
+          commitRowLimit: {
+            maxRowsPerWindow: commitRowLimitPerHour(input.env),
+            windowMs: 60 * 60 * 1_000,
+          },
         });
 
         req.log.info({
@@ -176,11 +182,32 @@ function responseSafePopulateResult(
     action: result.action,
     datasetId: result.datasetId,
     success: result.success,
+    validationState: result.validationState,
     committedRows: result.committedRows,
+    commitLimit: result.commitLimit,
     rejectionReasons: result.rejectionReasons,
     validationIssues: result.validationIssues,
     productionValidation: diagnosticRun?.productionValidation,
     metrics: diagnosticRun?.metrics,
     rowCount: diagnosticRun?.rows.length ?? 0,
+    sampleRows: (diagnosticRun?.rows ?? []).slice(0, 5).map((row) => ({
+      cells: row.cells,
+      sourceUrls: row.sourceUrls,
+      evidence: row.evidence,
+      needsReview: row.needsReview,
+    })),
   };
+}
+
+function commitRowLimitPerHour(env: BigSetServerEnv): number {
+  if (!env.POPULATE_COMMIT_ROW_LIMIT_PER_HOUR) {
+    return DEFAULT_COMMIT_ROW_LIMIT_PER_HOUR;
+  }
+  const parsed = Number(env.POPULATE_COMMIT_ROW_LIMIT_PER_HOUR);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(
+      "POPULATE_COMMIT_ROW_LIMIT_PER_HOUR must be a positive integer."
+    );
+  }
+  return parsed;
 }

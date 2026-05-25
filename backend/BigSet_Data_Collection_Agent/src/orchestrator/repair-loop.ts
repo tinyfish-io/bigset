@@ -29,6 +29,7 @@ import {
   runAcquisitionPhase,
   type AcquisitionResult,
 } from "./acquisition.js";
+import { explicitBrowserActionsFromAgentRuns } from "./browser-actions.js";
 
 export interface RepairLoopContext {
   userPrompt: string;
@@ -235,6 +236,9 @@ export async function runRepairLoops(options: {
       loop_index: loopIndex,
       diagnosis_summary: diagnosis.summary,
       repair_queries: repairPlan.repair_queries,
+      agent_browser_actions: explicitBrowserActionsFromAgentRuns(
+        acquisition.agentRuns
+      ),
       rationale: repairPlan.rationale,
       missing_fields: coverage.field_gaps.map((gap) => gap.column),
       records_before: recordsBeforeLoop.length,

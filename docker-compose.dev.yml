@@ -20,16 +20,27 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile.dev
+    env_file:
+      - .env
     ports:
       - "3501:3501"
     volumes:
       - ./backend/src:/app/src
+      - ./backend/BigSet_Data_Collection_Agent:/app/BigSet_Data_Collection_Agent
       - populate_recipe_data:/app/.bigset
     environment:
       CLIENT_ORIGIN: http://localhost:3500
       CONVEX_URL: http://convex:3210
       PORT: 3501
       POPULATE_RECIPE_STORE_DIR: /app/.bigset/populate-recipes
+      POPULATE_AGENT_RUNTIME: ${POPULATE_AGENT_RUNTIME:-}
+      POPULATE_COLLECTION_RUNNER_MODULE: ${POPULATE_COLLECTION_RUNNER_MODULE:-}
+      COLLECTION_AGENT_PIPELINE_MODULE: ${COLLECTION_AGENT_PIPELINE_MODULE:-}
+      COLLECTION_AGENT_ENABLE_TRIAGE: ${COLLECTION_AGENT_ENABLE_TRIAGE:-}
+      COLLECTION_AGENT_ENABLE_AGENT: ${COLLECTION_AGENT_ENABLE_AGENT:-}
+      COLLECTION_AGENT_POLL_TIMEOUT_MS: ${COLLECTION_AGENT_POLL_TIMEOUT_MS:-}
+      AGENT_POLL_TIMEOUT_MS: ${AGENT_POLL_TIMEOUT_MS:-}
+      AGENT_REQUEST_TIMEOUT_MS: ${AGENT_REQUEST_TIMEOUT_MS:-}
       CONVEX_SELF_HOSTED_ADMIN_KEY: ${CONVEX_SELF_HOSTED_ADMIN_KEY:-}
       CLERK_SECRET_KEY: ${CLERK_SECRET_KEY:-}
       CLERK_PUBLISHABLE_KEY: ${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:-}
@@ -43,6 +54,8 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile.mastra
+    env_file:
+      - .env
     ports:
       - "4111:4111"
     volumes:
@@ -54,6 +67,8 @@ services:
       CONVEX_URL: http://convex:3210
       CONVEX_SELF_HOSTED_ADMIN_KEY: ${CONVEX_SELF_HOSTED_ADMIN_KEY:-}
       TINYFISH_API_KEY: ${TINYFISH_API_KEY:-}
+      AGENT_POLL_TIMEOUT_MS: ${AGENT_POLL_TIMEOUT_MS:-}
+      AGENT_REQUEST_TIMEOUT_MS: ${AGENT_REQUEST_TIMEOUT_MS:-}
     depends_on:
       convex:
         condition: service_healthy
@@ -62,6 +77,8 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile.dev
+    env_file:
+      - .env
     ports:
       - "3500:3500"
     volumes:

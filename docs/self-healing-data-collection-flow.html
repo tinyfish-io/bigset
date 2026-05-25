@@ -1,0 +1,332 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BigSet PR67 Self-Healing Flow</title>
+  <style>
+    :root {
+      --paper: #f7f7f2;
+      --surface: #ffffff;
+      --ink: #171717;
+      --muted: #62685f;
+      --line: #d7dccf;
+      --blue: #e7f0ff;
+      --green: #e8f7ef;
+      --amber: #fff1d8;
+      --red: #fff0ee;
+      --red-ink: #8c281c;
+      --shadow: 0 18px 42px rgba(20, 28, 18, 0.08);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--paper);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }
+
+    main {
+      width: min(1180px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 36px 0 64px;
+    }
+
+    header {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 20px;
+      align-items: start;
+      margin-bottom: 24px;
+    }
+
+    h1 {
+      margin: 0;
+      max-width: 780px;
+      font-size: clamp(34px, 6vw, 72px);
+      line-height: 0.94;
+      font-weight: 760;
+      letter-spacing: 0;
+    }
+
+    h2 {
+      margin: 0 0 12px;
+      font-size: 22px;
+      line-height: 1.15;
+      letter-spacing: 0;
+    }
+
+    h3 {
+      margin: 0 0 8px;
+      font-size: 15px;
+      line-height: 1.2;
+      letter-spacing: 0;
+    }
+
+    p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.55;
+    }
+
+    .subtitle {
+      max-width: 760px;
+      margin-top: 18px;
+      font-size: 16px;
+    }
+
+    .status {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 8px;
+      max-width: 440px;
+    }
+
+    .pill {
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.7);
+      padding: 8px 10px;
+      font-size: 12px;
+      font-weight: 720;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+
+    .pill.good {
+      border-color: #9ccbb2;
+      background: var(--green);
+      color: #16462b;
+    }
+
+    .pill.warn {
+      border-color: #e0b66b;
+      background: var(--amber);
+      color: #6d4a12;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+      margin: 22px 0;
+    }
+
+    .panel,
+    figure {
+      border: 1px solid var(--line);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+
+    .panel {
+      min-height: 152px;
+      padding: 18px;
+    }
+
+    .panel b {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 12px;
+      text-transform: uppercase;
+      color: #42483f;
+    }
+
+    .panel ul {
+      margin: 0;
+      padding-left: 18px;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    section {
+      margin-top: 28px;
+    }
+
+    figure {
+      margin: 0 0 18px;
+      overflow: hidden;
+    }
+
+    figcaption {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: center;
+      border-bottom: 1px solid var(--line);
+      background: #fbfbf7;
+      padding: 16px 18px;
+    }
+
+    figcaption a {
+      color: #3f5f90;
+      font-size: 12px;
+      font-weight: 720;
+      text-decoration: none;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+
+    .diagram {
+      padding: 18px;
+      overflow-x: auto;
+      background: #ffffff;
+    }
+
+    .diagram img {
+      display: block;
+      width: 100%;
+      min-width: 900px;
+      height: auto;
+    }
+
+    .callout {
+      border-left: 5px solid #b33424;
+      background: var(--red);
+      color: var(--red-ink);
+      padding: 15px 18px;
+      margin-top: 18px;
+      font-size: 14px;
+      line-height: 1.55;
+    }
+
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.94em;
+      color: #2d4d78;
+    }
+
+    @media (max-width: 860px) {
+      main {
+        width: min(100vw - 24px, 1180px);
+        padding-top: 24px;
+      }
+
+      header {
+        grid-template-columns: 1fr;
+      }
+
+      .status {
+        justify-content: flex-start;
+      }
+
+      .grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>BigSet PR67 Self-Healing Flow</h1>
+        <p class="subtitle">
+          Public-safe note for the in-app populate path. It covers source planning,
+          TinyFish trace normalization, and the BrowserActionBox replay loop that still
+          goes through the same validation gate before any row write.
+        </p>
+      </div>
+      <div class="status" aria-label="Current PR67 status">
+        <span class="pill good">Source planning in backend</span>
+        <span class="pill good">TinyFish trace canary</span>
+        <span class="pill good">Chromium replay runner</span>
+      </div>
+    </header>
+
+    <section class="grid" aria-label="Implementation summary">
+      <article class="panel">
+        <b>Backend</b>
+        <p>
+          `/populate` now runs source planning, ranking, and triage in
+          `backend/src/pipeline/populate-source-planner.ts` before browser work starts.
+        </p>
+      </article>
+      <article class="panel">
+        <b>Traces</b>
+        <p>
+          `backend/src/pipeline/populate-tinyfish-trace-recorder.ts` normalizes TinyFish
+          raw run steps and artifacts into replayable browser actions when the trace has
+          enough signal.
+        </p>
+      </article>
+      <article class="panel">
+        <b>Replay</b>
+        <p>
+          `backend/src/pipeline/populate-browser-action-box.ts` covers first run,
+          replay, and one bounded repair attempt. The backend Docker image includes
+          `playwright-core` and system Chromium for local replay.
+        </p>
+      </article>
+    </section>
+
+    <section>
+      <h2>Trust Shell</h2>
+      <p class="callout">
+        Validation is mandatory. Replay or repair can promote a script, but they still
+        flow through the same validation gate before any row write.
+      </p>
+      <div class="grid">
+        <article class="panel">
+          <b>First run</b>
+          <p>
+            BrowserActionBox records the TinyFish trace, normalizes browser actions, and
+            drafts a Playwright script when readiness is `ready`.
+          </p>
+        </article>
+        <article class="panel">
+          <b>Replay</b>
+          <p>
+            A promoted Playwright script can replay for the same source URL, schema, and
+            goal through local Chromium. A failed replay gets one bounded repair attempt,
+            and disabled replay still records diagnostics instead of fake rows.
+          </p>
+        </article>
+        <article class="panel">
+          <b>Artifacts</b>
+          <p>
+            Public artifacts now include `tinyfish-trace`,
+            `playwright-replay-result`, `playwright-repair-diagnostic`,
+            `playwright-repaired-script`, and `validation-result`.
+          </p>
+        </article>
+      </div>
+    </section>
+
+    <section aria-label="Rendered diagrams">
+      <figure>
+        <figcaption>
+          <div>
+            <h3>BrowserActionBox Flow</h3>
+            <p>Source planning feeds first-run tracing, then replay or one repair attempt goes back through the same validation gate.</p>
+          </div>
+          <a href="assets/bigset-populate-target-loop.svg">Open SVG</a>
+        </figcaption>
+        <div class="diagram">
+          <img src="assets/bigset-populate-target-loop.svg" alt="BrowserActionBox first-run and second-run populate flow diagram">
+        </div>
+      </figure>
+
+      <figure>
+        <figcaption>
+          <div>
+            <h3>Validation Gate</h3>
+            <p>Rows must have useful cells, sources, evidence, and expected-entity coverage before write.</p>
+          </div>
+          <a href="assets/bigset-populate-validation-gate.svg">Open SVG</a>
+        </figcaption>
+        <div class="diagram">
+          <img src="assets/bigset-populate-validation-gate.svg" alt="Self-healing validation gate diagram">
+        </div>
+      </figure>
+    </section>
+  </main>
+</body>
+</html>

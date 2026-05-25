@@ -4,6 +4,7 @@ export const populateColumnSchema = z.object({
   name: z.string(),
   type: z.enum(["text", "number", "boolean", "url", "date"]),
   description: z.optional(z.string()),
+  nullable: z.optional(z.boolean()),
 });
 export type PopulateColumn = z.infer<typeof populateColumnSchema>;
 

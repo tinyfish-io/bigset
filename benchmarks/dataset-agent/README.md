@@ -59,7 +59,7 @@ source-evidence misses:
 
 ```bash
 COLLECTION_AGENT_ENABLE_AGENT=true \
-COLLECTION_AGENT_POLL_TIMEOUT_MS=480000 \
+COLLECTION_AGENT_POLL_TIMEOUT_MS=1200000 \
 COLLECTION_AGENT_PIPELINE_MODULE=./backend/BigSet_Data_Collection_Agent/src/orchestrator/pipeline.ts \
 BIGSET_COLLECTION_BENCHMARK_RUNNER_MODULE=./backend/src/pipeline/collection-agent-runner.ts \
 node benchmarks/dataset-agent/run-benchmark.mjs \
@@ -68,18 +68,124 @@ node benchmarks/dataset-agent/run-benchmark.mjs \
   --system collection-self-heal='node --import ./backend/node_modules/tsx/dist/esm/index.mjs benchmarks/dataset-agent/adapters/collection-self-healing-adapter.mjs'
 ```
 
-Latest `mcp-docs-pages` Agent-enabled canary evidence:
+Latest `mcp-docs-pages` Agent-enabled canary evidence, rescored with the
+rejected-candidate gate:
 
-- artifact: `benchmark-results/collection-agent-canary-mcp-20260523-001`
-- status: failed, not blocked
-- rows/evidence: 3 rows, 12 evidence quotes, 10 source URLs
-- cost: about `$0.053552`
-- signal: Agent runs complete and claim support reaches `1.0`, but domain
-  accuracy stays `0.667`; next fix is source/domain coherence, not more Agent
-  plumbing.
+- artifact: `benchmark-results/collection-agent-provenance-mcp-20260523-001`
+- status: failed with `failureCategory: "capability_gate"`
+- rows/evidence: 3 rows, 5 evidence quotes, 5 source URLs
+- score: factual accuracy `1.0`, entity coverage `1.0`, domain accuracy `1.0`,
+  claim support `1.0`
+- Agent signal: 1 Agent run reported 20 steps, but emitted no explicit
+  `browser_actions`
+- self-healing signal: `selfHealingAction: "candidate_rejected"`
+- Playwright signal: `playwrightCandidateStatus: "not_ready"` with zero
+  replayable browser steps
+- conclusion: rows are useful debug evidence, but not a promotable cron recipe.
+  Next fix is producer-side browser action emission plus a promoted
+  self-healing run, not a Playwright compiler yet.
 
 App and CLI collection-runtime runs use the same runner shape, but load it from
 `POPULATE_COLLECTION_RUNNER_MODULE` when `POPULATE_AGENT_RUNTIME=collection`.
+
+Self-healing run records now include a `process-trace` artifact when a runtime
+exposes trace data and a `playwright-candidate-readiness` artifact that says
+whether the trace is grounded enough for Playwright replay. When that readiness
+status is `ready`, the run also emits a `playwright-candidate-script` artifact
+that exports `runDatasetRecipe(context)`. Search and fetch URLs alone are not
+enough. The readiness gate expects real browser actions such as URL transitions,
+selectors, target text, or redacted input descriptions before any script can be
+emitted.
+
+Collection runners can feed those actions through explicit report fields such
+as `browser_actions` or `agent_browser_actions`. BigSet maps only those explicit
+actions into `browser` trace steps; it does not infer selectors or clicks from
+URLs, source outcomes, or prose diagnostics. The collection TinyFish Agent goal
+now explicitly asks the Agent to return `agent_browser_actions` next to
+`records`, so browser replay evidence starts at the producer contract.
+
+Mapping is mechanical:
+
+- `target_text` / `targetText` -> `browserAction.targetText`
+- `value_description` / `valueDescription` -> `browserAction.valueDescription`
+- `status` -> `step.status`
+- `error` -> `step.error`
+- `phase` -> `step.input.phase`
+- unknown action strings -> `browserAction.action = "unknown"`
+
+When both action arrays are present in the same report scope, BigSet preserves
+array order by appending `browser_actions` first and `agent_browser_actions`
+second. This is an ingestion contract for a future collection producer or Agent
+canary; it does not mean the current vendored pipeline already emits
+browser actions.
+
+When TinyFish Agent result JSON includes explicit `browser_actions` or
+`agent_browser_actions`, the vendored runner preserves those arrays in
+`agent_runs_*.json` and phase-scoped `run_report.json` fields. Generic
+`actions` arrays are ignored because they are not browser-specific enough to
+replay honestly.
+
+The collection self-healing adapter also prints a compact `diagnostics` object
+to stdout so benchmark artifacts can answer the Playwright readiness question
+without committing raw run folders:
+
+```json
+{
+  "diagnostics": {
+    "selfHealingAction": "generated_initial_recipe",
+    "artifactKinds": ["process-trace", "playwright-candidate-readiness"],
+    "processTrace": {
+      "runtime": "collection",
+      "stepCount": 12,
+      "browserStepCount": 1,
+      "sourceUrlCount": 4
+    },
+    "playwrightCandidateReadiness": {
+      "status": "ready",
+      "browserStepCount": 1,
+      "sourceUrlCount": 4
+    }
+  }
+}
+```
+
+`summary.json` carries the same high-signal fields on each lane result:
+`selfHealingAction`, `selfHealingArtifactKinds`, `processTraceStepCount`,
+`processTraceBrowserStepCount`, `playwrightCandidateStatus`,
+`playwrightCandidateBrowserStepCount`, and
+`playwrightCandidateSourceUrlCount`. Use those fields to verify whether an
+Agent canary actually emitted browser actions before starting a Playwright
+compiler.
+
+If `selfHealingAction` is `candidate_rejected`, the benchmark marks the lane as
+`failureCategory: "capability_gate"` even when the diagnostic rows score well.
+Rejected candidates are useful for debugging, but they are not promotable cron
+recipes.
+
+Agent canaries also preserve safe provenance from the TinyFish run payload:
+reported step count, whether a streaming URL existed, and top-level result
+keys. Raw `streaming_url` values are never persisted. If Agent returns rows but
+the polled run payload has no explicit `browser_actions`, diagnostics include
+that distinction so `not_ready` means "no replayable action trace", not "the
+Agent did no browser work."
+
+For browser-action canaries, add `--require-playwright-ready` to make the
+benchmark fail with `failureCategory: "capability_gate"` unless the
+`playwright-candidate-readiness` artifact is `ready`. This gate uses the
+readiness artifact, not raw browser step counts, so it still requires
+actionable browser steps, source anchors, and no Agent-disabled diagnostic.
+
+```bash
+COLLECTION_AGENT_ENABLE_AGENT=true \
+COLLECTION_AGENT_POLL_TIMEOUT_MS=1200000 \
+COLLECTION_AGENT_PIPELINE_MODULE=./backend/BigSet_Data_Collection_Agent/src/orchestrator/pipeline.ts \
+BIGSET_COLLECTION_BENCHMARK_RUNNER_MODULE=./backend/src/pipeline/collection-agent-runner.ts \
+node benchmarks/dataset-agent/run-benchmark.mjs \
+  --require-playwright-ready \
+  --prompt-ids mcp-docs-pages \
+  --timeout-ms 900000 \
+  --system collection-self-heal='node --import ./backend/node_modules/tsx/dist/esm/index.mjs benchmarks/dataset-agent/adapters/collection-self-healing-adapter.mjs'
+```
 
 ## Verify Self-Healing Stack
 
@@ -102,10 +208,9 @@ bash scripts/verify-self-healing-stack.sh --convex-push --dataset-id <dataset-id
 bash scripts/verify-self-healing-stack.sh --convex-push --dataset-id <dataset-id> --commit
 ```
 
-The live benchmark and dataset smoke expect required env vars to already be
-exported in the shell. They print only missing key names and never print secret
-values. The `--convex-push` mode still uses the existing `make convex-push`
-target, which requires `frontend/.env.local`.
+The live benchmark and dataset smoke load root `.env` when present. They print
+only missing key names and never print secret values. The `--convex-push` mode
+uses `make convex-push`, which also reads root `.env`.
 
 ## Benchmark Env
 

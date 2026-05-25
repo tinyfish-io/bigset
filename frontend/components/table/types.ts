@@ -4,6 +4,7 @@ export interface DatasetColumn {
   name: string;
   type: ColumnType;
   description?: string;
+  nullable?: boolean;
 }
 
 export interface DatasetMeta {
@@ -19,4 +20,10 @@ export interface DatasetRow {
   _id: string;
   _creationTime: number;
   data: Record<string, unknown>;
+  sources?: string[];
+  evidence?: Array<{
+    columnName: string;
+    sourceUrl: string;
+    quote: string;
+  }>;
 }

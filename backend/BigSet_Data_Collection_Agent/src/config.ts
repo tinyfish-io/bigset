@@ -1,3 +1,8 @@
+import { config as loadDotenv } from "dotenv";
+import { fileURLToPath } from "node:url";
+
+loadDotenv({ path: fileURLToPath(new URL("../../../.env", import.meta.url)) });
+
 function readBool(name: string, fallback: boolean): boolean {
   const raw = process.env[name];
   if (raw === undefined || raw === "") return fallback;
@@ -86,6 +91,8 @@ export const config = {
   agentPollConcurrency: readInt("AGENT_POLL_CONCURRENCY", 10),
   agentPollIntervalMs: readInt("AGENT_POLL_INTERVAL_MS", 3000),
   agentPollTimeoutMs: readInt("AGENT_POLL_TIMEOUT_MS", 1_200_000),
+  /** Per HTTP request cap for TinyFish Agent queue/poll/cancel calls. */
+  agentRequestTimeoutMs: readInt("AGENT_REQUEST_TIMEOUT_MS", 15_000),
   triageConcurrency: readInt("TRIAGE_CONCURRENCY", 5),
   enableQualityScoring: readBool("ENABLE_QUALITY_SCORING", true),
   /** results.csv only includes rows with all required fields, ranked by quality. */
@@ -108,7 +115,7 @@ export function assertConfig(): void {
   if (!config.openRouterApiKey) missing.push("OPENROUTER_API_KEY");
   if (missing.length > 0) {
     throw new Error(
-      `Missing required environment variables: ${missing.join(", ")}. Copy .env.example to .env and fill in values.`,
+      `Missing required environment variables: ${missing.join(", ")}. Copy root .env.example to .env and fill in values.`,
     );
   }
 }

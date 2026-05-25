@@ -567,11 +567,22 @@ async function runSystemPrompt(input) {
     parsedPayload,
     normalized,
   });
-  const status = infraBlockerReason
-    ? "blocked"
-    : execution.exitCode === 0 && parsedPayload && answerKeyScore.passed
-      ? "ok"
-      : "failed";
+  const capabilityGateReason = infraBlockerReason
+    ? null
+    : firstString([
+      selfHealingActionGateReason({ diagnostics: normalized.diagnostics }),
+      playwrightReadinessGateReason({
+        diagnostics: normalized.diagnostics,
+        requirePlaywrightReady: input.config.requirePlaywrightReady,
+      }),
+    ]);
+  const status = benchmarkStatusForOutcome({
+    execution,
+    parsedPayload,
+    answerKeyScore,
+    infraBlockerReason,
+    capabilityGateReason,
+  });
 
   const promptRunDirectory = join(
     input.runDirectory,
@@ -597,9 +608,12 @@ async function runSystemPrompt(input) {
     expectedStress: input.promptDefinition.expectedStress,
     answerKey: answerKeyForPrompt(input.promptDefinition),
     status,
-    failureCategory: status === "ok" ? undefined : (
-      infraBlockerReason ? "infra" : answerKeyScore.failureCategory
-    ),
+    failureCategory: failureCategoryForOutcome({
+      status,
+      infraBlockerReason,
+      capabilityGateReason,
+      answerKeyScore,
+    }),
     factualAccuracyScore: answerKeyScore.factualAccuracyScore,
     entityCoverageRatio: answerKeyScore.entityCoverageRatio,
     domainAccuracyRatio: answerKeyScore.domainAccuracyRatio,
@@ -627,6 +641,18 @@ async function runSystemPrompt(input) {
     needsReviewCount: validation.needsReviewCount,
     validationIssueCount: normalized.validationIssues.length,
     validationIssues: normalized.validationIssues,
+    selfHealingAction: normalized.diagnostics.selfHealingAction,
+    selfHealingArtifactKinds: normalized.diagnostics.artifactKinds,
+    processTraceStepCount: normalized.diagnostics.processTrace?.stepCount,
+    processTraceBrowserStepCount:
+      normalized.diagnostics.processTrace?.browserStepCount,
+    playwrightCandidateStatus:
+      normalized.diagnostics.playwrightCandidateReadiness?.status,
+    playwrightCandidateBrowserStepCount:
+      normalized.diagnostics.playwrightCandidateReadiness?.browserStepCount,
+    playwrightCandidateSourceUrlCount:
+      normalized.diagnostics.playwrightCandidateReadiness?.sourceUrlCount,
+    diagnostics: normalized.diagnostics,
     usage,
     searchCallCount: normalized.metrics.searchCallCount,
     fetchCallCount: normalized.metrics.fetchCallCount,
@@ -645,6 +671,7 @@ async function runSystemPrompt(input) {
         validation,
         answerKeyScore,
         infraBlockerReason,
+        capabilityGateReason,
         minRequiredCompleteness: input.config.minRequiredCompleteness,
         validationIssues: normalized.validationIssues,
       }),
@@ -746,6 +773,7 @@ function parseArgs(args) {
     tinyFishAgentStepUsd: 0.015,
     minRequiredCompleteness: 0.75,
     minFactualAccuracy: defaultMinimumFactualAccuracy,
+    requirePlaywrightReady: false,
   };
 
   for (let index = 0; index < args.length; index += 1) {
@@ -785,6 +813,8 @@ function parseArgs(args) {
     } else if (arg === "--min-factual-accuracy") {
       config.minFactualAccuracy = nonNegativeNumber(value, config.minFactualAccuracy);
       index += 1;
+    } else if (arg === "--require-playwright-ready") {
+      config.requirePlaywrightReady = true;
     } else if (arg === "--help" || arg === "-h") {
       printHelpAndExit();
     } else {
@@ -930,7 +960,7 @@ function extractLastJsonObject(value) {
   return null;
 }
 
-function normalizePayload(payload) {
+export function normalizePayload(payload) {
   const rows = arrayValue(
     payload?.rows ??
       payload?.data ??
@@ -943,10 +973,12 @@ function normalizePayload(payload) {
   );
   const metrics = payload?.metrics ?? payload?.benchmarkMetrics ?? {};
   const usage = normalizeUsage(payload?.usage ?? metrics.usage ?? metrics);
+  const diagnostics = objectValue(payload?.diagnostics);
 
   return {
     rows,
     validationIssues,
+    diagnostics,
     usage,
     metrics: {
       searchCallCount: numberValue(metrics.searchCallCount ?? metrics.searchCalls),
@@ -956,6 +988,78 @@ function normalizePayload(payload) {
       agentStepCount: numberValue(metrics.agentStepCount ?? metrics.agentSteps),
     },
   };
+}
+
+export function playwrightReadinessGateReason({
+  diagnostics,
+  requirePlaywrightReady,
+}) {
+  if (!requirePlaywrightReady) {
+    return null;
+  }
+  const readiness = diagnostics?.playwrightCandidateReadiness;
+  if (!readiness || typeof readiness !== "object") {
+    return "Playwright readiness gate failed: missing playwrightCandidateReadiness diagnostics.";
+  }
+  const reasons = stringArrayValue(readiness.reasons);
+  if (readiness.status !== "ready") {
+    return [
+      "Playwright readiness gate failed:",
+      reasons.length > 0
+        ? reasons.join("; ")
+        : `status is ${String(readiness.status ?? "missing")}.`,
+    ].join(" ");
+  }
+  if (numberValue(readiness.browserStepCount) <= 0) {
+    return "Playwright readiness gate failed: no actionable browser steps.";
+  }
+  if (numberValue(readiness.sourceUrlCount) <= 0) {
+    return "Playwright readiness gate failed: no source URLs to anchor replay.";
+  }
+  return null;
+}
+
+export function selfHealingActionGateReason({ diagnostics }) {
+  if (diagnostics?.selfHealingAction !== "candidate_rejected") {
+    return null;
+  }
+  return "Self-healing gate failed: candidate recipe was rejected; rows came from a diagnostic run, not a promoted recipe.";
+}
+
+export function benchmarkStatusForOutcome({
+  execution,
+  parsedPayload,
+  answerKeyScore,
+  infraBlockerReason,
+  capabilityGateReason,
+}) {
+  if (infraBlockerReason) {
+    return "blocked";
+  }
+  if (capabilityGateReason) {
+    return "failed";
+  }
+  return execution.exitCode === 0 && parsedPayload && answerKeyScore.passed
+    ? "ok"
+    : "failed";
+}
+
+export function failureCategoryForOutcome({
+  status,
+  infraBlockerReason,
+  capabilityGateReason,
+  answerKeyScore,
+}) {
+  if (status === "ok") {
+    return undefined;
+  }
+  if (infraBlockerReason) {
+    return "infra";
+  }
+  if (capabilityGateReason) {
+    return "capability_gate";
+  }
+  return answerKeyScore.failureCategory;
 }
 
 function normalizeUsage(value) {
@@ -1027,7 +1131,7 @@ function evaluateRows({ rows, promptDefinition }) {
   };
 }
 
-async function rescoreBenchmarkRun({ runDirectory, prompts, config }) {
+export async function rescoreBenchmarkRun({ runDirectory, prompts, config }) {
   const previousSummary = JSON.parse(await readFile(join(runDirectory, "summary.json"), "utf8"));
   const promptsById = new Map(prompts.map((promptDefinition) => [
     promptDefinition.id,
@@ -1075,11 +1179,22 @@ async function rescoreBenchmarkRun({ runDirectory, prompts, config }) {
       parsedPayload: usablePayload,
       normalized,
     });
-    const status = infraBlockerReason
-      ? "blocked"
-      : execution.exitCode === 0 && usablePayload && answerKeyScore.passed
-        ? "ok"
-        : "failed";
+    const capabilityGateReason = infraBlockerReason
+      ? null
+      : firstString([
+        selfHealingActionGateReason({ diagnostics: normalized.diagnostics }),
+        playwrightReadinessGateReason({
+          diagnostics: normalized.diagnostics,
+          requirePlaywrightReady: config.requirePlaywrightReady,
+        }),
+      ]);
+    const status = benchmarkStatusForOutcome({
+      execution,
+      parsedPayload: usablePayload,
+      answerKeyScore,
+      infraBlockerReason,
+      capabilityGateReason,
+    });
 
     rescoredLaneResults.push({
       ...laneResult,
@@ -1089,9 +1204,12 @@ async function rescoreBenchmarkRun({ runDirectory, prompts, config }) {
       expectedStress: promptDefinition.expectedStress,
       answerKey: answerKeyForPrompt(promptDefinition),
       status,
-      failureCategory: status === "ok" ? undefined : (
-        infraBlockerReason ? "infra" : answerKeyScore.failureCategory
-      ),
+      failureCategory: failureCategoryForOutcome({
+        status,
+        infraBlockerReason,
+        capabilityGateReason,
+        answerKeyScore,
+      }),
       factualAccuracyScore: answerKeyScore.factualAccuracyScore,
       entityCoverageRatio: answerKeyScore.entityCoverageRatio,
       domainAccuracyRatio: answerKeyScore.domainAccuracyRatio,
@@ -1116,6 +1234,32 @@ async function rescoreBenchmarkRun({ runDirectory, prompts, config }) {
       needsReviewCount: validation.needsReviewCount,
       validationIssueCount: normalized.validationIssues.length,
       validationIssues: normalized.validationIssues,
+      selfHealingAction: normalized.diagnostics.selfHealingAction,
+      selfHealingArtifactKinds: normalized.diagnostics.artifactKinds,
+      processTraceStepCount: normalized.diagnostics.processTrace?.stepCount,
+      processTraceBrowserStepCount:
+        normalized.diagnostics.processTrace?.browserStepCount,
+      playwrightCandidateStatus:
+        normalized.diagnostics.playwrightCandidateReadiness?.status,
+      playwrightCandidateBrowserStepCount:
+        normalized.diagnostics.playwrightCandidateReadiness?.browserStepCount,
+      playwrightCandidateSourceUrlCount:
+        normalized.diagnostics.playwrightCandidateReadiness?.sourceUrlCount,
+      diagnostics: normalized.diagnostics,
+      usage: normalized.usage,
+      searchCallCount: normalized.metrics.searchCallCount,
+      fetchCallCount: normalized.metrics.fetchCallCount,
+      browserCallCount: normalized.metrics.browserCallCount,
+      agentRunCount: normalized.metrics.agentRunCount,
+      agentStepCount: normalized.metrics.agentStepCount,
+      estimatedModelCostUsd: estimateModelCostUsd(normalized.usage, config),
+      estimatedTinyFishAgentCostUsd: roundUsd(
+        normalized.metrics.agentStepCount * config.tinyFishAgentStepUsd
+      ),
+      estimatedTotalCostUsd: roundUsd(
+        estimateModelCostUsd(normalized.usage, config) +
+          normalized.metrics.agentStepCount * config.tinyFishAgentStepUsd
+      ),
       errorMessage: status === "ok"
         ? undefined
         : failureReason({
@@ -1124,6 +1268,7 @@ async function rescoreBenchmarkRun({ runDirectory, prompts, config }) {
           validation,
           answerKeyScore,
           infraBlockerReason,
+          capabilityGateReason,
           minRequiredCompleteness: config.minRequiredCompleteness,
           validationIssues: normalized.validationIssues,
         }),
@@ -1638,6 +1783,7 @@ export function failureReason({
   validation,
   answerKeyScore,
   infraBlockerReason,
+  capabilityGateReason,
   minRequiredCompleteness,
   validationIssues = [],
 }) {
@@ -1645,6 +1791,7 @@ export function failureReason({
   if (execution.timedOut) return "Command timed out.";
   if (execution.exitCode !== 0) return `Command exited ${execution.exitCode}.`;
   if (!parsedPayload) return "No parseable JSON object found in stdout.";
+  if (capabilityGateReason) return capabilityGateReason;
   const capabilityDiagnostic = capabilityDiagnosticReason(validationIssues);
   if (capabilityDiagnostic) return capabilityDiagnostic;
   if (answerKeyScore?.failureCategory === "clarification") {
@@ -1681,6 +1828,13 @@ function arrayValue(value) {
   return Array.isArray(value) ? value : [];
 }
 
+function objectValue(value) {
+  if (!value || Array.isArray(value) || typeof value !== "object") {
+    return {};
+  }
+  return value;
+}
+
 function stringArrayValue(value) {
   if (Array.isArray(value)) {
     return value.filter((item) => typeof item === "string");
@@ -1689,6 +1843,10 @@ function stringArrayValue(value) {
     return [value];
   }
   return [];
+}
+
+function firstString(values) {
+  return values.find((value) => typeof value === "string" && value.length > 0) ?? null;
 }
 
 function singleStringArray(value) {
@@ -1785,6 +1943,12 @@ node benchmarks/dataset-agent/run-benchmark.mjs \\
 
 Rescore existing artifacts without spending credits:
 node benchmarks/dataset-agent/run-benchmark.mjs --rescore-dir benchmark-results/<run>
+
+Require self-healing Playwright readiness for browser-action canaries:
+node benchmarks/dataset-agent/run-benchmark.mjs \\
+  --require-playwright-ready \\
+  --prompt-ids mcp-docs-pages \\
+  --system collection-self-heal='node --import ./backend/node_modules/tsx/dist/esm/index.mjs benchmarks/dataset-agent/adapters/collection-self-healing-adapter.mjs'
 
 Agent command contract:
 - stdout should contain a JSON object.

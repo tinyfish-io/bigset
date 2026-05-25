@@ -18,7 +18,8 @@ the collection pipeline is migrated into BigSet.
   a runner module from `POPULATE_COLLECTION_RUNNER_MODULE`.
 - PR #41 adds a `collection-self-heal` benchmark lane that wraps the collection
   runtime inside `SelfHealingPopulateRecipeService`. This is the benchmark
-  socket Meteor can use once the real collection runner is available.
+  socket a collection-runtime producer can use once the real collection runner
+  is available.
 - PR #43 ports the real vendored collection pipeline behind
   `runCollectionPopulatePipeline(input)`, so the collection benchmark lane now
   runs the BigSet-wrapped collection runner instead of a fake injected runner.
@@ -28,9 +29,22 @@ the collection pipeline is migrated into BigSet.
   without injecting answer-key URLs at runtime.
 - PR #46 surfaces no-Agent browser/form/detail follow-up as a safe capability
   diagnostic instead of hiding it as generic bad data or infra failure.
+- PR #47-#52 document and improve collection benchmark evidence, source
+  coherence, official-source support, and URL-like source evidence. PR #52 fixes
+  the `official_website` / `company_website` / `product_url` scoring class.
+- PR #53-#60 add the self-healing process trace, Playwright readiness artifact,
+  explicit browser-action ingestion contract, Agent provenance diagnostics,
+  readiness benchmark gate, and rejected-candidate benchmark gate.
+- PR #60 is the current top of the draft self-healing/collection stack. It makes
+  `selfHealingAction: "candidate_rejected"` fail benchmark scoring with
+  `failureCategory: "capability_gate"`, even when diagnostic rows match answer
+  keys.
+- This branch adds a commit-path row cap for self-healing writes. Commit mode
+  defaults to a configurable safety throttle and can be overridden with
+  `POPULATE_COMMIT_ROW_LIMIT_PER_HOUR` or `--commit-row-limit-per-hour`.
 - `feat/data-collection-agent-v14` is no longer the branch to build on directly.
   It was the source of the collection pipeline port. New work should branch on
-  top of the current draft stack, not edit Meteor's branch or the dirty main
+  top of the current draft stack, not edit the external collection branch or the dirty main
   checkout.
 
 ## Target Shape
@@ -63,6 +77,8 @@ The current layer:
 
 - stores active recipes and run records in a filesystem recipe store on the
   durable app/commit path
+- persists each run's artifacts on the run record, including a structured
+  `process-trace` artifact when the runtime exposes one
 - reruns the active recipe when one exists
 - generates an initial recipe when no active recipe exists
 - repairs a failed active recipe through `DefaultPopulateRecipeAuthor`
@@ -72,6 +88,7 @@ The current layer:
 - promotes a repaired recipe only if it is valid and does not score below the
   active recipe baseline
 - commits rows only after a successful tick, using one Convex atomic replace
+- enforces a configurable per-dataset hourly row cap before committing rows
 - supports a CLI path for cron/live smoke via `populate:self-heal --dataset-id`
 
 Dry-run and benchmark paths intentionally use in-memory stores so they do not
@@ -84,12 +101,40 @@ The current layer now can:
 - run the real vendored collection pipeline through that same boundary
 - preserve `recipe.runtimeInstructions`, required columns, and benchmark
   metadata through the collection runner
+- expose structured trace data for both Mastra and collection runs:
+  `runtime`, `searchQueries`, `fetchedUrls`, `sourceArtifacts`,
+  `selectedRowSource`, `notes`, and ordered `steps`
+- expose a `playwright-candidate-readiness` artifact that explains whether the
+  trace is grounded enough to compile a Playwright replay script
+- emit a `playwright-candidate-script` artifact with
+  `runDatasetRecipe(context)` when readiness is `ready`
+- represent browser actions in the trace contract when a future Agent/canary
+  records URL transitions, selectors, target text, or redacted input
+  descriptions
+- ingest explicit collection runner `browser_actions` /
+  `agent_browser_actions` report fields into `browser` trace steps without
+  inferring missing clicks, selectors, or form inputs from source URLs
+- preserve explicit `browser_actions` from TinyFish Agent results in
+  `agent_runs_*.json`, `run_report.initial.agent_browser_actions`, repair-loop
+  `agent_browser_actions`, without duplicating them into top-level report fields
+- map browser action reports mechanically: `target_text` to `targetText`,
+  `value_description` to `valueDescription`, `status` to the trace-step status,
+  `error` to the trace-step error, `phase` to `step.input.phase`, and unknown
+  action names to `browserAction.action = "unknown"`
 - emit a capability diagnostic when no-Agent mode sees pages that need browser,
   form, or detail-page follow-up
 
 The current layer does not yet:
 
-- generate Playwright scripts as a durable production recipe
+- promote Playwright scripts as durable production recipes
+- run cron from compiled Playwright scripts
+- repair or promote Playwright scripts; repair still changes durable runtime
+  instructions only
+- compile search/fetch-only traces into Playwright; traces must include
+  actionable browser steps before the script compiler is allowed to emit a
+  candidate
+- infer browser selectors, clicks, or form values from source outcomes; the
+  collection runner or Agent canary must emit those as explicit action fields
 - run a green live Convex canary in this local environment
 - prove Agent-enabled collection quality on a full real benchmark
 - prove the collection runtime should replace Mastra as the default app runtime
@@ -98,8 +143,8 @@ The current layer does not yet:
 
 1. Branch from the top of the self-healing stack.
    - For new collection-runner or benchmark work, base on
-     `codex/collection-capability-diagnostics` unless that PR has been
-     superseded.
+     `codex/benchmark-self-healing-action-gate` unless that PR has been
+     superseded by a newer reviewed stack tip.
    - Do not edit `main`, the dirty local checkout, or
      `feat/data-collection-agent-v14` directly.
 
@@ -153,6 +198,24 @@ The current layer does not yet:
    - 2-prompt real benchmark
    - 1-prompt Agent-enabled capability canary for prompts that need browser or
      detail follow-up
+   - browser-step trace canary that records URL transitions, selectors/targets,
+     and redacted form-input descriptions before any Playwright compiler is
+     enabled
+   - confirm the canary emits explicit `agent_browser_actions` or equivalent
+     fields in the collection report; source outcomes alone are not enough
+   - check `summary.json` for `playwrightCandidateStatus`,
+     `processTraceBrowserStepCount`, and
+     `playwrightCandidateBrowserStepCount` so the canary proves browser-action
+     provenance, not only row/evidence quality
+   - run browser-action canaries with `--require-playwright-ready` so row
+     quality cannot hide missing replayable browser-action provenance
+   - inspect Agent run provenance fields (`agent_step_count`,
+     `has_streaming_url`, and `result_keys`) when readiness fails; these fields
+     prove browser work happened without persisting raw streaming URLs or
+     pretending selectors/clicks exist
+   - treat `selfHealingAction: "candidate_rejected"` as a capability failure
+     even if diagnostic rows score well; rejected rows are debug output, not a
+     promotable self-healing recipe
    - full benchmark only after the 2-prompt run is not obviously broken
    - live `--dataset-id` dry-run only after Convex/env prerequisites are ready
    - `--commit` only on a throwaway dataset first
@@ -193,10 +256,13 @@ Before any merge:
   follow-up
 - live dataset commit is tested only on a throwaway dataset
 - backend build does not depend on `frontend/convex/_generated`
+- commit-mode row caps block Convex writes before the cap is exceeded and skip
+  runtime work when the cap is already exhausted
 
-## Meteor Handoff Shape
+## Collection Runtime Handoff Shape
 
-Meteor does not need to rebuild the self-healing wrapper. The socket is now:
+The collection-runtime owner does not need to rebuild the self-healing wrapper.
+The socket is now:
 
 ```text
 runCollectionPopulatePipeline(CollectionPopulatePipelineInput)
@@ -208,6 +274,23 @@ runCollectionPopulatePipeline(CollectionPopulatePipelineInput)
 collection runner ignores `recipeInstructions`, repaired recipes cannot change
 future behavior. If it ignores `requiredColumns` or benchmark metadata, the
 benchmark can stop measuring the same task.
+
+For the Playwright handoff, the collection runtime can optionally emit `browser_actions` and
+`agent_browser_actions` in the collection report. BigSet preserves each array's
+order and appends `browser_actions` before `agent_browser_actions` when both are
+present in the same report scope. This is a wrapper ingestion contract only; the
+current vendored pipeline is not claimed to emit those fields yet.
+
+The TinyFish Agent goal generator now asks the Agent itself to include
+`agent_browser_actions` beside `records` in its result JSON. That makes the
+producer responsible for ordered navigation/click/type/extract actions instead
+of asking the self-healing layer to infer browser behavior after the fact.
+
+If TinyFish Agent result JSON includes explicit `browser_actions` or
+`agent_browser_actions`, the vendored runner now carries those arrays into the
+saved Agent run records and phase-scoped run report fields. Generic `actions`
+arrays are intentionally ignored because they are not a browser-specific
+contract.
 
 The real benchmark command after a runner module exists is:
 
@@ -224,7 +307,8 @@ Agent explicitly enabled:
 
 ```bash
 COLLECTION_AGENT_ENABLE_AGENT=true \
-COLLECTION_AGENT_POLL_TIMEOUT_MS=480000 \
+COLLECTION_AGENT_POLL_TIMEOUT_MS=1200000 \
+AGENT_REQUEST_TIMEOUT_MS=15000 \
 COLLECTION_AGENT_PIPELINE_MODULE=./backend/BigSet_Data_Collection_Agent/src/orchestrator/pipeline.ts \
 BIGSET_COLLECTION_BENCHMARK_RUNNER_MODULE=./backend/src/pipeline/collection-agent-runner.ts \
 node benchmarks/dataset-agent/run-benchmark.mjs \
@@ -243,35 +327,43 @@ That is not a pass, but it is useful: it tells us the next benchmark should
 turn Agent on and measure whether browser/detail follow-up fixes the source
 evidence miss.
 
-Agent-enabled `mcp-docs-pages` evidence from the stack-handoff branch:
+Latest Agent-enabled `mcp-docs-pages` evidence from the provenance diagnostics
+branch, rescored with the rejected-candidate gate:
 
-- artifact: `benchmark-results/collection-agent-canary-mcp-20260523-001`
-- result: 3 rows, 12 evidence quotes, 10 source URLs, 3 Agent runs
-- cost: about `$0.053552`
-- status: failed, not blocked
-- score: factual accuracy `0.933`, entity coverage `1.0`, claim support `1.0`,
-  domain accuracy `0.667`
-- conclusion: Agent/browser follow-up runs successfully and improves claim
-  support, but source/domain evidence still misses. The next code target is
-  source coherence: keep each row's docs URL/evidence/source URLs aligned with
-  that entity's official docs domain instead of merging discovery/blog/course
-  evidence across vendors.
+- artifact: `benchmark-results/collection-agent-provenance-mcp-20260523-001`
+- result: 3 rows, 5 evidence quotes, 5 source URLs, 1 Agent run, 20 reported
+  Agent steps
+- cost: about `$0.307769`
+- score: factual accuracy `1.0`, entity coverage `1.0`, domain accuracy `1.0`,
+  claim support `1.0`
+- self-healing action: `candidate_rejected`
+- Playwright readiness: `not_ready`, with zero replayable browser steps
+- status after PR #60 rescore: failed with `failureCategory:
+  "capability_gate"`
+- conclusion: the collection Agent can collect useful rows for this prompt, but
+  the self-healing layer correctly refuses to treat a rejected diagnostic run as
+  a promotable cron recipe. TinyFish reported browser work happened, but the
+  exposed run payload still did not contain explicit replayable browser actions.
 
 ## Next Engineering Move
 
-Create a fresh branch from `codex/collection-capability-diagnostics` and fix
-source coherence before running the full benchmark:
+Create fresh branches from the current rollup/producer stack. Do not edit
+`main`, the external collection branch, or the dirty local checkout.
 
-1. Keep `COLLECTION_AGENT_ENABLE_AGENT=false` as the default.
-2. Add focused tests around record merge/source selection so a row does not gain
-   evidence for a populated field from another record unless the incoming row
-   value supports the existing value.
-3. Tighten docs/official-source selection so docs prompts prefer docs/developers
-   pages over blogs, news, courses, directories, or third-party discovery pages.
-4. Re-run the Agent-enabled `mcp-docs-pages` canary.
-5. If domain accuracy reaches `1.0`, run the 4-prompt focused benchmark from
-   PR #45.
-6. Run the full prompt pack only after the focused benchmark is not obviously
+1. Ask the migrated collection agent to emit explicit action traces.
+   - Preferred fields are `browser_actions` or `agent_browser_actions`.
+   - Each action should include at least URL or selector/target text plus safe,
+     redacted value descriptions for form inputs.
+   - Do not build a Playwright compiler against search/fetch-only traces.
+2. Re-run the Agent-enabled `mcp-docs-pages` canary with:
+   - `COLLECTION_AGENT_ENABLE_AGENT=true`
+   - `--require-playwright-ready`
+   - PR #60's rejected-candidate gate
+3. When that canary produces `selfHealingAction` other than
+   `candidate_rejected` and `playwrightCandidateStatus: "ready"`, inspect the
+   `playwright-candidate-script` artifact and promote the script runner/cron
+   contract behind a separate gate.
+4. Run the full prompt pack only after the focused canaries are not obviously
    broken.
 
 When testing the real app or CLI path, set:
@@ -280,13 +372,16 @@ When testing the real app or CLI path, set:
 POPULATE_AGENT_RUNTIME=collection
 POPULATE_COLLECTION_RUNNER_MODULE=./backend/src/pipeline/collection-agent-runner.ts
 COLLECTION_AGENT_PIPELINE_MODULE=./backend/BigSet_Data_Collection_Agent/src/orchestrator/pipeline.ts
+POPULATE_COMMIT_ROW_LIMIT_PER_HOUR=1000
 ```
 
 The BigSet runner keeps TinyFish Agent/browser calls disabled unless
 `COLLECTION_AGENT_ENABLE_AGENT=true`. This makes cron and benchmark reruns cheap
 and repeatable first. Agent-enabled runs should also set
 `COLLECTION_AGENT_POLL_TIMEOUT_MS` or `AGENT_POLL_TIMEOUT_MS` so a browser run
-cannot outlive the benchmark/job budget.
+cannot outlive the benchmark/job budget. `AGENT_REQUEST_TIMEOUT_MS` caps each
+TinyFish Agent queue/poll/cancel HTTP request so one hung `runs.get` call cannot
+outlive the app-level poll timeout.
 
 Do not switch the default runtime from Mastra to collection until the
 self-healing-wrapped collection benchmark has better evidence than the current

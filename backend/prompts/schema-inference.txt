@@ -18,7 +18,7 @@ Rules:
 - All column `name` values must be snake_case and unique.
 - Prefer concrete column choices over speculative ones — better to omit a column than guess wildly.
 
-# @MMeteorL's comments/suggestions:
+# Collection pipeline review comments:
 # This may be too early in the agent workflow to suggest these without more
 # context. In the current agent system, the agent would first use Tinyfish
 # search to search for candidate urls and fetch those results for analysis

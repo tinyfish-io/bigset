@@ -3,6 +3,7 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import * as ts from "typescript";
 
 import {
   createPopulateRecipe,
@@ -17,6 +18,10 @@ import type {
   PopulateRecipeRunResult,
   PopulateRecipeRuntime,
 } from "../src/pipeline/populate-self-healing.js";
+import {
+  createPlaywrightScriptArtifact,
+  populateRuntimeResultFromAgentCompatibleResult,
+} from "../src/pipeline/populate-browser-action-box.js";
 import type { DatasetContext } from "../src/pipeline/populate.js";
 
 const context: DatasetContext = {
@@ -108,6 +113,253 @@ test("Mastra populate recipe runtime maps populate rows into a healthy recipe ru
   assert.equal(run.debug?.selectedRowSource, "insert_row");
   assert.ok(run.artifacts.some((artifact) => artifact.kind === "source-transcript"));
   assert.ok(run.artifacts.some((artifact) => artifact.kind === "captured-rows"));
+  const traceArtifact = run.artifacts.find((artifact) =>
+    artifact.kind === "process-trace"
+  );
+  assert.ok(traceArtifact);
+  const trace = JSON.parse(traceArtifact.content);
+  assert.equal(trace.runtime, "mastra-injected");
+  assert.deepEqual(trace.searchQueries, ["OpenAI latest blog"]);
+  assert.deepEqual(trace.fetchedUrls, ["https://openai.com/news"]);
+  assert.equal(trace.selectedRowSource, "insert_row");
+  const readinessArtifact = run.artifacts.find((artifact) =>
+    artifact.kind === "playwright-candidate-readiness"
+  );
+  assert.ok(readinessArtifact);
+  const readiness = JSON.parse(readinessArtifact.content);
+  assert.equal(readiness.status, "not_ready");
+  assert.match(readiness.reasons.join("\n"), /no actionable browser steps/i);
+  assert.equal(
+    run.artifacts.some((artifact) => artifact.kind === "playwright-candidate-script"),
+    false
+  );
+});
+
+test("Mastra populate recipe runtime emits Playwright candidate script for ready browser traces", async () => {
+  const runtime = new MastraPopulateRecipeRuntime({
+    runPopulate: async () => ({
+      rows: validRows(),
+      validationIssues: [],
+      usage: emptyUsage(),
+      metrics: {
+        ...emptyMetrics(),
+        browserCalls: 1,
+      },
+      debug: {
+        capturedRows: [],
+        capturedSources: [],
+        selectedRowSource: "collection_pipeline",
+        notes: [],
+        processTrace: {
+          runtime: "collection",
+          searchQueries: ["OpenAI pricing docs"],
+          fetchedUrls: ["https://openai.com/news"],
+          sourceArtifacts: [{
+            url: "https://openai.com/news",
+            status: "succeeded",
+            source: "collection",
+          }],
+          selectedRowSource: "collection_pipeline",
+          notes: [],
+          steps: [{
+            kind: "browser",
+            label: "open-news-link",
+            status: "succeeded",
+            input: {
+              phase: "initial",
+            },
+            browserAction: {
+              action: "click",
+              url: "https://openai.com/news",
+              selector: "a[href*='/news']",
+              targetText: "News",
+            },
+          }],
+        },
+      },
+    }),
+  });
+
+  const run = await runtime.runRecipe({
+    recipe: recipe({ recipeId: "recipe-v1" }),
+    context,
+  });
+
+  const readinessArtifact = run.artifacts.find((artifact) =>
+    artifact.kind === "playwright-candidate-readiness"
+  );
+  assert.ok(readinessArtifact);
+  assert.equal(JSON.parse(readinessArtifact.content).status, "ready");
+
+  const scriptArtifact = run.artifacts.find((artifact) =>
+    artifact.kind === "playwright-candidate-script"
+  );
+  assert.ok(scriptArtifact);
+  assert.match(scriptArtifact.content, /export async function runDatasetRecipe/);
+  assert.match(scriptArtifact.content, /a\[href\*='\/news'\]/);
+  assert.match(scriptArtifact.content, /clickTarget/);
+  assert.match(scriptArtifact.content, /https:\/\/openai\.com\/news/);
+  assert.ok(scriptArtifact.content.length <= 20_000);
+  assertJavaScriptModuleParses(scriptArtifact.content);
+});
+
+test("Mastra populate recipe runtime keeps Playwright candidate scripts complete under artifact cap", async () => {
+  const longText = "x".repeat(2_000);
+  const runtime = new MastraPopulateRecipeRuntime({
+    runPopulate: async () => ({
+      rows: validRows(),
+      validationIssues: [],
+      usage: emptyUsage(),
+      metrics: emptyMetrics(),
+      debug: {
+        capturedRows: [],
+        capturedSources: [],
+        selectedRowSource: "collection_pipeline",
+        notes: [],
+        processTrace: {
+          runtime: "collection",
+          searchQueries: [],
+          fetchedUrls: ["https://example.com/catalog"],
+          sourceArtifacts: [{
+            url: "https://example.com/catalog",
+            status: "succeeded",
+            source: "collection",
+          }],
+          selectedRowSource: "collection_pipeline",
+          notes: [],
+          steps: Array.from({ length: 10 }, (_, index) => ({
+            kind: "browser" as const,
+            label: `long-ready-action-${index}-${longText}`,
+            status: "succeeded" as const,
+            input: {
+              phase: "initial",
+            },
+            browserAction: {
+              action: "click" as const,
+              url: `https://example.com/catalog/${index}`,
+              selector: `[data-long="${longText}-${index}"]`,
+              targetText: `${longText}-${index}`,
+              valueDescription: `${longText}-${index}`,
+            },
+          })),
+        },
+      },
+    }),
+  });
+
+  const run = await runtime.runRecipe({
+    recipe: recipe({ recipeId: "recipe-v1" }),
+    context,
+  });
+
+  const readinessArtifact = run.artifacts.find((artifact) =>
+    artifact.kind === "playwright-candidate-readiness"
+  );
+  assert.ok(readinessArtifact);
+  assert.equal(JSON.parse(readinessArtifact.content).status, "ready");
+
+  const scriptArtifact = run.artifacts.find((artifact) =>
+    artifact.kind === "playwright-candidate-script"
+  );
+  assert.ok(scriptArtifact);
+  assert.ok(scriptArtifact.content.length <= 20_000);
+  assert.match(scriptArtifact.content, /Omitted 5 lower-priority browser actions/);
+  assertJavaScriptModuleParses(scriptArtifact.content);
+});
+
+test("Mastra populate recipe runtime replays promoted Playwright script before agent spend", async () => {
+  let replayCalls = 0;
+  let populateCalls = 0;
+  const promotedScript = createPlaywrightScriptArtifact({
+    sourceUrl: "https://openai.com/news",
+    datasetGoalPrompt: context.description,
+    datasetSchema: {
+      columns: context.columns.map((column) => ({
+        name: column.name,
+        required: true,
+      })),
+    },
+    code: "export async function runDatasetRecipe() { return { records: [] }; }",
+    status: "promoted",
+    createdAt: "2026-05-24T00:00:00.000Z",
+  });
+  const runtime = new MastraPopulateRecipeRuntime({
+    runPopulate: async () => {
+      populateCalls += 1;
+      throw new Error("normal populate should not run before replay");
+    },
+    browserActionBox: {
+      async replay(input) {
+        replayCalls += 1;
+        const agentCompatibleResult = {
+          records: [{
+            entity_name: "OpenAI",
+            latest_post_title: "Release notes from OpenAI",
+            source_url: "https://openai.com/news",
+            evidence_quote: "Release notes from OpenAI",
+            evidence: [{
+              field: "latest_post_title",
+              url: "https://openai.com/news",
+              quote: "Release notes from OpenAI",
+            }],
+          }],
+        };
+        return {
+          agentCompatibleResult,
+          runtimeResult: populateRuntimeResultFromAgentCompatibleResult({
+            agentCompatibleResult,
+            datasetSchema: input.datasetSchema,
+            sourceUrl: input.sourceUrl,
+            replayTrace: {
+              status: "succeeded",
+              startedAt: "2026-05-24T00:00:00.000Z",
+              completedAt: "2026-05-24T00:00:01.000Z",
+              scriptId: input.currentPlaywrightScript.scriptId,
+              sourceUrl: input.sourceUrl,
+              diagnostics: [],
+              steps: [{
+                kind: "browser",
+                label: "playwright-replay",
+                status: "succeeded",
+              }],
+            },
+            diagnosticArtifacts: [{
+              kind: "playwright-replay-result",
+              label: "populate-playwright-replay-result",
+              content: JSON.stringify({ replayStatus: "replay_succeeded" }),
+            }],
+          }),
+          trace: {
+            status: "succeeded",
+            startedAt: "2026-05-24T00:00:00.000Z",
+            completedAt: "2026-05-24T00:00:01.000Z",
+            scriptId: input.currentPlaywrightScript.scriptId,
+            sourceUrl: input.sourceUrl,
+            diagnostics: [],
+            steps: [],
+          },
+          replayStatus: "replay_succeeded",
+          diagnostics: [],
+        };
+      },
+    },
+  });
+
+  const run = await runtime.runRecipe({
+    recipe: recipe({
+      recipeId: "recipe-v1",
+      playwrightScript: promotedScript,
+    }),
+    context,
+  });
+
+  assert.equal(replayCalls, 1);
+  assert.equal(populateCalls, 0);
+  assert.equal(run.runStatus, "succeeded");
+  assert.equal(run.productionValidation.isValid, true);
+  assert.ok(run.artifacts.some((artifact) =>
+    artifact.kind === "playwright-replay-result"
+  ));
 });
 
 test("Mastra populate recipe runtime keeps supplemental fetch misses non-blocking", async () => {
@@ -133,7 +385,156 @@ test("Mastra populate recipe runtime keeps supplemental fetch misses non-blockin
   assert.match(run.productionValidation.warnings.join("\n"), /timeout/);
 });
 
-test("Mastra populate recipe runtime blocks missing expected entities", async () => {
+test("Mastra populate recipe runtime treats nullable missing cells as non-blocking", async () => {
+  const runtime = new MastraPopulateRecipeRuntime({
+    runPopulate: async () => ({
+      rows: validRows(),
+      validationIssues: [
+        "Author field could not be determined from the available source transcript.",
+      ],
+      usage: emptyUsage(),
+      metrics: emptyMetrics(),
+    }),
+  });
+
+  const run = await runtime.runRecipe({
+    recipe: recipe({ recipeId: "recipe-v1" }),
+    context: {
+      ...context,
+      columns: [
+        ...context.columns,
+        {
+          name: "author",
+          type: "text",
+          description: "Author when the source names one.",
+          nullable: true,
+        },
+      ],
+    },
+  });
+
+  assert.equal(run.runStatus, "succeeded");
+  assert.equal(run.productionValidation.isValid, true);
+  assert.deepEqual(run.productionValidation.criticalIssues, []);
+  assert.equal(run.productionValidation.requestedCellCompletenessRatio, 0.8);
+});
+
+test("Mastra populate recipe runtime rejects approximated required cells", async () => {
+  const runtime = new MastraPopulateRecipeRuntime({
+    runPopulate: async () => ({
+      rows: validRows(),
+      validationIssues: [
+        "Actual post titles and canonical URLs are not present in the captured transcript, so category+date combinations are used as best approximations. These rows require manual review.",
+      ],
+      usage: emptyUsage(),
+      metrics: emptyMetrics(),
+    }),
+  });
+
+  const run = await runtime.runRecipe({
+    recipe: recipe({ recipeId: "recipe-v1" }),
+    context: {
+      ...context,
+      columns: [
+        ...context.columns,
+        {
+          name: "author",
+          type: "text",
+          description: "Author when the source names one.",
+          nullable: true,
+        },
+      ],
+    },
+  });
+
+  assert.equal(run.runStatus, "failed");
+  assert.equal(run.productionValidation.isValid, false);
+  assert.match(
+    run.productionValidation.criticalIssues.join("\n"),
+    /best approximations/
+  );
+});
+
+test("Mastra populate recipe runtime rejects evidence disconnected from row sources", async () => {
+  const runtime = new MastraPopulateRecipeRuntime({
+    runPopulate: async () => ({
+      rows: validRows().map((row) => ({
+        ...row,
+        evidence: [{
+          columnName: "latest_post_title",
+          sourceUrl: "https://example.com/unrelated",
+          quote: "Release notes from OpenAI",
+        }],
+      })),
+      validationIssues: [],
+      usage: emptyUsage(),
+      metrics: emptyMetrics(),
+    }),
+  });
+
+  const run = await runtime.runRecipe({
+    recipe: recipe({ recipeId: "recipe-v1" }),
+    context,
+  });
+
+  assert.equal(run.runStatus, "failed");
+  assert.equal(run.productionValidation.isValid, false);
+  assert.match(
+    run.productionValidation.criticalIssues.join("\n"),
+    /does not match a row source URL/
+  );
+});
+
+test("process trace artifacts stay parseable when trace content is large", async () => {
+  const runtime = new MastraPopulateRecipeRuntime({
+    runPopulate: async () => ({
+      rows: validRows(),
+      validationIssues: [],
+      usage: emptyUsage(),
+      metrics: emptyMetrics(),
+      debug: {
+        capturedRows: [],
+        capturedSources: [],
+        selectedRowSource: "collection_pipeline",
+        notes: [],
+        processTrace: {
+          runtime: "collection",
+          searchQueries: Array.from({ length: 125 }, (_, index) =>
+            `query-${index}-${"x".repeat(1_000)}`
+          ),
+          fetchedUrls: [],
+          sourceArtifacts: [],
+          selectedRowSource: "collection_pipeline",
+          notes: ["n".repeat(1_000)],
+          steps: Array.from({ length: 125 }, (_, index) => ({
+            kind: "search" as const,
+            label: `collection-search-query-${index}`,
+            status: "succeeded" as const,
+            input: { query: "x".repeat(1_000) },
+          })),
+        },
+      },
+    }),
+  });
+
+  const run = await runtime.runRecipe({
+    recipe: recipe({ recipeId: "recipe-v1" }),
+    context,
+  });
+  const traceArtifact = run.artifacts.find((artifact) =>
+    artifact.kind === "process-trace"
+  );
+
+  assert.ok(traceArtifact);
+  assert.ok(traceArtifact.content.length <= 20_000);
+  const parsedTrace = JSON.parse(traceArtifact.content);
+  assert.equal(parsedTrace.truncated, true);
+  assert.ok(parsedTrace.steps.length > 0);
+  assert.ok(parsedTrace.steps.length <= 100);
+  assert.match(parsedTrace.searchQueries[0], /\[truncated\]/);
+});
+
+test("Mastra populate recipe runtime marks missing expected entities as partial", async () => {
   const runtime = new MastraPopulateRecipeRuntime({
     runPopulate: async () => ({
       rows: [{
@@ -166,8 +567,10 @@ test("Mastra populate recipe runtime blocks missing expected entities", async ()
     },
   });
 
-  assert.equal(run.runStatus, "failed");
+  assert.equal(run.runStatus, "succeeded");
+  assert.equal(run.productionValidation.state, "accepted_partial");
   assert.equal(run.productionValidation.isValid, false);
+  assert.equal(run.productionValidation.safeRowCount, 1);
   assert.deepEqual(run.productionValidation.expectedEntities, [
     "OpenAI",
     "Anthropic",
@@ -314,6 +717,69 @@ test("self-healing service repairs a failed active recipe and promotes the candi
   assert.equal(snapshot.recipes.find((item) => item.recipeId === "repair-v2")?.status, "active");
 });
 
+test("self-healing service does not run a second recipe repair after bounded Playwright repair rejects", async () => {
+  const store = new InMemoryPopulateRecipeStore();
+  const promotedScript = createPlaywrightScriptArtifact({
+    sourceUrl: "https://openai.com/news",
+    datasetGoalPrompt: context.description,
+    datasetSchema: {
+      columns: context.columns.map((column) => ({
+        name: column.name,
+        required: true,
+      })),
+    },
+    code: "export async function runDatasetRecipe() { throw new Error('stale selector'); }",
+    status: "promoted",
+    createdAt: "2026-05-24T00:00:00.000Z",
+  });
+  const activeRecipe = {
+    ...recipe({
+      recipeId: "active-playwright-broken",
+      status: "active",
+      playwrightScript: promotedScript,
+    }),
+    lastValidationScore: 1,
+  };
+  await store.saveRecipe(activeRecipe);
+  const author = new FakeRecipeAuthor();
+  const service = new SelfHealingPopulateRecipeService({
+    store,
+    runtime: new FakePopulateRecipeRuntime({
+      "active-playwright-broken": runResult({
+        recipe: activeRecipe,
+        rows: [],
+        validationIssues: ["BrowserActionBox repair_rejected: locator timed out"],
+        criticalIssues: ["BrowserActionBox repair_rejected: locator timed out"],
+        isValid: false,
+        score: 0,
+        artifacts: [{
+          kind: "playwright-repair-diagnostic",
+          label: "populate-playwright-repair-diagnostic",
+          content: JSON.stringify({
+            replayStatus: "repair_rejected",
+            diagnostics: ["locator timed out"],
+          }),
+        }],
+      }),
+    }),
+    author,
+  });
+
+  const result = await service.tick({ datasetId: context.datasetId, context });
+  const snapshot = await store.loadSnapshot(context.datasetId);
+
+  assert.equal(result.action, "candidate_rejected");
+  assert.equal(author.repairCalls, 0);
+  assert.match(result.rejectionReasons.join("\n"), /keeping prior active script/i);
+  assert.equal(
+    snapshot.recipes.find((item) =>
+      item.recipeId === "active-playwright-broken"
+    )?.status,
+    "active"
+  );
+  assert.equal(snapshot.recipes.some((item) => item.recipeId === "repair-v2"), false);
+});
+
 test("self-healing service rejects valid repairs below active recipe baseline", async () => {
   const store = new InMemoryPopulateRecipeStore();
   const activeRecipe = {
@@ -370,7 +836,7 @@ test("file store reloads populate recipes and run records", async () => {
   const service = new SelfHealingPopulateRecipeService({
     store,
     runtime: new FakePopulateRecipeRuntime({
-      "persisted-v1": validRun(generatedRecipe),
+      "persisted-v1": validRun(generatedRecipe, 1, [processTraceArtifact()]),
     }),
     author: new FakeRecipeAuthor({ generatedRecipe }),
   });
@@ -384,6 +850,11 @@ test("file store reloads populate recipes and run records", async () => {
   assert.equal(snapshot.recipes[0]?.status, "active");
   assert.equal(snapshot.runRecords.length, 1);
   assert.equal(snapshot.runRecords[0]?.runStatus, "succeeded");
+  assert.equal(snapshot.runRecords[0]?.artifacts[0]?.kind, "process-trace");
+  assert.match(
+    snapshot.runRecords[0]?.artifacts[0]?.content ?? "",
+    /collection-search-query/
+  );
 });
 
 interface ToolLike<TInput, TOutput> {
@@ -395,25 +866,34 @@ function recipe(input: {
   version?: number;
   status?: PopulateRecipe["status"];
   runtimeInstructions?: string;
+  playwrightScript?: PopulateRecipe["playwrightScript"];
 }): PopulateRecipe {
-  return createPopulateRecipe({
-    recipeId: input.recipeId,
-    datasetId: context.datasetId,
-    version: input.version ?? 1,
-    status: input.status,
-    sourceDescription: context.description,
-    requestedColumns: context.columns.map((column) => column.name),
-    runtimeInstructions: input.runtimeInstructions,
-    createdAt: "2026-05-22T00:00:00.000Z",
-  });
+  return {
+    ...createPopulateRecipe({
+      recipeId: input.recipeId,
+      datasetId: context.datasetId,
+      version: input.version ?? 1,
+      status: input.status,
+      sourceDescription: context.description,
+      requestedColumns: context.columns.map((column) => column.name),
+      runtimeInstructions: input.runtimeInstructions,
+      createdAt: "2026-05-22T00:00:00.000Z",
+    }),
+    playwrightScript: input.playwrightScript,
+  };
 }
 
-function validRun(recipe: PopulateRecipe, score = 1): PopulateRecipeRunResult {
+function validRun(
+  recipe: PopulateRecipe,
+  score = 1,
+  artifacts: PopulateRecipeRunResult["artifacts"] = []
+): PopulateRecipeRunResult {
   return runResult({
     recipe,
     rows: validRows(),
     isValid: true,
     score,
+    artifacts,
   });
 }
 
@@ -435,6 +915,7 @@ function runResult(input: {
   criticalIssues?: string[];
   isValid: boolean;
   score: number;
+  artifacts?: PopulateRecipeRunResult["artifacts"];
 }): PopulateRecipeRunResult {
   return {
     rows: input.rows,
@@ -458,19 +939,48 @@ function runResult(input: {
     completedAt: "2026-05-22T00:00:01.000Z",
     runtimeMs: 1_000,
     productionValidation: {
+      state: input.isValid ? "accepted_full" : "rejected",
       isValid: input.isValid,
       score: input.score,
       rowCount: input.rows.length,
+      safeRowCount: input.isValid ? input.rows.length : 0,
       requestedCellCompletenessRatio: input.score,
       sourceUrlCoverageRatio: input.score,
       evidenceCoverageRatio: input.score,
       expectedEntityCoverageRatio: input.score,
       expectedEntities: [],
       missingExpectedEntities: [],
+      coveragePolicy: "partial_allowed",
+      targetSource: "public web sources",
       criticalIssues: input.criticalIssues ?? [],
       warnings: input.validationIssues ?? [],
     },
-    artifacts: [],
+    artifacts: input.artifacts ?? [],
+  };
+}
+
+function processTraceArtifact(): PopulateRecipeRunResult["artifacts"][number] {
+  return {
+    kind: "process-trace",
+    label: "populate-process-trace",
+    content: JSON.stringify({
+      runtime: "collection",
+      searchQueries: ["OpenAI latest blog"],
+      fetchedUrls: ["https://openai.com/news"],
+      sourceArtifacts: [{
+        url: "https://openai.com/news",
+        status: "succeeded",
+        source: "collection",
+      }],
+      selectedRowSource: "collection_pipeline",
+      notes: [],
+      steps: [{
+        kind: "search",
+        label: "collection-search-query",
+        status: "succeeded",
+        input: { query: "OpenAI latest blog" },
+      }],
+    }),
   };
 }
 
@@ -512,6 +1022,22 @@ function emptyMetrics(): PopulateRecipeRunResult["metrics"] {
     agentRuns: 0,
     agentSteps: 0,
   };
+}
+
+function assertJavaScriptModuleParses(source: string): void {
+  const sourceFile = ts.createSourceFile(
+    "playwright-candidate-script.mjs",
+    source,
+    ts.ScriptTarget.ES2022,
+    true,
+    ts.ScriptKind.JS
+  );
+  assert.deepEqual(
+    sourceFile.parseDiagnostics.map((diagnostic) =>
+      ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n")
+    ),
+    []
+  );
 }
 
 class FakePopulateRecipeRuntime implements PopulateRecipeRuntime {

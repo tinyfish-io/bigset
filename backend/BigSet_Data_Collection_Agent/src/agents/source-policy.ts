@@ -5,7 +5,7 @@ import type {
   SourceTriageResult,
 } from "../models/schemas.js";
 import { scoreDocsUrlForOfficialSource } from "../records/source-urls.js";
-import { getDomain } from "../utils/url.js";
+import { getDomain, normalizeUrl } from "../utils/url.js";
 
 export interface PromptSourceEntity {
   name: string;
@@ -17,6 +17,7 @@ export interface PromptSourcePolicy {
   requiresOfficialSource: boolean;
   entities: PromptSourceEntity[];
   searchPhrases: string[];
+  explicitSourceUrls: string[];
   hint?: string;
 }
 
@@ -53,6 +54,14 @@ function taskTextFromPrompt(prompt: string): string {
 
 function uniqueStrings(values: string[]): string[] {
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+}
+
+function extractPromptSourceUrls(prompt: string): string[] {
+  return uniqueStrings(
+    [...prompt.matchAll(/https?:\/\/[^\s)"'<>]+/gi)].map((match) =>
+      normalizeUrl((match[0] ?? "").replace(/[.,;:!?]+$/g, "")),
+    ),
+  );
 }
 
 function tokenize(value: string): string[] {
@@ -157,6 +166,7 @@ export function derivePromptSourcePolicy(prompt: string): PromptSourcePolicy {
   const taskText = taskTextFromPrompt(prompt);
   const entities = extractExplicitEntities(taskText);
   const searchPhrases = searchPhrasesForPrompt(taskText);
+  const explicitSourceUrls = extractPromptSourceUrls(taskText);
   const lower = taskText.toLowerCase();
   const asksForCanonicalSource =
     searchPhrases.length > 0 ||
@@ -182,7 +192,7 @@ export function derivePromptSourcePolicy(prompt: string): PromptSourcePolicy {
       ].join("\n")
     : undefined;
 
-  return { requiresOfficialSource, entities, searchPhrases, hint };
+  return { requiresOfficialSource, entities, searchPhrases, explicitSourceUrls, hint };
 }
 
 export function promptSourceSearchQueries(policy: PromptSourcePolicy): string[] {
@@ -236,6 +246,7 @@ export function urlMatchesPromptSourcePolicy(
   url: string,
   policy: PromptSourcePolicy,
 ): boolean {
+  if (urlMatchesExplicitPromptSource(url, policy)) return true;
   if (!policy.requiresOfficialSource) return true;
   const domain = getDomain(url).toLowerCase();
   if (GENERIC_HOSTED_DOMAIN.test(domain)) {
@@ -244,6 +255,17 @@ export function urlMatchesPromptSourcePolicy(
   return policy.entities.some(
     (entity) => urlMatchesEntitySourcePolicy(url, entity, policy),
   );
+}
+
+function urlMatchesExplicitPromptSource(
+  url: string,
+  policy: PromptSourcePolicy,
+): boolean {
+  const normalized = normalizeUrl(url);
+  return policy.explicitSourceUrls.some((sourceUrl) => {
+    const explicit = normalizeUrl(sourceUrl);
+    return normalized === explicit || normalized.startsWith(`${explicit}/`);
+  });
 }
 
 function urlMatchesEntitySourcePolicy(
@@ -360,6 +382,9 @@ export function recordMatchesPromptSourcePolicy(
   const urls = urlsForRecordSourcePolicy(record, spec);
   if (urls.length === 0) {
     return false;
+  }
+  if (urls.some((url) => urlMatchesExplicitPromptSource(url, policy))) {
+    return true;
   }
 
   return urls.some((url) => urlMatchesEntitySourcePolicy(url, entity, policy));

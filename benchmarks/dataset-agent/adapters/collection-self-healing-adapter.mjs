@@ -2,6 +2,8 @@
 import { pathToFileURL } from "node:url";
 import { resolve } from "node:path";
 
+import { selfHealingDiagnosticsFromTick } from "./self-healing-output.mjs";
+
 const prompt = requiredEnv("BIGSET_BENCHMARK_PROMPT");
 const promptId = process.env.BIGSET_BENCHMARK_PROMPT_ID ?? "benchmark-prompt";
 const promptQuality = process.env.BIGSET_BENCHMARK_PROMPT_QUALITY ?? "unknown";
@@ -87,6 +89,7 @@ const service = new SelfHealingPopulateRecipeService({
 });
 const tick = await service.tick({ datasetId: context.datasetId, context });
 const result = diagnosticRunForTick(tick);
+const diagnostics = selfHealingDiagnosticsFromTick({ tick, run: result });
 
 console.log(JSON.stringify({
   rows: result?.rows ?? [],
@@ -95,7 +98,16 @@ console.log(JSON.stringify({
     ...minimumColumnIssues(result?.rows ?? []),
   ],
   usage: result?.usage ?? emptyUsage(),
-  metrics: result?.metrics ?? emptyMetrics(),
+  metrics: {
+    ...(result?.metrics ?? emptyMetrics()),
+    processTraceStepCount: diagnostics.processTrace?.stepCount ?? 0,
+    processTraceBrowserStepCount: diagnostics.processTrace?.browserStepCount ?? 0,
+    playwrightCandidateBrowserStepCount:
+      diagnostics.playwrightCandidateReadiness?.browserStepCount ?? 0,
+    playwrightCandidateSourceUrlCount:
+      diagnostics.playwrightCandidateReadiness?.sourceUrlCount ?? 0,
+  },
+  diagnostics,
 }));
 
 async function loadCollectionRunner() {

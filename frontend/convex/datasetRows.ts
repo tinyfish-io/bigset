@@ -47,9 +47,15 @@ export const insert = internalMutation({
     datasetId: v.id("datasets"),
     data: v.record(v.string(), v.any()),
     sources: v.optional(v.array(v.string())),
+    evidence: v.optional(v.array(v.object({
+      columnName: v.string(),
+      sourceUrl: v.string(),
+      quote: v.string(),
+    }))),
   },
   handler: async (ctx, args) => {
     await consumeQuotaForDataset(ctx, args.datasetId, 1);
+    await ctx.db.patch(args.datasetId, { status: "live" });
     return await ctx.db.insert("datasetRows", args);
   },
 });
@@ -93,6 +99,7 @@ export const clearByDataset = internalMutation({
     for (const row of rows) {
       await ctx.db.delete(row._id);
     }
+    await ctx.db.patch(args.datasetId, { status: "paused" });
     return rows.length;
   },
 });
@@ -101,6 +108,16 @@ export const get = internalQuery({
   args: { id: v.id("datasetRows") },
   handler: async (ctx, args) => {
     return await ctx.db.get(args.id);
+  },
+});
+
+export const listForSystemPopulate = internalQuery({
+  args: { datasetId: v.id("datasets") },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("datasetRows")
+      .withIndex("by_dataset", (q) => q.eq("datasetId", args.datasetId))
+      .collect();
   },
 });
 
@@ -135,6 +152,9 @@ export const insertBatch = internalMutation({
         data,
       });
     }
+    if (args.rows.length > 0) {
+      await ctx.db.patch(args.datasetId, { status: "live" });
+    }
   },
 });
 
@@ -144,6 +164,11 @@ export const replaceByDataset = internalMutation({
     rows: v.array(v.object({
       data: v.record(v.string(), v.any()),
       sources: v.optional(v.array(v.string())),
+      evidence: v.optional(v.array(v.object({
+        columnName: v.string(),
+        sourceUrl: v.string(),
+        quote: v.string(),
+      }))),
     })),
   },
   handler: async (ctx, args) => {
@@ -165,8 +190,12 @@ export const replaceByDataset = internalMutation({
         datasetId: args.datasetId,
         data: row.data,
         sources: row.sources,
+        evidence: row.evidence,
       });
     }
+    await ctx.db.patch(args.datasetId, {
+      status: args.rows.length > 0 ? "live" : "paused",
+    });
 
     return {
       clearedRowCount: existingRows.length,

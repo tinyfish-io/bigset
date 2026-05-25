@@ -102,6 +102,22 @@ export const agentGoalSchema = z.object({
 
 export type AgentGoal = z.infer<typeof agentGoalSchema>;
 
+export const browserActionReportSchema = z.object({
+  action: z.string().optional(),
+  url: z.string().optional(),
+  selector: z.string().optional(),
+  target_text: z.string().optional(),
+  targetText: z.string().optional(),
+  value_description: z.string().optional(),
+  valueDescription: z.string().optional(),
+  status: z.string().optional(),
+  error: z.string().optional(),
+  phase: z.string().optional(),
+  label: z.string().optional(),
+});
+
+export type BrowserActionReport = z.infer<typeof browserActionReportSchema>;
+
 export const agentRunRecordSchema = z.object({
   url: z.string(),
   status: sourceStatusSchema,
@@ -110,6 +126,13 @@ export const agentRunRecordSchema = z.object({
   goal: z.string(),
   records_extracted: z.number(),
   error: z.string().optional(),
+  agent_step_count: z.number().nullable().optional(),
+  has_streaming_url: z.boolean().optional(),
+  has_recording_url: z.boolean().optional(),
+  capture_artifact_count: z.number().optional(),
+  result_keys: z.array(z.string()).optional(),
+  browser_action_diagnostic: z.string().optional(),
+  browser_actions: z.array(browserActionReportSchema).optional(),
 });
 
 export type AgentRunRecord = z.infer<typeof agentRunRecordSchema>;
@@ -126,6 +149,11 @@ export const triageSummarySchema = z.object({
   skipped: z.number(),
   records_from_extract: z.number(),
   records_from_agent: z.number(),
+  agent_reported_step_count: z.number().optional(),
+  agent_runs_with_streaming_url: z.number().optional(),
+  agent_runs_with_recording_url: z.number().optional(),
+  agent_capture_artifact_count: z.number().optional(),
+  agent_runs_with_explicit_browser_actions: z.number().optional(),
 });
 
 export type TriageSummary = z.infer<typeof triageSummarySchema>;
@@ -152,6 +180,7 @@ export const repairLoopReportSchema = z.object({
   loop_index: z.number().int().positive(),
   diagnosis_summary: z.string().optional(),
   repair_queries: z.array(z.string()),
+  agent_browser_actions: z.array(browserActionReportSchema).optional(),
   rationale: z.string().optional(),
   missing_fields: z.array(z.string()),
   records_before: z.number(),
@@ -198,6 +227,7 @@ export const runReportSchema = z.object({
     search_queries: z.array(z.string()),
     fetched_urls: z.array(z.string()),
     failed_urls: z.array(z.string()),
+    agent_browser_actions: z.array(browserActionReportSchema).optional(),
   }),
   repair: repairReportSchema,
   search_queries: z.array(z.string()),

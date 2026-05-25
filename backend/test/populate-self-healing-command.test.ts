@@ -5,6 +5,7 @@ import type { DatasetContext } from "../src/pipeline/populate.js";
 import type { PopulateRecipeRuntime } from "../src/pipeline/populate-self-healing.js";
 import type { RunSelfHealingPopulateResult } from "../src/pipeline/populate-self-healing-runner.js";
 import {
+  DEFAULT_COMMIT_ROW_LIMIT_PER_HOUR,
   parsePopulateSelfHealingCliArgs,
   runPopulateSelfHealingCli,
 } from "../src/pipeline/populate-self-healing-command.js";
@@ -43,6 +44,21 @@ test("self-healing CLI parses dataset-id mode", () => {
     datasetId: "dataset-ai-posts",
     shouldReadStdin: false,
     shouldCommitRows: true,
+  });
+});
+
+test("self-healing CLI parses commit row limit override", () => {
+  assert.deepEqual(parsePopulateSelfHealingCliArgs([
+    "--dataset-id",
+    "dataset-ai-posts",
+    "--commit",
+    "--commit-row-limit-per-hour",
+    "250",
+  ]), {
+    datasetId: "dataset-ai-posts",
+    shouldReadStdin: false,
+    shouldCommitRows: true,
+    commitRowLimitPerHour: 250,
   });
 });
 
@@ -240,6 +256,11 @@ test("self-healing CLI dataset-id commit loads context and creates writer", asyn
       assert.equal(input.store, undefined);
       assert.equal(input.recipeStoreDirectory, ".bigset/populate-recipes");
       assert.ok(input.rowWriter);
+      assert.equal(
+        input.commitRowLimit?.maxRowsPerWindow,
+        DEFAULT_COMMIT_ROW_LIMIT_PER_HOUR
+      );
+      assert.equal(input.commitRowLimit?.windowMs, 60 * 60 * 1_000);
       return successfulResult(input.context.datasetId);
     },
   });
@@ -446,8 +467,10 @@ function rejectedResult(datasetId: string): RunSelfHealingPopulateResult {
       validationIssues: ["Still no evidence."],
       productionValidation: {
         ...baseRun(datasetId).productionValidation,
+        state: "rejected",
         isValid: false,
         score: 0,
+        safeRowCount: 0,
         criticalIssues: ["Still no evidence."],
       },
     },
@@ -480,15 +503,19 @@ function baseRun(datasetId: string): RunSelfHealingPopulateResult["selectedRun"]
     completedAt: "2026-05-22T00:00:01.000Z",
     runtimeMs: 1_000,
     productionValidation: {
+      state: "accepted_full",
       isValid: true,
       score: 1,
       rowCount: 1,
+      safeRowCount: 1,
       requestedCellCompletenessRatio: 1,
       sourceUrlCoverageRatio: 1,
       evidenceCoverageRatio: 1,
       expectedEntityCoverageRatio: 1,
       expectedEntities: [],
       missingExpectedEntities: [],
+      coveragePolicy: "partial_allowed",
+      targetSource: "public web sources",
       criticalIssues: [],
       warnings: [],
     },

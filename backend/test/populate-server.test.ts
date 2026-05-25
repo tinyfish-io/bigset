@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { createBigSetServer } from "../src/server.js";
+import { DEFAULT_COMMIT_ROW_LIMIT_PER_HOUR } from "../src/pipeline/populate-self-healing-command.js";
 import type { DatasetContext } from "../src/pipeline/populate.js";
 import type { PopulateRecipeRuntime } from "../src/pipeline/populate-self-healing.js";
 import type { RunSelfHealingPopulateResult } from "../src/pipeline/populate-self-healing-runner.js";
@@ -55,6 +56,11 @@ test("POST /populate passes selected runtime into self-healing runner", async ()
       assert.equal(input.shouldCommitRows, true);
       assert.equal(input.recipeStoreDirectory, ".bigset/populate-recipes");
       assert.ok(input.rowWriter);
+      assert.equal(
+        input.commitRowLimit?.maxRowsPerWindow,
+        DEFAULT_COMMIT_ROW_LIMIT_PER_HOUR
+      );
+      assert.equal(input.commitRowLimit?.windowMs, 60 * 60 * 1_000);
       return successfulResult(input.context.datasetId);
     },
   });
@@ -105,15 +111,19 @@ function successfulResult(datasetId: string): RunSelfHealingPopulateResult {
       completedAt: "2026-05-22T00:00:01.000Z",
       runtimeMs: 1_000,
       productionValidation: {
+        state: "accepted_full",
         isValid: true,
         score: 1,
         rowCount: 1,
+        safeRowCount: 1,
         requestedCellCompletenessRatio: 1,
         sourceUrlCoverageRatio: 1,
         evidenceCoverageRatio: 1,
         expectedEntityCoverageRatio: 1,
         expectedEntities: [],
         missingExpectedEntities: [],
+        coveragePolicy: "partial_allowed",
+        targetSource: "public web sources",
         criticalIssues: [],
         warnings: [],
       },

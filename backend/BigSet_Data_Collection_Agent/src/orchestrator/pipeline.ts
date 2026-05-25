@@ -48,6 +48,7 @@ import {
   type RunPaths,
 } from "../storage/run-store.js";
 import { normalizeUrl } from "../utils/url.js";
+import { explicitBrowserActionsFromAgentRuns } from "./browser-actions.js";
 
 export interface PipelineOptions {
   prompt: string;
@@ -545,6 +546,9 @@ async function executeRunPipeline(
   const visualizationCount = benchmarkVisualizationRecords.length;
 
   const llmUsage = getCurrentLlmUsage();
+  const initialAgentBrowserActions = explicitBrowserActionsFromAgentRuns(
+    initialAcquisition.agentRuns,
+  );
 
   const report: RunReport = {
     run_id: runId,
@@ -586,6 +590,7 @@ async function executeRunPipeline(
       search_queries: initialQueries,
       fetched_urls: initialAcquisition.fetchedUrls,
       failed_urls: initialAcquisition.failedUrls,
+      agent_browser_actions: initialAgentBrowserActions,
     },
     repair: repairReport,
     search_queries: allSearchQueries,

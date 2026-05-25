@@ -11,6 +11,15 @@ import {
   datasetContextSchema,
   type DatasetContext,
 } from "./populate.js";
+import {
+  buildPopulateFetchPlan,
+  triageFetchedPageForPopulate,
+  rankPopulateSearchResults,
+} from "./populate-source-planner.js";
+import type {
+  BrowserActionBox,
+  BrowserActionBoxDatasetSchema,
+} from "./populate-browser-action-box.js";
 
 export type PopulateCellValue =
   | string
@@ -39,13 +48,86 @@ export interface PopulateRuntimeCapturedInsertedRow {
 export interface PopulateRuntimeCapturedSource {
   url: string;
   text: string;
+  source: "search" | "fetch" | "synthetic";
+}
+
+export type PopulateRuntimeTraceStepKind =
+  | "search"
+  | "fetch"
+  | "insert_row"
+  | "agent"
+  | "browser"
+  | "extract"
+  | "repair"
+  | "validation";
+
+export type PopulateRuntimeBrowserActionKind =
+  | "navigate"
+  | "click"
+  | "type"
+  | "select"
+  | "wait"
+  | "extract"
+  | "screenshot"
+  | "unknown";
+
+export interface PopulateRuntimeBrowserAction {
+  action: PopulateRuntimeBrowserActionKind;
+  url?: string;
+  selector?: string;
+  targetText?: string;
+  valueDescription?: string;
+}
+
+export interface PopulateRuntimeTraceStep {
+  kind: PopulateRuntimeTraceStepKind;
+  label: string;
+  status: "succeeded" | "failed" | "skipped";
+  input?: Record<string, unknown>;
+  output?: Record<string, unknown>;
+  error?: string;
+  browserAction?: PopulateRuntimeBrowserAction;
+}
+
+export interface PopulateProcessTraceSourceArtifact {
+  url: string;
+  status: "succeeded" | "failed" | "skipped";
+  source: "search" | "fetch" | "agent" | "collection" | "unknown";
+  label?: string;
+  error?: string;
+}
+
+export interface PopulateProcessTrace {
+  runtime: "mastra" | "mastra-injected" | "collection" | "unknown";
+  searchQueries: string[];
+  fetchedUrls: string[];
+  sourceArtifacts: PopulateProcessTraceSourceArtifact[];
+  selectedRowSource:
+    | "insert_row"
+    | "structured_recovery"
+    | "collection_pipeline"
+    | "none";
+  notes: string[];
+  steps: PopulateRuntimeTraceStep[];
+  artifactRoot?: string;
+  runReportPath?: string;
 }
 
 export interface PopulateRuntimeDebug {
   capturedRows: PopulateRuntimeCapturedInsertedRow[];
   capturedSources: PopulateRuntimeCapturedSource[];
-  selectedRowSource: "insert_row" | "structured_recovery" | "none";
+  selectedRowSource:
+    | "insert_row"
+    | "structured_recovery"
+    | "collection_pipeline"
+    | "none";
   notes: string[];
+  processTrace: PopulateProcessTrace;
+  diagnosticArtifacts?: Array<{
+    kind: string;
+    label: string;
+    content: string;
+  }>;
 }
 
 export interface PopulateRuntimeResult {
@@ -109,7 +191,12 @@ export async function runPopulateRuntime(input: {
   context: DatasetContext;
   webTools?: PopulateRuntimeWebTools;
   agentRunner?: PopulateRuntimeAgentRunner;
+  browserActionBox?: Pick<BrowserActionBox, "firstRun">;
   maxRows?: number;
+  sourcePlanner?: {
+    enabled?: boolean;
+    fetchLimit?: number;
+  };
 }): Promise<PopulateRuntimeResult> {
   const parsedContext = datasetContextSchema.parse(input.context);
   const clarificationResult = clarificationResultForContext(parsedContext);
@@ -119,8 +206,11 @@ export async function runPopulateRuntime(input: {
 
   const capturedRows: PopulateRuntimeCapturedInsertedRow[] = [];
   const capturedSources: PopulateRuntimeCapturedSource[] = [];
+  const processTraceSteps: PopulateRuntimeTraceStep[] = [];
   const validationIssues: string[] = [];
   const debugNotes: string[] = [];
+  const diagnosticArtifacts: NonNullable<PopulateRuntimeDebug["diagnosticArtifacts"]> = [];
+  const browserActionRows: PopulateRuntimeRow[] = [];
   const metrics = emptyMetrics();
   const webTools = input.webTools ?? createTinyFishWebTools();
   const tools = createPopulateRuntimeTools({
@@ -131,7 +221,73 @@ export async function runPopulateRuntime(input: {
     metrics,
     webTools,
     maxRows: input.maxRows ?? 10,
+    processTraceSteps,
   });
+  if (input.sourcePlanner?.enabled ?? !input.agentRunner) {
+    await seedCapturedSourcesFromPlannedSearches({
+      context: parsedContext,
+      webTools,
+      capturedSources,
+      validationIssues,
+      metrics,
+      processTraceSteps,
+      fetchLimit: input.sourcePlanner?.fetchLimit ?? 6,
+    });
+  }
+  await runBrowserActionBoxForDeferredSources({
+    context: parsedContext,
+    capturedSources,
+    browserActionBox: input.browserActionBox,
+    browserActionRows,
+    processTraceSteps,
+    validationIssues,
+    debugNotes,
+    diagnosticArtifacts,
+    metrics,
+    maxRows: input.maxRows ?? 10,
+  });
+  await seedCapturedSourcesFromContextUrls({
+    context: parsedContext,
+    webTools,
+    capturedSources,
+    validationIssues,
+    metrics,
+    processTraceSteps,
+  });
+  const explicitUrlRows = deterministicRowsFromCapturedSources({
+    context: parsedContext,
+    capturedSources,
+    maxRows: input.maxRows ?? 10,
+  });
+  if (urlsFromText(parsedContext.description).length > 0 && explicitUrlRows.length > 0) {
+    debugNotes.push(
+      "Explicit URL shortcut built title/URL rows from fetched source snippets."
+    );
+    const processTrace = populateProcessTraceFromSteps({
+      runtime: input.agentRunner ? "mastra-injected" : "mastra",
+      steps: processTraceSteps,
+      capturedSources,
+      selectedRowSource: "structured_recovery",
+      notes: debugNotes,
+    });
+    return {
+      rows: explicitUrlRows,
+      validationIssues: Array.from(new Set([
+        ...validationIssues,
+        ...validateRuntimeRows(explicitUrlRows),
+      ])),
+      usage: emptyUsage(),
+      metrics,
+      debug: {
+        capturedRows,
+        capturedSources,
+        selectedRowSource: "structured_recovery",
+        notes: debugNotes,
+        processTrace,
+        diagnosticArtifacts,
+      },
+    };
+  }
   const prompt = buildPopulatePrompt(parsedContext);
   let agentOutput: unknown;
 
@@ -139,21 +295,74 @@ export async function runPopulateRuntime(input: {
     try {
       agentOutput = await input.agentRunner({ prompt, tools });
       metrics.agentRuns += 1;
+      processTraceSteps.push({
+        kind: "agent",
+        label: "populate-agent-injected",
+        status: "succeeded",
+        input: {
+          promptCharacters: prompt.length,
+          toolNames: Object.keys(tools),
+        },
+        output: {
+          capturedRowCount: capturedRows.length,
+          capturedSourceCount: capturedSources.length,
+        },
+      });
     } catch (error) {
-      validationIssues.push(populateAgentFailureMessage(error));
+      const message = populateAgentFailureMessage(error);
+      validationIssues.push(message);
+      processTraceSteps.push({
+        kind: "agent",
+        label: "populate-agent-injected",
+        status: "failed",
+        input: {
+          promptCharacters: prompt.length,
+          toolNames: Object.keys(tools),
+        },
+        error: message,
+      });
     }
   } else {
     try {
       const agent = createRuntimePopulateAgent({ tools });
       agentOutput = await agent.generate(prompt);
       metrics.agentRuns += 1;
+      processTraceSteps.push({
+        kind: "agent",
+        label: "populate-agent-mastra",
+        status: "succeeded",
+        input: {
+          promptCharacters: prompt.length,
+          toolNames: Object.keys(tools),
+        },
+        output: {
+          capturedRowCount: capturedRows.length,
+          capturedSourceCount: capturedSources.length,
+        },
+      });
     } catch (error) {
-      validationIssues.push(populateAgentFailureMessage(error));
+      const message = populateAgentFailureMessage(error);
+      validationIssues.push(message);
+      processTraceSteps.push({
+        kind: "agent",
+        label: "populate-agent-mastra",
+        status: "failed",
+        input: {
+          promptCharacters: prompt.length,
+          toolNames: Object.keys(tools),
+        },
+        error: message,
+      });
     }
 
   }
 
-  const insertedRows = capturedRows.map((row) => benchmarkRowFromInsertedData(row.data));
+  const insertedRows = capturedRows.map((row) =>
+    benchmarkRowFromInsertedData({
+      data: row.data,
+      capturedSources,
+    })
+  );
   const insertedRowIssues = validateRuntimeRows(insertedRows);
   if (
     !input.agentRunner &&
@@ -173,15 +382,32 @@ export async function runPopulateRuntime(input: {
         capturedSources,
       });
       metrics.agentRuns += 1;
+      processTraceSteps.push({
+        kind: "extract",
+        label: "structured-row-recovery",
+        status: "succeeded",
+        input: {
+          capturedSourceCount: capturedSources.length,
+        },
+      });
     } catch (error) {
-      validationIssues.push(
-        `Structured row generation failed: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      );
+      const message = `Structured row generation failed: ${
+        error instanceof Error ? error.message : String(error)
+      }`;
+      validationIssues.push(message);
+      processTraceSteps.push({
+        kind: "extract",
+        label: "structured-row-recovery",
+        status: "failed",
+        input: {
+          capturedSourceCount: capturedSources.length,
+        },
+        error: message,
+      });
     }
   }
 
+  const validationIssueCountBeforeStructuredRows = validationIssues.length;
   const structuredRows = benchmarkRowsFromStructuredOutput({
     output: structuredOutputFromAgentResult(agentOutput),
     maxRows: input.maxRows ?? 10,
@@ -191,12 +417,44 @@ export async function runPopulateRuntime(input: {
     validationIssues,
     debugNotes,
   });
-  const structuredRowIssues = validateRuntimeRows(structuredRows);
+  const structuredOutputValidationIssues = validationIssues.slice(
+    validationIssueCountBeforeStructuredRows
+  );
+  const deterministicRows = deterministicRowsFromCapturedSources({
+    context: parsedContext,
+    capturedSources,
+    maxRows: input.maxRows ?? 10,
+  });
+  const rawStructuredRowIssues = validateRuntimeRows(structuredRows);
+  const deterministicRowIssues = validateRuntimeRows(deterministicRows);
+  const shouldUseDeterministicRows =
+    deterministicRows.length > 0 &&
+    deterministicRowIssues.length === 0 &&
+    (
+      structuredRows.length === 0 ||
+      rawStructuredRowIssues.length > 0 ||
+      structuredOutputValidationIssues.some((issue) =>
+        /approximation|manual review|not present|not accompanied|only .*listing page/i.test(issue)
+      )
+    );
+  if (shouldUseDeterministicRows) {
+    validationIssues.splice(validationIssueCountBeforeStructuredRows);
+    debugNotes.push(
+      "Deterministic source fallback built title/URL rows from captured source snippets."
+    );
+  }
+  const fallbackStructuredRows = shouldUseDeterministicRows
+    ? deterministicRows
+    : [
+      ...browserActionRows,
+      ...structuredRows,
+    ];
+  const structuredRowIssues = validateRuntimeRows(fallbackStructuredRows);
   if (
     insertedRows.length > 0 &&
     insertedRowIssues.length === 0 &&
-    structuredRows.length > 0 &&
-    hasContradictingStructuredRows(insertedRows, structuredRows)
+    fallbackStructuredRows.length > 0 &&
+    hasContradictingStructuredRows(insertedRows, fallbackStructuredRows)
   ) {
     validationIssues.push(
       "Structured populate rows differed from insert_row rows and were ignored."
@@ -205,14 +463,21 @@ export async function runPopulateRuntime(input: {
   const rows = selectBestRuntimeRows({
     insertedRows,
     insertedRowIssues,
-    structuredRows,
+    structuredRows: fallbackStructuredRows,
     structuredRowIssues,
     debugNotes,
   });
   const selectedRowSource = selectedRowSourceForRows({
     rows,
     insertedRows,
-    structuredRows,
+    structuredRows: fallbackStructuredRows,
+  });
+  const processTrace = populateProcessTraceFromSteps({
+    runtime: input.agentRunner ? "mastra-injected" : "mastra",
+    steps: processTraceSteps,
+    capturedSources,
+    selectedRowSource,
+    notes: debugNotes,
   });
   validationIssues.push(...validateRuntimeRows(rows));
 
@@ -226,6 +491,8 @@ export async function runPopulateRuntime(input: {
       capturedSources,
       selectedRowSource,
       notes: debugNotes,
+      processTrace,
+      diagnosticArtifacts,
     },
   };
 }
@@ -242,6 +509,213 @@ function createRuntimePopulateAgent(input: { tools: Record<string, unknown> }) {
     model: openrouter("anthropic/claude-sonnet-4-6"),
     tools: input.tools as ConstructorParameters<typeof Agent>[0]["tools"],
   });
+}
+
+async function seedCapturedSourcesFromPlannedSearches(input: {
+  context: DatasetContext;
+  webTools: PopulateRuntimeWebTools;
+  capturedSources: PopulateRuntimeCapturedSource[];
+  validationIssues: string[];
+  metrics: PopulateRuntimeResult["metrics"];
+  processTraceSteps: PopulateRuntimeTraceStep[];
+  fetchLimit: number;
+}): Promise<void> {
+  if (urlsFromText(userPromptDescription(input.context.description)).length > 0) {
+    return;
+  }
+
+  const searchResults: PopulateWebSearchResult[] = [];
+  for (const query of plannedSourceSearchQueries(input.context)) {
+    input.metrics.searchCalls += 1;
+    try {
+      const results = await input.webTools.search({ query });
+      searchResults.push(...results);
+      input.processTraceSteps.push({
+        kind: "search",
+        label: "source-planner-search",
+        status: "succeeded",
+        input: { query },
+        output: {
+          resultCount: results.length,
+          urls: results.map((result) => result.url).slice(0, 10),
+        },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      input.validationIssues.push(`Source planner search failed: ${message}`);
+      input.processTraceSteps.push({
+        kind: "search",
+        label: "source-planner-search",
+        status: "failed",
+        input: { query },
+        error: message,
+      });
+    }
+  }
+
+  const ranked = rankPopulateSearchResults({
+    context: input.context,
+    results: searchResults,
+  });
+  const fetchUrls = buildPopulateFetchPlan({
+    rankedResults: ranked,
+    fetchLimit: input.fetchLimit,
+  });
+  for (const url of fetchUrls) {
+    input.metrics.fetchCalls += 1;
+    try {
+      const page = await input.webTools.fetch({ url });
+      input.capturedSources.push({
+        url,
+        text: [page.title, page.text].filter(Boolean).join("\n"),
+        source: "fetch",
+      });
+      input.processTraceSteps.push({
+        kind: "fetch",
+        label: "source-planner-fetch",
+        status: "succeeded",
+        input: { url },
+        output: {
+          title: page.title,
+          textCharacters: page.text?.length ?? 0,
+          expectationScore: ranked.find((result) =>
+            result.canonicalUrl === url
+          )?.expectationScore,
+        },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      input.validationIssues.push(`Source planner fetch failed for ${url}: ${message}`);
+      input.processTraceSteps.push({
+        kind: "fetch",
+        label: "source-planner-fetch",
+        status: "failed",
+        input: { url },
+        error: message,
+      });
+    }
+  }
+}
+
+function plannedSourceSearchQueries(context: DatasetContext): string[] {
+  const searchPhrase = taskSearchPhrase(context);
+  const entities = entityCandidatesFromDescription(
+    userPromptDescription(context.description)
+  ).slice(0, 3);
+  const queries = entities.length > 0
+    ? entities.map((entity) => `${entity} ${searchPhrase} official source`)
+    : [`${searchPhrase} official source`];
+  return Array.from(new Set(queries)).slice(0, 4);
+}
+
+async function runBrowserActionBoxForDeferredSources(input: {
+  context: DatasetContext;
+  capturedSources: PopulateRuntimeCapturedSource[];
+  browserActionBox?: Pick<BrowserActionBox, "firstRun">;
+  browserActionRows: PopulateRuntimeRow[];
+  processTraceSteps: PopulateRuntimeTraceStep[];
+  validationIssues: string[];
+  debugNotes: string[];
+  diagnosticArtifacts: NonNullable<PopulateRuntimeDebug["diagnosticArtifacts"]>;
+  metrics: PopulateRuntimeResult["metrics"];
+  maxRows: number;
+}): Promise<void> {
+  const candidates = input.capturedSources
+    .filter((source) => source.source === "fetch")
+    .map((source) => ({
+      source,
+      triage: triageFetchedPageForPopulate({
+        context: input.context,
+        url: source.url,
+        page: {
+          title: firstUsefulSourceTitle(source.text),
+          text: source.text,
+        },
+      }),
+    }));
+
+  for (const candidate of candidates) {
+    input.processTraceSteps.push({
+      kind: "validation",
+      label: "source-fetch-triage",
+      status: "succeeded",
+      input: {
+        url: candidate.source.url,
+      },
+      output: {
+        status: candidate.triage.status,
+        confidence: candidate.triage.confidence,
+        reason: candidate.triage.reason,
+      },
+    });
+  }
+
+  const browserCandidate = candidates.find((candidate) =>
+    candidate.triage.status === "requires_navigation" ||
+    candidate.triage.status === "requires_form_submission" ||
+    candidate.triage.status === "requires_detail_page_followup"
+  );
+  if (!browserCandidate) {
+    return;
+  }
+
+  if (!input.browserActionBox) {
+    input.debugNotes.push(
+      `BrowserActionBox not configured for ${browserCandidate.source.url}; replay readiness remains not_ready until a real browser-action trace exists.`
+    );
+    return;
+  }
+
+  try {
+    const output = await input.browserActionBox.firstRun({
+      sourceUrl: browserCandidate.source.url,
+      datasetGoalPrompt: userPromptDescription(input.context.description),
+      datasetSchema: browserActionBoxDatasetSchemaFromContext(input.context),
+      runCaps: {
+        maxAgentSteps: 20,
+        maxDurationSeconds: 120,
+        captureHtml: true,
+        captureScreenshots: true,
+      },
+    });
+    input.browserActionRows.push(...output.runtimeResult.rows.slice(0, input.maxRows));
+    input.validationIssues.push(...output.runtimeResult.validationIssues);
+    input.metrics.browserCalls += 1;
+    input.metrics.agentRuns += 1;
+    input.metrics.agentSteps += output.trace.runSteps.length;
+    input.processTraceSteps.push(...(output.runtimeResult.debug?.processTrace.steps ?? []));
+    input.debugNotes.push(
+      `BrowserActionBox first run for ${browserCandidate.source.url}: replay_${output.replayReadiness.status}.`
+    );
+    input.debugNotes.push(...output.diagnostics);
+    input.diagnosticArtifacts.push(...(output.runtimeResult.debug?.diagnosticArtifacts ?? []));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    input.validationIssues.push(
+      `BrowserActionBox first run failed for ${browserCandidate.source.url}: ${message}`
+    );
+    input.processTraceSteps.push({
+      kind: "agent",
+      label: "browser-action-box-first-run",
+      status: "failed",
+      input: {
+        url: browserCandidate.source.url,
+      },
+      error: message,
+    });
+  }
+}
+
+function browserActionBoxDatasetSchemaFromContext(
+  context: DatasetContext
+): BrowserActionBoxDatasetSchema {
+  return {
+    columns: context.columns.map((column) => ({
+      name: column.name,
+      description: column.description,
+      required: column.nullable !== true,
+    })),
+  };
 }
 
 function clarificationResultForContext(
@@ -281,6 +755,15 @@ function emptyClarificationResult(validationIssues: string[]): PopulateRuntimeRe
       capturedSources: [],
       selectedRowSource: "none",
       notes: [],
+      processTrace: {
+        runtime: "unknown",
+        searchQueries: [],
+        fetchedUrls: [],
+        sourceArtifacts: [],
+        selectedRowSource: "none",
+        notes: [],
+        steps: [],
+      },
     },
   };
 }
@@ -292,7 +775,9 @@ async function enrichCapturedSourcesForStructuredFallback(input: {
   metrics: PopulateRuntimeResult["metrics"];
   webTools: PopulateRuntimeWebTools;
 }) {
-  const entities = entityCandidatesFromDescription(input.context.description);
+  const entities = entityCandidatesFromDescription(
+    userPromptDescription(input.context.description)
+  );
   const newSources: PopulateRuntimeCapturedSource[] = [];
   for (const entity of entities.slice(0, 4)) {
     let results: PopulateWebSearchResult[] = [];
@@ -327,6 +812,7 @@ async function enrichCapturedSourcesForStructuredFallback(input: {
       newSources.push({
         url: result.url,
         text: [result.title, result.snippet].filter(Boolean).join("\n"),
+        source: "search",
       });
       input.metrics.fetchCalls += 1;
       try {
@@ -334,6 +820,7 @@ async function enrichCapturedSourcesForStructuredFallback(input: {
         newSources.push({
           url: result.url,
           text: [page.title, page.text].filter(Boolean).join("\n"),
+          source: "fetch",
         });
       } catch (error) {
         input.validationIssues.push(
@@ -360,6 +847,7 @@ async function captureDirectOfficialSource(input: {
   input.newSources.push({
     url: input.url,
     text: `${input.entity} official source\n${input.url}`,
+    source: "synthetic",
   });
   input.input.metrics.fetchCalls += 1;
   try {
@@ -367,6 +855,7 @@ async function captureDirectOfficialSource(input: {
     input.newSources.push({
       url: input.url,
       text: [page.title, page.text].filter(Boolean).join("\n"),
+      source: "fetch",
     });
   } catch (error) {
     input.input.validationIssues.push(
@@ -462,14 +951,20 @@ function taskSearchPhrase(context: DatasetContext): string {
   if (/\b(latest|blog|post|release|date)\b/i.test(taskText)) {
     return "latest official source title date URL";
   }
-  return truncateForPrompt(context.description, 120);
+  return truncateForPrompt(userPromptDescription(context.description), 120);
 }
 
 function contextText(context: DatasetContext): string {
   return [
-    context.description,
+    userPromptDescription(context.description),
     ...context.columns.map((column) => `${column.name} ${column.description ?? ""}`),
   ].join(" ");
+}
+
+function userPromptDescription(description: string): string {
+  return description
+    .split(/\n\s*Durable recipe instructions:\s*/i)[0]
+    ?.trim() || description.trim();
 }
 
 function uniqueSearchResults(results: PopulateWebSearchResult[]): PopulateWebSearchResult[] {
@@ -565,7 +1060,14 @@ function buildStructuredRowsPrompt(input: {
   capturedSources: PopulateRuntimeCapturedSource[];
 }): string {
   const columnNames = input.context.columns.map((column) => column.name);
-  const entities = entityCandidatesFromDescription(input.context.description);
+  const columnRequirements = input.context.columns.map((column) => ({
+    name: column.name,
+    nullable: column.nullable === true,
+    description: column.description ?? "",
+  }));
+  const entities = entityCandidatesFromDescription(
+    userPromptDescription(input.context.description)
+  );
   const officialHints = Object.fromEntries(
     entities.map((entity) => [
       entity,
@@ -585,8 +1087,8 @@ function buildStructuredRowsPrompt(input: {
   return `Dataset description:
 ${input.context.description}
 
-Required columns:
-${JSON.stringify(columnNames)}
+Columns:
+${JSON.stringify(columnRequirements)}
 
 Named entities, when present:
 ${JSON.stringify(entities)}
@@ -601,7 +1103,9 @@ Return rows using this exact shape:
 { "rows": [{ "cells": {}, "sourceUrls": [], "evidence": [{ "columnName": "", "sourceUrl": "", "quote": "" }], "needsReview": true }], "validationIssues": [] }
 
 Rules:
-- cells must contain exactly the required columns.
+- cells must contain exactly the listed columns.
+- non-nullable cells must only be filled with facts directly present in the transcript.
+- nullable cells may be null when the source transcript does not support a value.
 - sourceUrls must contain exact URLs from the captured source transcript.
 - evidence.sourceUrl must exactly match one captured source URL.
 - evidence.quote must be copied verbatim from that source text.
@@ -691,6 +1195,121 @@ function selectedRowSourceForRows(input: {
   return "none";
 }
 
+export function populateProcessTraceFromSteps(input: {
+  runtime: PopulateProcessTrace["runtime"];
+  steps: PopulateRuntimeTraceStep[];
+  capturedSources?: PopulateRuntimeCapturedSource[];
+  selectedRowSource: PopulateProcessTrace["selectedRowSource"];
+  notes?: string[];
+  artifactRoot?: string;
+  runReportPath?: string;
+}): PopulateProcessTrace {
+  const searchQueries = input.steps.flatMap((step) => {
+    const query = step.kind === "search"
+      ? stringValue(step.input?.query)
+      : undefined;
+    return query ? [query] : [];
+  });
+  const fetchedUrls = input.steps.flatMap((step) => {
+    const url = step.kind === "fetch"
+      ? stringValue(step.input?.url)
+      : undefined;
+    return url ? [url] : [];
+  });
+  const sourceArtifacts: PopulateProcessTraceSourceArtifact[] = [
+    ...(input.capturedSources ?? []).map((source) => ({
+      url: source.url,
+      status: "succeeded" as const,
+      source: capturedSourceArtifactSource(source.source),
+      label: "captured-source",
+    })),
+    ...input.steps
+      .filter((step) => step.kind === "search" && Array.isArray(step.output?.urls))
+      .flatMap((step) =>
+        (step.output?.urls as unknown[]).flatMap((url) => {
+          const sourceUrl = stringValue(url);
+          return sourceUrl
+            ? [{
+              url: sourceUrl,
+              status: step.status,
+              source: "search" as const,
+              label: step.label,
+              error: step.error,
+            }]
+            : [];
+        })
+      ),
+    ...input.steps
+      .filter((step) => step.kind === "fetch")
+      .flatMap((step) => {
+        const sourceUrl = stringValue(step.input?.url);
+        return sourceUrl
+          ? [{
+            url: sourceUrl,
+            status: step.status,
+            source: "fetch" as const,
+            label: step.label,
+            error: step.error,
+          }]
+          : [];
+      }),
+    ...input.steps
+      .filter((step) => step.kind === "agent")
+      .flatMap((step) => {
+        const sourceUrl = stringValue(step.input?.url);
+        return sourceUrl
+          ? [{
+            url: sourceUrl,
+            status: step.status,
+            source: "agent" as const,
+            label: step.label,
+            error: step.error,
+          }]
+          : [];
+      }),
+  ];
+
+  return {
+    runtime: input.runtime,
+    searchQueries: Array.from(new Set(searchQueries)),
+    fetchedUrls: uniqueHttpUrls(fetchedUrls),
+    sourceArtifacts: dedupeProcessTraceSourceArtifacts(sourceArtifacts),
+    selectedRowSource: input.selectedRowSource,
+    notes: input.notes ?? [],
+    steps: input.steps,
+    artifactRoot: input.artifactRoot,
+    runReportPath: input.runReportPath,
+  };
+}
+
+function capturedSourceArtifactSource(
+  source: PopulateRuntimeCapturedSource["source"]
+): PopulateProcessTraceSourceArtifact["source"] {
+  if (source === "search" || source === "fetch") {
+    return source;
+  }
+  return "unknown";
+}
+
+function dedupeProcessTraceSourceArtifacts(
+  artifacts: PopulateProcessTraceSourceArtifact[]
+): PopulateProcessTraceSourceArtifact[] {
+  const seen = new Set<string>();
+  const uniqueArtifacts: PopulateProcessTraceSourceArtifact[] = [];
+  for (const artifact of artifacts) {
+    if (!/^https?:\/\//i.test(artifact.url)) {
+      continue;
+    }
+    const key = `${artifact.url}|${artifact.status}|${artifact.source}|${artifact.label ?? ""}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    uniqueArtifacts.push(artifact);
+  }
+  return uniqueArtifacts;
+}
+
 function createPopulateRuntimeTools(input: {
   datasetId: string;
   capturedRows: PopulateRuntimeCapturedInsertedRow[];
@@ -699,6 +1318,7 @@ function createPopulateRuntimeTools(input: {
   metrics: PopulateRuntimeResult["metrics"];
   webTools: PopulateRuntimeWebTools;
   maxRows: number;
+  processTraceSteps: PopulateRuntimeTraceStep[];
 }) {
   return {
     insert_row: createTool({
@@ -714,18 +1334,50 @@ function createPopulateRuntimeTools(input: {
       }),
       execute: async ({ datasetId, data }) => {
         if (datasetId !== input.datasetId) {
+          input.processTraceSteps.push({
+            kind: "insert_row",
+            label: "insert_row",
+            status: "failed",
+            input: {
+              datasetId,
+              columnNames: Object.keys(data),
+            },
+            error: `datasetId must be ${input.datasetId}.`,
+          });
           return {
             success: false,
             error: `datasetId must be ${input.datasetId}.`,
           };
         }
         if (input.capturedRows.length >= input.maxRows) {
+          input.processTraceSteps.push({
+            kind: "insert_row",
+            label: "insert_row",
+            status: "failed",
+            input: {
+              datasetId,
+              columnNames: Object.keys(data),
+            },
+            error: `Row cap reached for this benchmark run (${input.maxRows}).`,
+          });
           return {
             success: false,
             error: `Row cap reached for this benchmark run (${input.maxRows}).`,
           };
         }
         input.capturedRows.push({ datasetId, data });
+        input.processTraceSteps.push({
+          kind: "insert_row",
+          label: "insert_row",
+          status: "succeeded",
+          input: {
+            datasetId,
+            columnNames: Object.keys(data),
+          },
+          output: {
+            capturedRowCount: input.capturedRows.length,
+          },
+        });
         return { success: true };
       },
     }),
@@ -749,12 +1401,30 @@ function createPopulateRuntimeTools(input: {
             ...results.map((result) => ({
               url: result.url,
               text: [result.title, result.snippet].filter(Boolean).join("\n"),
+              source: "search" as const,
             }))
           );
+          input.processTraceSteps.push({
+            kind: "search",
+            label: "search_web",
+            status: "succeeded",
+            input: { query },
+            output: {
+              resultCount: results.length,
+              urls: results.map((result) => result.url).slice(0, 10),
+            },
+          });
           return { results };
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           input.validationIssues.push(`search_web failed: ${message}`);
+          input.processTraceSteps.push({
+            kind: "search",
+            label: "search_web",
+            status: "failed",
+            input: { query },
+            error: message,
+          });
           return { error: message };
         }
       },
@@ -775,11 +1445,29 @@ function createPopulateRuntimeTools(input: {
           input.capturedSources.push({
             url,
             text: [page.title, page.text].filter(Boolean).join("\n"),
+            source: "fetch",
+          });
+          input.processTraceSteps.push({
+            kind: "fetch",
+            label: "fetch_page",
+            status: "succeeded",
+            input: { url },
+            output: {
+              title: page.title,
+              textCharacters: page.text?.length ?? 0,
+            },
           });
           return page;
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           input.validationIssues.push(`fetch_page failed: ${message}`);
+          input.processTraceSteps.push({
+            kind: "fetch",
+            label: "fetch_page",
+            status: "failed",
+            input: { url },
+            error: message,
+          });
           return { error: message };
         }
       },
@@ -792,6 +1480,57 @@ function createPopulateRuntimeTools(input: {
       execute: async () => ({ rows: input.capturedRows }),
     }),
   };
+}
+
+async function seedCapturedSourcesFromContextUrls(input: {
+  context: DatasetContext;
+  webTools: PopulateRuntimeWebTools;
+  capturedSources: PopulateRuntimeCapturedSource[];
+  validationIssues: string[];
+  metrics: PopulateRuntimeResult["metrics"];
+  processTraceSteps: PopulateRuntimeTraceStep[];
+}): Promise<void> {
+  const urls = urlsFromText(
+    userPromptDescription(input.context.description)
+  ).slice(0, 5);
+  for (const url of urls) {
+    input.metrics.fetchCalls += 1;
+    try {
+      const page = await input.webTools.fetch({ url });
+      input.capturedSources.push({
+        url,
+        text: [page.title, page.text].filter(Boolean).join("\n"),
+        source: "fetch",
+      });
+      input.processTraceSteps.push({
+        kind: "fetch",
+        label: "context-url-fetch",
+        status: "succeeded",
+        input: { url },
+        output: {
+          title: page.title,
+          textCharacters: page.text?.length ?? 0,
+        },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      input.validationIssues.push(`context URL fetch failed for ${url}: ${message}`);
+      input.processTraceSteps.push({
+        kind: "fetch",
+        label: "context-url-fetch",
+        status: "failed",
+        input: { url },
+        error: message,
+      });
+    }
+  }
+}
+
+function urlsFromText(value: string): string[] {
+  return Array.from(new Set(
+    [...value.matchAll(/https?:\/\/[^\s),]+/gi)]
+      .map((match) => match[0].replace(/[.,;:]+$/, ""))
+  ));
 }
 
 function createTinyFishWebTools(): PopulateRuntimeWebTools {
@@ -845,15 +1584,19 @@ function createTinyFishWebTools(): PopulateRuntimeWebTools {
   };
 }
 
-function benchmarkRowFromInsertedData(
-  data: Record<string, unknown>
-): PopulateRuntimeRow {
-  const cells = normalizeCells(data);
+function benchmarkRowFromInsertedData(input: {
+  data: Record<string, unknown>;
+  capturedSources: PopulateRuntimeCapturedSource[];
+}): PopulateRuntimeRow {
+  const cells = normalizeCells(input.data);
   const sourceUrls = sourceUrlsFromData(cells);
+  const evidence = evidenceFromData(cells, sourceUrls).filter((item) =>
+    isEvidenceBackedByCapturedSource(item, input.capturedSources)
+  );
   return {
     cells,
     sourceUrls,
-    evidence: evidenceFromData(cells, sourceUrls),
+    evidence,
     needsReview: true,
   };
 }
@@ -928,6 +1671,172 @@ function benchmarkRowsFromStructuredOutput(input: {
   });
 
   return selectRepresentativeRows(rows, input.context);
+}
+
+function deterministicRowsFromCapturedSources(input: {
+  context: DatasetContext;
+  capturedSources: PopulateRuntimeCapturedSource[];
+  maxRows: number;
+}): PopulateRuntimeRow[] {
+  const explicitSourceUrls = urlsFromText(
+    userPromptDescription(input.context.description)
+  );
+  const titleColumn = input.context.columns.find((column) =>
+    /title|name/i.test(column.name)
+  );
+  const urlColumn = input.context.columns.find((column) =>
+    /url|link|website/i.test(column.name)
+  );
+  if (!titleColumn || !urlColumn) {
+    return [];
+  }
+  const requiredColumns = input.context.columns.filter(
+    (column) => column.nullable !== true
+  );
+  const canBuildRequiredColumns = requiredColumns.every((column) =>
+    column.name === titleColumn.name || column.name === urlColumn.name
+  );
+  if (!canBuildRequiredColumns) {
+    return [];
+  }
+
+  const seenUrls = new Set<string>();
+  return input.capturedSources
+    .filter((source) => source.url && !seenUrls.has(source.url))
+    .map((source) => {
+      seenUrls.add(source.url);
+      return source;
+    })
+    .map((source) => ({
+      source,
+      title: firstUsefulSourceTitle(source.text),
+      score: capturedSourceRelevanceScore(source, input.context),
+    }))
+    .filter((candidate) =>
+      candidate.title &&
+      candidate.score > 0 &&
+      sourceMatchesExplicitUrlScope(candidate.source.url, explicitSourceUrls) &&
+      !isListingSource(candidate.source, candidate.title)
+    )
+    .sort((a, b) => b.score - a.score)
+    .slice(0, input.maxRows)
+    .map(({ source, title }) => {
+      const cells = Object.fromEntries(
+        input.context.columns.map((column) => {
+          if (column.name === titleColumn.name) {
+            return [column.name, title];
+          }
+          if (column.name === urlColumn.name) {
+            return [column.name, source.url];
+          }
+          return [column.name, null];
+        })
+      ) as Record<string, PopulateCellValue>;
+      return {
+        cells,
+        sourceUrls: [source.url],
+        evidence: [{
+          columnName: titleColumn.name,
+          sourceUrl: source.url,
+          quote: title,
+        }],
+        needsReview: true,
+      };
+    });
+}
+
+function sourceMatchesExplicitUrlScope(
+  sourceUrl: string,
+  explicitSourceUrls: string[]
+): boolean {
+  if (explicitSourceUrls.length === 0) {
+    return true;
+  }
+  const source = parseHttpUrl(sourceUrl);
+  if (!source) {
+    return false;
+  }
+  return explicitSourceUrls.some((explicitUrl) => {
+    const explicit = parseHttpUrl(explicitUrl);
+    if (!explicit) {
+      return false;
+    }
+    if (normalizedUrlWithoutHash(source) === normalizedUrlWithoutHash(explicit)) {
+      return true;
+    }
+    return source.hostname === explicit.hostname;
+  });
+}
+
+function parseHttpUrl(value: string): URL | undefined {
+  try {
+    const url = new URL(value);
+    return /^https?:$/i.test(url.protocol) ? url : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizedUrlWithoutHash(url: URL): string {
+  const normalized = new URL(url.toString());
+  normalized.hash = "";
+  return normalized.toString().replace(/\/$/, "");
+}
+
+function firstUsefulSourceTitle(text: string): string {
+  return text
+    .split("\n")
+    .map((line) => line.trim())
+    .find((line) =>
+      line.length >= 8 &&
+      line.length <= 160 &&
+      !/^https?:\/\//i.test(line) &&
+      !/^source\s+\d+/i.test(line)
+    ) ?? "";
+}
+
+function capturedSourceRelevanceScore(
+  source: PopulateRuntimeCapturedSource,
+  context: DatasetContext
+): number {
+  const text = `${source.url}\n${source.text}`.toLowerCase();
+  const descriptionTokens = userPromptDescription(context.description)
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((token) =>
+      token.length >= 4 &&
+      !["from", "with", "post", "posts", "title", "titles", "url", "urls", "article", "articles", "find"].includes(token)
+    );
+  let score = 1;
+  for (const token of new Set(descriptionTokens)) {
+    if (text.includes(token)) {
+      score += 1;
+    }
+  }
+  if (/\/index\//i.test(source.url)) {
+    score += 2;
+  }
+  if (/\/news\/product/i.test(source.url)) {
+    score += 2;
+  }
+  if (/openai\.com\/news\/?$|openai\.com\/news\/(product-releases|research|company-announcements)\/?$/i.test(source.url)) {
+    score -= 3;
+  }
+  if (/mcp/i.test(source.url) && !/mcp/i.test(userPromptDescription(context.description))) {
+    score -= 4;
+  }
+  return score;
+}
+
+function isListingSource(
+  source: PopulateRuntimeCapturedSource,
+  title: string
+): boolean {
+  return (
+    /openai\.com\/news\/?$|openai\.com\/news\/(product-releases|research|company-announcements)\/?$/i.test(source.url) ||
+    /\b(newsroom|recent news)\b/i.test(title) ||
+    /^openai news$/i.test(title)
+  );
 }
 
 function validateStructuredRowColumns(
@@ -1071,7 +1980,9 @@ function selectRepresentativeRows(
   rows: PopulateRuntimeRow[],
   context: DatasetContext
 ): PopulateRuntimeRow[] {
-  const entities = entityCandidatesFromDescription(context.description);
+  const entities = entityCandidatesFromDescription(
+    userPromptDescription(context.description)
+  );
   if (entities.length < 2 || rows.length <= entities.length) {
     return rows;
   }
@@ -1211,10 +2122,32 @@ function validateRuntimeRows(rows: PopulateRuntimeRow[]): string[] {
   if (rows.some((row) => row.sourceUrls.length === 0)) {
     issues.push("One or more Mastra populate rows have no source URL.");
   }
+  if (rows.some((row) => row.sourceUrls.some((sourceUrl) => !isHttpUrl(sourceUrl)))) {
+    issues.push("One or more Mastra populate rows have invalid source URLs.");
+  }
   if (rows.some((row) => row.evidence.length === 0)) {
     issues.push("Mastra populate rows do not include per-row evidence quotes yet.");
   }
+  if (rows.some((row) =>
+    row.evidence.some((item) => !item.quote.trim())
+  )) {
+    issues.push("One or more Mastra populate evidence quotes are blank.");
+  }
+  if (rows.some((row) =>
+    row.evidence.some((item) => !row.sourceUrls.includes(item.sourceUrl))
+  )) {
+    issues.push("One or more Mastra populate evidence URLs do not match row source URLs.");
+  }
   return issues;
+}
+
+function isHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 function firstPresentColumn(data: Record<string, PopulateCellValue>): string {

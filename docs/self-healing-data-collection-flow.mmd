@@ -1,0 +1,38 @@
+flowchart LR
+  prompt["Frontend prompt + dataset page"]
+  populate["Backend /populate"]
+
+  subgraph planning["Source planning"]
+    planner["Rank sources\ntriage fetched pages"]
+    browser{"Browser-heavy page?"}
+    fetch["TinyFish Search / Fetch"]
+  end
+
+  subgraph first["First run"]
+    box["BrowserActionBox\nTinyFish Agent + trace recorder"]
+    normalize["Normalize trace\ninto browser actions"]
+    draft["Draft Playwright script\nwhen readiness is ready"]
+  end
+
+  subgraph replay["Replay / repair"]
+    promoted["Promoted Playwright script exists"]
+    runner{"Replay runner configured?"}
+    replayRun["Replay through BrowserActionBox"]
+    diagnostic["Diagnostic only\nno fake rows"]
+    repair{"Replay failed?"}
+    repairBox["One bounded repair attempt"]
+    validate["Same validation gate"]
+    write["Accepted rows + evidence"]
+    reject["Reject run\nno direct row writes"]
+  end
+
+  prompt --> populate --> planner --> fetch --> browser
+  browser -- no --> validate
+  browser -- yes --> box --> normalize --> draft --> validate
+  promoted --> runner
+  runner -- yes --> replayRun --> repair
+  runner -- no --> diagnostic --> validate
+  repair -- no --> validate
+  repair -- yes --> repairBox --> validate
+  validate -- pass --> write
+  validate -- fail --> reject

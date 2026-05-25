@@ -17,6 +17,8 @@ import {
 } from "../src/pipeline/populate-self-healing.js";
 import {
   diagnosticRunForTick,
+  FileSystemPopulateDatasetRowCommitLimiter,
+  InMemoryPopulateDatasetRowCommitLimiter,
   runSelfHealingPopulate,
   validationIssuesForSelfHealingTick,
   type PopulateDatasetRowWriter,
@@ -71,7 +73,7 @@ test("self-healing runner commits rows only after a successful tick", async () =
   assert.equal(result.committedRows?.insertedRowCount, 1);
   assert.equal(writer.replaceCalls.length, 1);
   assert.equal(writer.replaceCalls[0]?.datasetId, context.datasetId);
-  assert.equal(writer.replaceCalls[0]?.rows[0]?.cells.entity_name, "OpenAI");
+  assert.equal(writer.replaceCalls[0]?.rows[0]?.cells.entity_name, "OpenAI 1");
 });
 
 test("self-healing runner requires a row writer before runtime work when committing", async () => {
@@ -95,6 +97,142 @@ test("self-healing runner requires a row writer before runtime work when committ
   );
 
   assert.equal(runtimeCalls, 0);
+});
+
+test("self-healing runner records committed rows against the hourly cap", async () => {
+  const store = new InMemoryPopulateRecipeStore();
+  const generatedRecipe = recipe({ recipeId: "generated-v1" });
+  const writer = new FakePopulateDatasetRowWriter();
+  const limiter = new InMemoryPopulateDatasetRowCommitLimiter();
+  const now = new Date("2026-05-22T00:30:00.000Z");
+
+  const result = await runSelfHealingPopulate({
+    context,
+    store,
+    runtime: new FakePopulateRecipeRuntime({
+      "generated-v1": validRunWithRows(generatedRecipe, 2),
+    }),
+    author: new FakeRecipeAuthor({ generatedRecipe }),
+    rowWriter: writer,
+    shouldCommitRows: true,
+    commitRowLimit: {
+      maxRowsPerWindow: 100,
+      windowMs: 60 * 60 * 1_000,
+      now: () => now,
+      limiter,
+    },
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(result.committedRows?.insertedRowCount, 2);
+  assert.equal(result.commitLimit?.remainingRowsInWindow, 100);
+  assert.equal(await limiter.committedRowCount({
+    datasetId: context.datasetId,
+    since: new Date("2026-05-21T23:30:00.000Z"),
+    now,
+  }), 2);
+});
+
+test("self-healing runner skips runtime when commit cap is exhausted", async () => {
+  const limiter = new InMemoryPopulateDatasetRowCommitLimiter();
+  const now = new Date("2026-05-22T00:30:00.000Z");
+  let runtimeCalls = 0;
+  const writer = new FakePopulateDatasetRowWriter();
+  await reserveExistingRows({ limiter, now, rowCount: 100 });
+
+  const result = await runSelfHealingPopulate({
+    context,
+    store: new InMemoryPopulateRecipeStore(),
+    runtime: {
+      async runRecipe(input) {
+        runtimeCalls += 1;
+        return validRun(input.recipe);
+      },
+    },
+    author: new FakeRecipeAuthor({
+      generatedRecipe: recipe({ recipeId: "generated-v1" }),
+    }),
+    rowWriter: writer,
+    shouldCommitRows: true,
+    commitRowLimit: {
+      maxRowsPerWindow: 100,
+      windowMs: 60 * 60 * 1_000,
+      now: () => now,
+      limiter,
+    },
+  });
+
+  assert.equal(result.success, false);
+  assert.equal(result.action, "commit_rate_limited");
+  assert.equal(result.tick, undefined);
+  assert.equal(result.commitLimit?.remainingRowsInWindow, 0);
+  assert.match(result.validationIssues.join("\n"), /Commit row cap exceeded/);
+  assert.equal(runtimeCalls, 0);
+  assert.equal(writer.replaceCalls.length, 0);
+});
+
+test("self-healing runner blocks commit when selected rows exceed remaining cap", async () => {
+  const store = new InMemoryPopulateRecipeStore();
+  const limiter = new InMemoryPopulateDatasetRowCommitLimiter();
+  const generatedRecipe = recipe({ recipeId: "generated-v1" });
+  const writer = new FakePopulateDatasetRowWriter();
+  const now = new Date("2026-05-22T00:30:00.000Z");
+  await reserveExistingRows({ limiter, now, rowCount: 99 });
+
+  const result = await runSelfHealingPopulate({
+    context,
+    store,
+    runtime: new FakePopulateRecipeRuntime({
+      "generated-v1": validRunWithRows(generatedRecipe, 2),
+    }),
+    author: new FakeRecipeAuthor({ generatedRecipe }),
+    rowWriter: writer,
+    shouldCommitRows: true,
+    commitRowLimit: {
+      maxRowsPerWindow: 100,
+      windowMs: 60 * 60 * 1_000,
+      now: () => now,
+      limiter,
+    },
+  });
+
+  assert.equal(result.success, false);
+  assert.equal(result.action, "commit_rate_limited");
+  assert.equal(result.selectedRun?.rows.length, 2);
+  assert.equal(result.commitLimit?.requestedRowCount, 2);
+  assert.equal(result.commitLimit?.remainingRowsInWindow, 1);
+  assert.equal(writer.replaceCalls.length, 0);
+});
+
+test("filesystem row commit limiter reserves atomically for concurrent calls", async () => {
+  const rootDirectory = await mkdtemp(join(tmpdir(), "bigset-row-cap-"));
+  const limiter = new FileSystemPopulateDatasetRowCommitLimiter(rootDirectory);
+  const now = new Date("2026-05-22T00:30:00.000Z");
+  const reserve = () => limiter.reserveCommit({
+    datasetId: context.datasetId,
+    rowCount: 60,
+    since: new Date(now.getTime() - 60 * 60 * 1_000),
+    now,
+    maxRowsPerWindow: 100,
+  });
+
+  const reservations = await Promise.all([reserve(), reserve()]);
+  const allowed = reservations.filter((reservation) =>
+    reservation.decision.isAllowed
+  );
+  const denied = reservations.filter((reservation) =>
+    !reservation.decision.isAllowed
+  );
+
+  assert.equal(allowed.length, 1);
+  assert.equal(denied.length, 1);
+  assert.equal(denied[0]?.decision.remainingRowsInWindow, 40);
+  await allowed[0]?.confirm({ rowCount: 60 });
+  assert.equal(await limiter.committedRowCount({
+    datasetId: context.datasetId,
+    since: new Date(now.getTime() - 60 * 60 * 1_000),
+    now,
+  }), 60);
 });
 
 test("self-healing runner commits healthy active reruns", async () => {
@@ -173,6 +311,35 @@ test("self-healing runner does not clear or insert rows when candidate is reject
   assert.match(result.validationIssues.join("\n"), /Still no evidence/);
 });
 
+test("self-healing runner commits partial safe rows without promoting recipe", async () => {
+  const store = new InMemoryPopulateRecipeStore();
+  const generatedRecipe = recipe({ recipeId: "generated-v1" });
+  const writer = new FakePopulateDatasetRowWriter();
+
+  const result = await runSelfHealingPopulate({
+    context,
+    store,
+    runtime: new FakePopulateRecipeRuntime({
+      "generated-v1": partialRun(
+        generatedRecipe,
+        "Missing expected entities: Anthropic."
+      ),
+    }),
+    author: new FakeRecipeAuthor({ generatedRecipe }),
+    rowWriter: writer,
+    shouldCommitRows: true,
+  });
+  const snapshot = await store.loadSnapshot(context.datasetId);
+
+  assert.equal(result.success, true);
+  assert.equal(result.action, "candidate_rejected");
+  assert.equal(result.validationState, "accepted_partial");
+  assert.equal(result.committedRows?.insertedRowCount, 1);
+  assert.equal(writer.replaceCalls.length, 1);
+  assert.equal(writer.replaceCalls[0]?.rows[0]?.cells.entity_name, "OpenAI 1");
+  assert.equal(snapshot.recipes[0]?.status, "rejected");
+});
+
 test("filesystem store lets the runner reuse an active recipe across calls", async () => {
   const rootDirectory = await mkdtemp(join(tmpdir(), "bigset-populate-runner-"));
   const store = new FileSystemPopulateRecipeStore(rootDirectory);
@@ -241,23 +408,30 @@ function recipe(input: {
 }
 
 function validRun(recipe: PopulateRecipe): PopulateRecipeRunResult {
+  return validRunWithRows(recipe, 1);
+}
+
+function validRunWithRows(
+  recipe: PopulateRecipe,
+  rowCount: number
+): PopulateRecipeRunResult {
   return runResult({
     recipe,
-    rows: [{
+    rows: Array.from({ length: rowCount }, (_, index) => ({
       cells: {
-        entity_name: "OpenAI",
-        latest_post_title: "Release notes from OpenAI",
+        entity_name: `OpenAI ${index + 1}`,
+        latest_post_title: `Release notes from OpenAI ${index + 1}`,
         source_url: "https://openai.com/news",
-        evidence_quote: "Release notes from OpenAI",
+        evidence_quote: `Release notes from OpenAI ${index + 1}`,
       },
       sourceUrls: ["https://openai.com/news"],
       evidence: [{
         columnName: "latest_post_title",
         sourceUrl: "https://openai.com/news",
-        quote: "Release notes from OpenAI",
+        quote: `Release notes from OpenAI ${index + 1}`,
       }],
       needsReview: true,
-    }],
+    })),
     isValid: true,
     score: 1,
   });
@@ -272,6 +446,29 @@ function invalidRun(recipe: PopulateRecipe, issue: string): PopulateRecipeRunRes
     isValid: false,
     score: 0,
   });
+}
+
+function partialRun(recipe: PopulateRecipe, issue: string): PopulateRecipeRunResult {
+  const run = runResult({
+    recipe,
+    rows: validRunWithRows(recipe, 1).rows,
+    validationIssues: [issue],
+    criticalIssues: [issue],
+    isValid: false,
+    score: 0.75,
+  });
+  return {
+    ...run,
+    runStatus: "succeeded",
+    productionValidation: {
+      ...run.productionValidation,
+      state: "accepted_partial",
+      safeRowCount: run.rows.length,
+      expectedEntityCoverageRatio: 0.5,
+      expectedEntities: ["OpenAI", "Anthropic"],
+      missingExpectedEntities: ["Anthropic"],
+    },
+  };
 }
 
 function runResult(input: {
@@ -304,15 +501,19 @@ function runResult(input: {
     completedAt: "2026-05-22T00:00:01.000Z",
     runtimeMs: 1_000,
     productionValidation: {
+      state: input.isValid ? "accepted_full" : "rejected",
       isValid: input.isValid,
       score: input.score,
       rowCount: input.rows.length,
+      safeRowCount: input.isValid ? input.rows.length : 0,
       requestedCellCompletenessRatio: input.score,
       sourceUrlCoverageRatio: input.score,
       evidenceCoverageRatio: input.score,
       expectedEntityCoverageRatio: input.score,
       expectedEntities: [],
       missingExpectedEntities: [],
+      coveragePolicy: "partial_allowed",
+      targetSource: "public web sources",
       criticalIssues: input.criticalIssues ?? [],
       warnings: input.validationIssues ?? [],
     },
@@ -362,4 +563,20 @@ class FakePopulateDatasetRowWriter implements PopulateDatasetRowWriter {
       insertedRowCount: input.rows.length,
     };
   }
+}
+
+async function reserveExistingRows(input: {
+  limiter: InMemoryPopulateDatasetRowCommitLimiter;
+  now: Date;
+  rowCount: number;
+}): Promise<void> {
+  const reservation = await input.limiter.reserveCommit({
+    datasetId: context.datasetId,
+    rowCount: input.rowCount,
+    since: new Date(input.now.getTime() - 60 * 60 * 1_000),
+    now: input.now,
+    maxRowsPerWindow: 100,
+  });
+  assert.equal(reservation.decision.isAllowed, true);
+  await reservation.confirm({ rowCount: input.rowCount });
 }

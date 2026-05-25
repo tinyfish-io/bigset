@@ -7,9 +7,12 @@ import type {
   CollectionPopulatePipelineInput,
   CollectionPopulatePipelineRunner,
 } from "./populate-collection-runtime.js";
-import type {
-  PopulateCellValue,
-  PopulateRuntimeResult,
+import {
+  populateProcessTraceFromSteps,
+  type PopulateCellValue,
+  type PopulateRuntimeBrowserAction,
+  type PopulateRuntimeResult,
+  type PopulateRuntimeTraceStep,
 } from "./populate-runtime.js";
 
 type CollectionPipelineModule = {
@@ -36,14 +39,31 @@ interface CollectionPipelineOptions {
 }
 
 interface CollectionPipelineResult {
+  runId?: string;
+  paths?: {
+    root?: string;
+    reportPath?: string;
+  };
   report: {
     errors?: string[];
     dataset_spec?: CollectionDatasetSpec;
     stats?: CollectionPhaseStats;
-    initial?: CollectionPhaseStats;
+    initial?: CollectionPhaseStats & {
+      search_queries?: string[];
+      fetched_urls?: string[];
+      failed_urls?: string[];
+      browser_actions?: CollectionBrowserActionReport[];
+      agent_browser_actions?: CollectionBrowserActionReport[];
+    };
     repair?: {
       stats?: CollectionPhaseStats;
+      loops?: CollectionRepairLoopReport[];
     };
+    search_queries?: string[];
+    fetched_urls?: string[];
+    failed_urls?: string[];
+    browser_actions?: CollectionBrowserActionReport[];
+    agent_browser_actions?: CollectionBrowserActionReport[];
     quality?: {
       records?: CollectionRecordQuality[];
     };
@@ -75,6 +95,9 @@ interface CollectionPhaseStats {
     agent_dispatched?: number;
     agent_succeeded?: number;
     agent_failed?: number;
+    agent_reported_step_count?: number;
+    agent_runs_with_streaming_url?: number;
+    agent_runs_with_explicit_browser_actions?: number;
   };
 }
 
@@ -98,8 +121,34 @@ interface CollectionSourcesReport {
 }
 
 interface CollectionSourceOutcome {
+  url?: string;
+  phase?: string;
   outcome?: string;
   triage_status?: string;
+  error?: string;
+  records_extracted?: number;
+}
+
+interface CollectionRepairLoopReport {
+  loop_index?: number;
+  repair_queries?: string[];
+  browser_actions?: CollectionBrowserActionReport[];
+  agent_browser_actions?: CollectionBrowserActionReport[];
+  stats?: CollectionPhaseStats;
+}
+
+interface CollectionBrowserActionReport {
+  action?: string;
+  url?: string;
+  selector?: string;
+  target_text?: string;
+  targetText?: string;
+  value_description?: string;
+  valueDescription?: string;
+  status?: string;
+  error?: string;
+  phase?: string;
+  label?: string;
 }
 
 const AGENT_REQUIRED_TRIAGE_STATUSES = new Set([
@@ -108,7 +157,7 @@ const AGENT_REQUIRED_TRIAGE_STATUSES = new Set([
   "requires_detail_page_followup",
 ]);
 
-const DEFAULT_COLLECTION_AGENT_POLL_TIMEOUT_MS = 480_000;
+const DEFAULT_COLLECTION_AGENT_POLL_TIMEOUT_MS = 1_200_000;
 
 export const runCollectionPopulatePipeline: CollectionPopulatePipelineRunner =
   async (input) => {
@@ -200,6 +249,16 @@ function collectionPipelineResultToPopulateRuntimeResult(input: {
     ],
     usage: usageFromPipeline(input.pipeline),
     metrics: metricsFromReport(input.pipeline.report),
+    debug: {
+      capturedRows: [],
+      capturedSources: [],
+      selectedRowSource: rows.length > 0 ? "collection_pipeline" : "none",
+      notes: collectionDebugNotes(input.pipeline.report),
+      processTrace: collectionProcessTrace({
+        pipeline: input.pipeline,
+        rows,
+      }),
+    },
   };
 }
 
@@ -229,6 +288,235 @@ function capabilityDiagnosticsFromReport(input: {
   return [
     `Capability diagnostic: TinyFish Agent disabled; triage requested browser/form/detail follow-up for ${agentRequiredOutcomes.length} page(s) (${statusSummary}). Enable COLLECTION_AGENT_ENABLE_AGENT=true for live navigation.`,
   ];
+}
+
+function collectionProcessTrace(input: {
+  pipeline: CollectionPipelineResult;
+  rows: Array<ReturnType<typeof collectionRecordToPopulateRow>>;
+}) {
+  const report = input.pipeline.report;
+  const steps: PopulateRuntimeTraceStep[] = [];
+
+  for (const query of report.search_queries ?? report.initial?.search_queries ?? []) {
+    steps.push({
+      kind: "search",
+      label: "collection-search-query",
+      status: "succeeded",
+      input: { query },
+    });
+  }
+
+  for (const url of report.fetched_urls ?? report.initial?.fetched_urls ?? []) {
+    steps.push({
+      kind: "fetch",
+      label: "collection-fetched-url",
+      status: "succeeded",
+      input: { url },
+    });
+  }
+
+  for (const url of report.failed_urls ?? report.initial?.failed_urls ?? []) {
+    steps.push({
+      kind: "fetch",
+      label: "collection-failed-url",
+      status: "failed",
+      input: { url },
+    });
+  }
+
+  for (const loop of report.repair?.loops ?? []) {
+    for (const query of loop.repair_queries ?? []) {
+      steps.push({
+        kind: "repair",
+        label: "collection-repair-query",
+        status: "succeeded",
+        input: {
+          loopIndex: loop.loop_index,
+          query,
+        },
+      });
+    }
+    steps.push(...browserTraceStepsFromReports({
+      reports: [
+        ...(loop.browser_actions ?? []),
+        ...(loop.agent_browser_actions ?? []),
+      ],
+      defaultPhase: `repair-loop-${loop.loop_index ?? "unknown"}`,
+    }));
+  }
+
+  steps.push(...browserTraceStepsFromReports({
+    reports: [
+      ...(report.browser_actions ?? []),
+      ...(report.agent_browser_actions ?? []),
+      ...(report.initial?.browser_actions ?? []),
+      ...(report.initial?.agent_browser_actions ?? []),
+    ],
+    defaultPhase: "initial",
+  }));
+
+  for (const outcome of report.sources?.outcomes ?? []) {
+    if (!outcome.url) {
+      continue;
+    }
+    steps.push({
+      kind: sourceOutcomeTraceKind(outcome),
+      label: `collection-source-${outcome.outcome ?? "unknown"}`,
+      status: sourceOutcomeTraceStatus(outcome),
+      input: {
+        url: outcome.url,
+        phase: outcome.phase,
+        triageStatus: outcome.triage_status,
+      },
+      output: {
+        recordsExtracted: outcome.records_extracted,
+      },
+      error: outcome.error,
+    });
+  }
+
+  return populateProcessTraceFromSteps({
+    runtime: "collection",
+    steps,
+    selectedRowSource: input.rows.length > 0 ? "collection_pipeline" : "none",
+    notes: collectionDebugNotes(report),
+    artifactRoot: input.pipeline.paths?.root,
+    runReportPath: input.pipeline.paths?.reportPath,
+  });
+}
+
+function collectionDebugNotes(report: CollectionPipelineResult["report"]): string[] {
+  const notes = [];
+  if (report.stats) {
+    notes.push(
+      `collection stats: searches=${numberValue(report.stats.search_queries_executed)}, ` +
+        `fetches=${numberValue(report.stats.pages_fetched)}`
+    );
+  }
+  if (report.repair?.loops && report.repair.loops.length > 0) {
+    notes.push(`collection repair loops=${report.repair.loops.length}`);
+  }
+  const triage = report.stats?.triage ?? report.initial?.triage;
+  if (
+    numberValue(triage?.agent_reported_step_count) > 0 &&
+    numberValue(triage?.agent_runs_with_explicit_browser_actions) === 0
+  ) {
+    notes.push(
+      `collection Agent reported ${numberValue(triage?.agent_reported_step_count)} step(s), but emitted no explicit browser actions for Playwright replay`
+    );
+  }
+  return notes;
+}
+
+function browserTraceStepsFromReports(input: {
+  reports: CollectionBrowserActionReport[];
+  defaultPhase: string;
+}): PopulateRuntimeTraceStep[] {
+  return input.reports
+    .map((report) => browserTraceStepFromReport({
+      report,
+      defaultPhase: input.defaultPhase,
+    }))
+    .filter((step): step is PopulateRuntimeTraceStep => Boolean(step));
+}
+
+function browserTraceStepFromReport(input: {
+  report: CollectionBrowserActionReport;
+  defaultPhase: string;
+}): PopulateRuntimeTraceStep | undefined {
+  const browserAction = browserActionFromReport(input.report);
+  if (!browserAction) {
+    return undefined;
+  }
+
+  return {
+    kind: "browser",
+    label: input.report.label ?? `collection-browser-${browserAction.action}`,
+    status: browserActionTraceStatus(input.report.status),
+    input: {
+      url: browserAction.url,
+      selector: browserAction.selector,
+      targetText: browserAction.targetText,
+      phase: input.report.phase ?? input.defaultPhase,
+    },
+    error: input.report.error,
+    browserAction,
+  };
+}
+
+function browserActionFromReport(
+  report: CollectionBrowserActionReport
+): PopulateRuntimeBrowserAction | undefined {
+  const action = browserActionKind(report.action);
+  const targetText = report.targetText ?? report.target_text;
+  const valueDescription =
+    report.valueDescription ?? report.value_description;
+  if (!report.url && !report.selector && !targetText) {
+    return undefined;
+  }
+  return {
+    action,
+    url: report.url,
+    selector: report.selector,
+    targetText,
+    valueDescription,
+  };
+}
+
+function browserActionKind(
+  value: string | undefined
+): PopulateRuntimeBrowserAction["action"] {
+  const normalized = value?.trim().toLowerCase();
+  if (
+    normalized === "navigate" ||
+    normalized === "click" ||
+    normalized === "type" ||
+    normalized === "fill" ||
+    normalized === "select" ||
+    normalized === "wait" ||
+    normalized === "extract" ||
+    normalized === "screenshot"
+  ) {
+    return normalized === "fill" ? "type" : normalized;
+  }
+  return "unknown";
+}
+
+function browserActionTraceStatus(
+  value: string | undefined
+): PopulateRuntimeTraceStep["status"] {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === "failed" || normalized === "error") {
+    return "failed";
+  }
+  if (normalized === "skipped") {
+    return "skipped";
+  }
+  return "succeeded";
+}
+
+function sourceOutcomeTraceKind(outcome: CollectionSourceOutcome): PopulateRuntimeTraceStep["kind"] {
+  if (outcome.outcome?.startsWith("agent_")) {
+    return "agent";
+  }
+  if (outcome.outcome === "fetch_failed") {
+    return "fetch";
+  }
+  return "validation";
+}
+
+function sourceOutcomeTraceStatus(
+  outcome: CollectionSourceOutcome
+): PopulateRuntimeTraceStep["status"] {
+  if (
+    outcome.outcome &&
+    ["fetch_failed", "skipped", "agent_failed", "agent_deferred", "no_records"].includes(
+      outcome.outcome
+    )
+  ) {
+    return "failed";
+  }
+  return "succeeded";
 }
 
 function isAgentRequiredSourceOutcome(outcome: CollectionSourceOutcome): boolean {
@@ -333,17 +621,23 @@ function metricsFromReport(report: CollectionPipelineResult["report"]) {
   const agentDispatched =
     numberValue(initialTriage.agent_dispatched) +
       numberValue(repairTriage.agent_dispatched);
+  const reportedAgentSteps =
+    numberValue(initialTriage.agent_reported_step_count) +
+      numberValue(repairTriage.agent_reported_step_count);
+  const fallbackAgentSteps =
+    numberValue(initialTriage.agent_succeeded) +
+      numberValue(initialTriage.agent_failed) +
+      numberValue(repairTriage.agent_succeeded) +
+      numberValue(repairTriage.agent_failed);
 
   return {
     searchCalls: numberValue(stats.search_queries_executed),
     fetchCalls: numberValue(stats.pages_fetched),
     browserCalls: agentDispatched,
     agentRuns: agentDispatched,
-    agentSteps:
-      numberValue(initialTriage.agent_succeeded) +
-      numberValue(initialTriage.agent_failed) +
-      numberValue(repairTriage.agent_succeeded) +
-      numberValue(repairTriage.agent_failed),
+    agentSteps: reportedAgentSteps > 0
+      ? reportedAgentSteps
+      : fallbackAgentSteps,
   };
 }
 

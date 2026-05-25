@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import {
+  type PopulateProcessTrace,
   type PopulateRuntimeAgentRunner,
   type PopulateRuntimeResult,
   type PopulateRuntimeRow,
@@ -9,9 +10,20 @@ import {
   runPopulateRuntime,
 } from "./populate-runtime.js";
 import {
+  createPlaywrightScriptArtifact,
+  type BrowserActionBox,
+  type BrowserActionBoxDatasetSchema,
+  type PlaywrightScriptArtifact,
+} from "./populate-browser-action-box.js";
+import {
   datasetContextSchema,
   type DatasetContext,
 } from "./populate.js";
+import {
+  playwrightCandidateReadinessForRun,
+  type PopulatePlaywrightCandidateReadiness,
+} from "./populate-playwright-readiness.js";
+import { playwrightCandidateScriptForRun } from "./populate-playwright-candidate-script.js";
 
 export type PopulateRecipeStatus =
   | "active"
@@ -25,9 +37,23 @@ export type PopulateRecipeArtifactKind =
   | "text"
   | "stderr"
   | "source-transcript"
-  | "captured-rows";
+  | "captured-rows"
+  | "process-trace"
+  | "playwright-candidate-readiness"
+  | "playwright-candidate-script"
+  | "tinyfish-trace"
+  | "playwright-replay-result"
+  | "playwright-repair-diagnostic"
+  | "playwright-repaired-script"
+  | "validation-result";
 
 const MAX_ARTIFACT_TEXT_LENGTH = 20_000;
+const PROCESS_TRACE_ARTIFACT_LIMITS = [
+  { maxItems: 100, maxNestedItems: 25, maxStringLength: 500 },
+  { maxItems: 50, maxNestedItems: 10, maxStringLength: 240 },
+  { maxItems: 25, maxNestedItems: 8, maxStringLength: 120 },
+  { maxItems: 10, maxNestedItems: 5, maxStringLength: 80 },
+] as const;
 
 export interface PopulateRecipe {
   recipeId: string;
@@ -41,6 +67,7 @@ export interface PopulateRecipe {
   createdBy: "agent" | "human" | "system";
   lastSuccessfulRunAt?: string;
   lastValidationScore?: number;
+  playwrightScript?: PlaywrightScriptArtifact;
 }
 
 export interface PopulateRecipeArtifact {
@@ -50,17 +77,36 @@ export interface PopulateRecipeArtifact {
 }
 
 export interface PopulateRecipeProductionValidation {
+  state: PopulateValidationState;
   isValid: boolean;
   score: number;
   rowCount: number;
+  safeRowCount: number;
   requestedCellCompletenessRatio: number;
   sourceUrlCoverageRatio: number;
   evidenceCoverageRatio: number;
   expectedEntityCoverageRatio: number;
   expectedEntities: string[];
   missingExpectedEntities: string[];
+  coveragePolicy: PopulateValidationCoveragePolicy;
+  targetSource: string;
   criticalIssues: string[];
   warnings: string[];
+}
+
+export type PopulateValidationState =
+  | "accepted_full"
+  | "accepted_partial"
+  | "rejected";
+
+export type PopulateValidationCoveragePolicy =
+  | "partial_allowed"
+  | "full_required";
+
+interface PopulateValidationIntent {
+  expectedEntities: string[];
+  coveragePolicy: PopulateValidationCoveragePolicy;
+  targetSource: string;
 }
 
 export interface PopulateRecipeRunResult extends PopulateRuntimeResult {
@@ -103,6 +149,7 @@ export interface StoredPopulateRecipeRunRecord {
   runStatus: PopulateRecipeRunStatus;
   completedAt: string;
   productionValidation: PopulateRecipeProductionValidation;
+  artifacts: PopulateRecipeArtifact[];
 }
 
 export interface PopulateRecipeStoreSnapshot {
@@ -140,6 +187,7 @@ export class MastraPopulateRecipeRuntime implements PopulateRecipeRuntime {
       runPopulate?: typeof runPopulateRuntime;
       webTools?: PopulateRuntimeWebTools;
       agentRunner?: PopulateRuntimeAgentRunner;
+      browserActionBox?: Pick<BrowserActionBox, "firstRun" | "replay">;
       maxRows?: number;
     } = {}
   ) {}
@@ -156,12 +204,50 @@ export class MastraPopulateRecipeRuntime implements PopulateRecipeRuntime {
     let failureMessage: string | undefined;
 
     try {
-      result = await runtime({
-        context,
-        webTools: this.input.webTools,
-        agentRunner: this.input.agentRunner,
-        maxRows: this.input.maxRows,
-      });
+      if (input.recipe.playwrightScript && this.input.browserActionBox) {
+        const replayOutput = await this.input.browserActionBox.replay({
+          sourceUrl: input.recipe.playwrightScript.sourceUrl,
+          datasetGoalPrompt: input.context.description,
+          datasetSchema: browserActionBoxDatasetSchemaFromContext(input.context),
+          currentPlaywrightScript: input.recipe.playwrightScript,
+          previousSuccessfulOutputProfile: {
+            fieldsPreviouslyRetrieved: input.recipe.requestedColumns,
+            rowCountRange: { min: 1 },
+            sourceUrls: [input.recipe.playwrightScript.sourceUrl],
+            evidenceRequired: true,
+          },
+          runCaps: {
+            maxReplayAttempts: 1,
+            maxRepairAttempts: 1,
+            timeoutMs: 30_000,
+          },
+        });
+        result = replayOutput.runtimeResult ?? emptyPopulateRuntimeResult([
+          `BrowserActionBox ${replayOutput.replayStatus}: ${replayOutput.diagnostics.join("; ")}`,
+        ]);
+        if (result.debug) {
+          result.debug.diagnosticArtifacts = [
+            ...(result.debug.diagnosticArtifacts ?? []),
+            {
+              kind: "playwright-repair-diagnostic",
+              label: "populate-playwright-repair-diagnostic",
+              content: JSON.stringify({
+                replayStatus: replayOutput.replayStatus,
+                diagnostics: replayOutput.diagnostics,
+                trace: replayOutput.trace,
+              }, null, 2),
+            },
+          ];
+        }
+      } else {
+        result = await runtime({
+          context,
+          webTools: this.input.webTools,
+          agentRunner: this.input.agentRunner,
+          browserActionBox: this.input.browserActionBox,
+          maxRows: this.input.maxRows,
+        });
+      }
     } catch (error) {
       failureMessage = error instanceof Error ? error.message : String(error);
       result = emptyPopulateRuntimeResult([failureMessage]);
@@ -202,7 +288,7 @@ export function populateRecipeRunResultFromRuntimeResult(input: {
     ...input.result,
     recipeId: input.recipe.recipeId,
     recipeVersion: input.recipe.version,
-    runStatus: productionValidation.isValid ? "succeeded" : "failed",
+    runStatus: productionValidation.state === "rejected" ? "failed" : "succeeded",
     startedAt: input.startedAt,
     completedAt,
     runtimeMs: Date.now() - input.startedAtMs,
@@ -279,6 +365,16 @@ export class SelfHealingPopulateRecipeService {
         activeRecipe: updatedRecipe,
         activeRun,
         rejectionReasons: [],
+      };
+    }
+
+    if (shouldRejectAfterBoundedReplayFailure({ activeRecipe, activeRun })) {
+      return {
+        datasetId: input.datasetId,
+        action: "candidate_rejected",
+        activeRecipe,
+        activeRun,
+        rejectionReasons: replayFailureRejectionReasons(activeRun),
       };
     }
 
@@ -454,7 +550,10 @@ export class FileSystemPopulateRecipeStore implements PopulateRecipeStore {
       return {
         datasetId,
         recipes: parsed.recipes ?? [],
-        runRecords: parsed.runRecords ?? [],
+        runRecords: (parsed.runRecords ?? []).map((record) => ({
+          ...record,
+          artifacts: record.artifacts ?? [],
+        })),
       };
     } catch (error) {
       if (isNodeError(error) && error.code === "ENOENT") {
@@ -560,13 +659,25 @@ function requestedColumnNames(context: DatasetContext): string[] {
   return context.columns.map((column) => column.name);
 }
 
+function requiredColumnNamesForValidation(context: DatasetContext): string[] {
+  return context.columns
+    .filter((column) => column.nullable !== true)
+    .map((column) => column.name);
+}
+
+function columnRequirementLabels(context: DatasetContext): string {
+  return context.columns
+    .map((column) => `${column.name}${column.nullable ? " (nullable)" : " (required)"}`)
+    .join(", ");
+}
+
 function initialRuntimeInstructions(context: DatasetContext): string {
   return [
     "Use search_web before fetch_page unless an official source URL is already obvious.",
     "Prefer official docs, pricing, blog, product, or company pages over third-party summaries.",
     "Every inserted row must include source_url and evidence_quote cells when those columns exist.",
     "Every inserted row must include at least one source URL and one evidence quote.",
-    `Requested columns: ${requestedColumnNames(context).join(", ")}.`,
+    `Requested columns: ${columnRequirementLabels(context)}.`,
   ].join("\n");
 }
 
@@ -618,13 +729,43 @@ function validatePopulateRuntimeResult(input: {
   result: PopulateRuntimeResult;
   context: DatasetContext;
 }): PopulateRecipeProductionValidation {
-  const requestedColumns = input.context.columns.map((column) => column.name);
-  const expectedEntities = expectedEntitiesFromContext(input.context);
+  const requestedColumns = requestedColumnNames(input.context);
+  const requiredColumns = requiredColumnNamesForValidation(input.context);
+  const nullableColumns = requestedColumns.filter(
+    (columnName) => !requiredColumns.includes(columnName)
+  );
+  const validationIntent = validationIntentFromContext(input.context);
+  const expectedEntities = validationIntent.expectedEntities;
   const entityCoverage = expectedEntityCoverage({
     rows: input.result.rows,
     expectedEntities,
   });
   const rowCount = input.result.rows.length;
+  const rowSafety = input.result.rows.map((row, index) =>
+    productionRowSafety({
+      row,
+      rowNumber: index + 1,
+      requiredColumns,
+    })
+  );
+  const rowCriticalIssues = rowSafety.flatMap((safety) => safety.criticalIssues);
+  const dataCriticalIssues = criticalValidationIssues({
+    validationIssues: input.result.validationIssues,
+    nullableColumns,
+    requiredColumns,
+  });
+  const coverageIssues = coverageIssuesFromValidationIntent({
+    missingExpectedEntities: entityCoverage.missingExpectedEntities,
+  });
+  const safeRowCount = rowSafety.filter((safety) => safety.isSafe).length;
+  const state = validationStateFromSignals({
+    rowCount,
+    safeRowCount,
+    rowCriticalIssues,
+    dataCriticalIssues,
+    coverageIssues,
+    coveragePolicy: validationIntent.coveragePolicy,
+  });
   const requestedCellCompletenessRatio = averageRatio(
     input.result.rows.map((row) => cellCompletenessRatio(row, requestedColumns))
   );
@@ -634,12 +775,6 @@ function validatePopulateRuntimeResult(input: {
   const evidenceCoverageRatio = averageRatio(
     input.result.rows.map((row) => row.evidence.length > 0 ? 1 : 0)
   );
-  const criticalIssues = criticalIssuesForRows({
-    rows: input.result.rows,
-    requestedColumns,
-    validationIssues: input.result.validationIssues,
-    missingExpectedEntities: entityCoverage.missingExpectedEntities,
-  });
   const scoreComponents = [
     requestedCellCompletenessRatio,
     sourceUrlCoverageRatio,
@@ -651,58 +786,188 @@ function validatePopulateRuntimeResult(input: {
   const score = rowCount === 0
     ? 0
     : averageRatio(scoreComponents);
+  const criticalIssues = Array.from(new Set([
+    ...rowCriticalIssues,
+    ...dataCriticalIssues,
+    ...coverageIssues,
+  ]));
 
   return {
-    isValid: criticalIssues.length === 0,
+    state,
+    isValid: state === "accepted_full",
     score,
     rowCount,
+    safeRowCount,
     requestedCellCompletenessRatio,
     sourceUrlCoverageRatio,
     evidenceCoverageRatio,
     expectedEntityCoverageRatio: entityCoverage.expectedEntityCoverageRatio,
     expectedEntities,
     missingExpectedEntities: entityCoverage.missingExpectedEntities,
+    coveragePolicy: validationIntent.coveragePolicy,
+    targetSource: validationIntent.targetSource,
     criticalIssues,
     warnings: input.result.validationIssues,
   };
 }
 
-function criticalIssuesForRows(input: {
-  rows: PopulateRuntimeRow[];
-  requestedColumns: string[];
-  validationIssues: string[];
+function validationStateFromSignals(input: {
+  rowCount: number;
+  safeRowCount: number;
+  rowCriticalIssues: string[];
+  dataCriticalIssues: string[];
+  coverageIssues: string[];
+  coveragePolicy: PopulateValidationCoveragePolicy;
+}): PopulateValidationState {
+  if (input.rowCount === 0 || input.safeRowCount === 0) {
+    return "rejected";
+  }
+  if (input.rowCriticalIssues.length > 0 || input.dataCriticalIssues.length > 0) {
+    return "rejected";
+  }
+  if (input.coverageIssues.length > 0) {
+    return input.coveragePolicy === "partial_allowed"
+      ? "accepted_partial"
+      : "rejected";
+  }
+  return "accepted_full";
+}
+
+function coverageIssuesFromValidationIntent(input: {
   missingExpectedEntities: string[];
 }): string[] {
-  const issues: string[] = [];
-  if (input.rows.length === 0) {
-    issues.push("Populate runtime returned no rows.");
+  if (input.missingExpectedEntities.length === 0) {
+    return [];
   }
-  if (input.missingExpectedEntities.length > 0) {
-    issues.push(
-      `Missing expected entities: ${input.missingExpectedEntities.join(", ")}.`
+  return [
+    `Missing expected entities: ${input.missingExpectedEntities.join(", ")}.`,
+  ];
+}
+
+function productionRowSafety(input: {
+  row: PopulateRuntimeRow;
+  rowNumber: number;
+  requiredColumns: string[];
+}): {
+  isSafe: boolean;
+  criticalIssues: string[];
+} {
+  const criticalIssues: string[] = [];
+  const missingColumns = input.requiredColumns.filter(
+    (columnName) => isMissingCellValue(input.row.cells[columnName])
+  );
+  if (missingColumns.length > 0) {
+    criticalIssues.push(
+      `Row ${input.rowNumber} missing requested columns: ${missingColumns.join(", ")}.`
     );
   }
-  input.rows.forEach((row, index) => {
-    const missingColumns = input.requestedColumns.filter(
-      (columnName) => isMissingCellValue(row.cells[columnName])
+  if (input.row.sourceUrls.length === 0) {
+    criticalIssues.push(`Row ${input.rowNumber} has no source URL.`);
+  }
+  if (input.row.sourceUrls.some((sourceUrl) => !isHttpUrl(sourceUrl))) {
+    criticalIssues.push(`Row ${input.rowNumber} has an invalid source URL.`);
+  }
+  if (input.row.evidence.length === 0) {
+    criticalIssues.push(`Row ${input.rowNumber} has no evidence quote.`);
+  }
+  if (input.row.evidence.some((item) => !item.quote.trim())) {
+    criticalIssues.push(`Row ${input.rowNumber} has a blank evidence quote.`);
+  }
+  if (
+    input.row.evidence.some((item) => !input.row.sourceUrls.includes(item.sourceUrl))
+  ) {
+    criticalIssues.push(
+      `Row ${input.rowNumber} has evidence that does not match a row source URL.`
     );
-    if (missingColumns.length > 0) {
-      issues.push(`Row ${index + 1} missing requested columns: ${missingColumns.join(", ")}.`);
-    }
-    if (row.sourceUrls.length === 0) {
-      issues.push(`Row ${index + 1} has no source URL.`);
-    }
-    if (row.evidence.length === 0) {
-      issues.push(`Row ${index + 1} has no evidence quote.`);
-    }
-  });
-  input.validationIssues
-    .filter((issue) =>
-      /failed|missing|no rows|not found|invented|invalid/i.test(issue) &&
-      !isNonBlockingOperationalWarning(issue)
-    )
-    .forEach((issue) => issues.push(issue));
-  return Array.from(new Set(issues));
+  }
+  return {
+    isSafe: criticalIssues.length === 0,
+    criticalIssues,
+  };
+}
+
+function isHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function criticalValidationIssues(input: {
+  validationIssues: string[];
+  nullableColumns: string[];
+  requiredColumns: string[];
+}): string[] {
+  return input.validationIssues.filter((issue) =>
+    /failed|missing|no rows|not found|invented|invalid|approximation|manual review|not present|could not be determined|left blank|unavailable/i.test(issue) &&
+    !isNullableColumnOnlyWarning(issue, {
+      nullableColumns: input.nullableColumns,
+      requiredColumns: input.requiredColumns,
+    }) &&
+    !isNonBlockingOperationalWarning(issue)
+  );
+}
+
+export function safeRowsForPopulateCommit(input: {
+  context: DatasetContext;
+  run: PopulateRecipeRunResult;
+}): PopulateRuntimeRow[] {
+  const context = datasetContextSchema.parse(input.context);
+  const requiredColumns = requiredColumnNamesForValidation(context);
+  return input.run.rows.filter((row, index) =>
+    productionRowSafety({
+      row,
+      rowNumber: index + 1,
+      requiredColumns,
+    }).isSafe
+  );
+}
+
+function isNullableColumnOnlyWarning(
+  issue: string,
+  input: {
+    nullableColumns: string[];
+    requiredColumns: string[];
+  }
+): boolean {
+  if (!/not present|could not be determined|left blank|unavailable/i.test(issue)) {
+    return false;
+  }
+  const mentionsNullableColumn = input.nullableColumns.some((columnName) =>
+    issueMentionsColumn(issue, columnName)
+  );
+  if (!mentionsNullableColumn) {
+    return false;
+  }
+  return !input.requiredColumns.some((columnName) =>
+    issueMentionsColumn(issue, columnName)
+  );
+}
+
+function issueMentionsColumn(issue: string, columnName: string): boolean {
+  const normalizedIssue = normalizeColumnMention(issue);
+  const normalizedColumnName = normalizeColumnMention(columnName);
+  const meaningfulTokens = columnName
+    .split(/[^a-z0-9]+/i)
+    .map((part) => part.trim().toLowerCase())
+    .filter((part) => part.length >= 3)
+    .filter((part) =>
+      !["source", "url", "link", "evidence", "quote", "field", "value"].includes(part)
+    );
+  if (meaningfulTokens.length === 0) {
+    return normalizedIssue.includes(normalizedColumnName);
+  }
+  return meaningfulTokens.some((part) =>
+    normalizedIssue.includes(part.replace(/s$/, ""))
+  );
+}
+
+function normalizeColumnMention(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ");
 }
 
 function cellCompletenessRatio(
@@ -718,21 +983,82 @@ function cellCompletenessRatio(
   return filledCount / requestedColumns.length;
 }
 
+function validationIntentFromContext(context: DatasetContext): PopulateValidationIntent {
+  return {
+    expectedEntities: expectedEntitiesFromContext(context),
+    coveragePolicy: coveragePolicyFromContext(context),
+    targetSource: targetSourceFromContext(context),
+  };
+}
+
 function expectedEntitiesFromContext(context: DatasetContext): string[] {
-  const fromSegment = context.description.match(/\bfrom\s+([^?.]+)/i)?.[1];
-  if (!fromSegment) {
-    return [];
-  }
-  const entities = fromSegment
-    .split(/,|\band\b/i)
-    .map((entity) => entity.replace(/\b(the|a|an)\b/gi, " ").trim())
-    .map((entity) => entity.replace(/\s+/g, " "))
+  const description = context.description.replace(/\s+/g, " ").trim();
+  const entitySegments = [
+    ...entitySegmentsAfterConnectors(description),
+    capitalizedListSegment(description),
+  ].filter((segment): segment is string => Boolean(segment));
+  const entities = entitySegments
+    .flatMap((segment) => entitiesFromSegment(segment))
     .filter((entity) =>
       entity.length >= 2 &&
       entity.length <= 60 &&
       /[A-Z]/.test(entity)
     );
   return entities.length >= 2 ? Array.from(new Set(entities)) : [];
+}
+
+function entitySegmentsAfterConnectors(description: string): string[] {
+  return Array.from(
+    description.matchAll(
+      /\b(?:from|for|across|among|between)\s+([^?.]+)/gi
+    )
+  ).map((match) => stopEntitySegment(match[1] ?? ""));
+}
+
+function capitalizedListSegment(description: string): string | undefined {
+  const commaList = description.match(
+    /\b([A-Z][A-Za-z0-9.&-]*(?:\s+[A-Z][A-Za-z0-9.&-]*)?(?:\s*,\s*[A-Z][A-Za-z0-9.&-]*(?:\s+[A-Z][A-Za-z0-9.&-]*)?)+(?:,?\s+and\s+[A-Z][A-Za-z0-9.&-]*(?:\s+[A-Z][A-Za-z0-9.&-]*)?)?)\b/
+  )?.[1];
+  return commaList ? stopEntitySegment(commaList) : undefined;
+}
+
+function stopEntitySegment(segment: string): string {
+  return segment
+    .split(/\b(?:include|includes|including|with|where|that|whose|prefer|using|one row|one record|as|by)\b/i)[0]
+    ?.trim() ?? "";
+}
+
+function entitiesFromSegment(segment: string): string[] {
+  return segment
+    .split(/,|\band\b/i)
+    .map((entity) => entity.replace(/\b(the|a|an)\b/gi, " ").trim())
+    .map((entity) => entity.replace(/\s+/g, " "))
+    .map((entity) => entity.replace(/[.:;]+$/g, "").trim())
+    .filter((entity) => !isValidationIntentStopword(entity));
+}
+
+function isValidationIntentStopword(value: string): boolean {
+  return /^(create|dataset|current|public|api|model|pricing|latest|posts?|articles?|companies|sources?|official|pages?)$/i.test(value);
+}
+
+function coveragePolicyFromContext(
+  context: DatasetContext
+): PopulateValidationCoveragePolicy {
+  return /\b(no partial|full coverage|required coverage|must include all|every expected|all expected)\b/i.test(
+    context.description
+  )
+    ? "full_required"
+    : "partial_allowed";
+}
+
+function targetSourceFromContext(context: DatasetContext): string {
+  if (/\bofficial\b/i.test(context.description)) {
+    return "official public pages";
+  }
+  if (/\b(public|website|docs|blog|news|pricing)\b/i.test(context.description)) {
+    return "public web sources";
+  }
+  return "source-backed public data";
 }
 
 function expectedEntityCoverage(input: {
@@ -776,7 +1102,7 @@ function rowIdentityText(row: PopulateRuntimeRow): string {
 }
 
 function isNonBlockingOperationalWarning(issue: string): boolean {
-  return /^Structured fallback (search|fetch) failed/i.test(issue);
+  return /^(Structured fallback (search|fetch) failed|search_web failed|fetch_page failed|context URL fetch failed)/i.test(issue);
 }
 
 function isMissingCellValue(value: unknown): boolean {
@@ -826,8 +1152,34 @@ function artifactsForRun(input: {
       content: debugNotes.join("\n").slice(0, MAX_ARTIFACT_TEXT_LENGTH),
     });
   }
+  artifacts.push({
+    kind: "validation-result",
+    label: "populate-validation-result",
+    content: JSON.stringify(input.productionValidation, null, 2)
+      .slice(0, MAX_ARTIFACT_TEXT_LENGTH),
+  });
+  for (const artifact of input.result.debug?.diagnosticArtifacts ?? []) {
+    const kind = runtimeDiagnosticArtifactKind(artifact.kind);
+    if (!kind) {
+      continue;
+    }
+    artifacts.push({
+      kind,
+      label: artifact.label,
+      content: artifact.content.slice(0, MAX_ARTIFACT_TEXT_LENGTH),
+    });
+  }
   const capturedSources = input.result.debug?.capturedSources ?? [];
   const capturedRows = input.result.debug?.capturedRows ?? [];
+  const processTrace = input.result.debug?.processTrace ?? {
+    runtime: "unknown",
+    searchQueries: [],
+    fetchedUrls: [],
+    sourceArtifacts: [],
+    selectedRowSource: "none",
+    notes: [],
+    steps: [],
+  };
   if (capturedSources.length > 0) {
     artifacts.push({
       kind: "source-transcript",
@@ -851,7 +1203,170 @@ function artifactsForRun(input: {
         .slice(0, MAX_ARTIFACT_TEXT_LENGTH),
     });
   }
+  if (
+    processTrace.steps.length > 0 ||
+    processTrace.searchQueries.length > 0 ||
+    processTrace.fetchedUrls.length > 0 ||
+    processTrace.sourceArtifacts.length > 0
+  ) {
+    const playwrightCandidateScript = playwrightCandidateScriptForRun({
+      result: input.result,
+    });
+    artifacts.push({
+      kind: "process-trace",
+      label: "populate-process-trace",
+      content: processTraceArtifactContent(processTrace),
+    });
+    artifacts.push({
+      kind: "playwright-candidate-readiness",
+      label: "populate-playwright-candidate-readiness",
+      content: playwrightCandidateReadinessArtifactContent(
+        playwrightCandidateReadinessForRun({ result: input.result })
+      ),
+    });
+    if (
+      playwrightCandidateScript &&
+      playwrightCandidateScript.length <= MAX_ARTIFACT_TEXT_LENGTH
+    ) {
+      artifacts.push({
+        kind: "playwright-candidate-script",
+        label: "populate-playwright-candidate-script",
+        content: playwrightCandidateScript,
+      });
+    }
+  }
   return artifacts;
+}
+
+function runtimeDiagnosticArtifactKind(
+  value: string
+): PopulateRecipeArtifactKind | undefined {
+  if (
+    value === "tinyfish-trace" ||
+    value === "playwright-replay-result" ||
+    value === "playwright-repair-diagnostic" ||
+    value === "playwright-repaired-script"
+  ) {
+    return value;
+  }
+  return undefined;
+}
+
+function playwrightCandidateReadinessArtifactContent(
+  readiness: PopulatePlaywrightCandidateReadiness
+): string {
+  return JSON.stringify(readiness, null, 2)
+    .slice(0, MAX_ARTIFACT_TEXT_LENGTH);
+}
+
+function processTraceArtifactContent(processTrace: PopulateProcessTrace): string {
+  let content = "";
+  for (const limits of PROCESS_TRACE_ARTIFACT_LIMITS) {
+    content = JSON.stringify(truncatedProcessTrace(processTrace, limits), null, 2);
+    if (content.length <= MAX_ARTIFACT_TEXT_LENGTH) {
+      return content;
+    }
+  }
+  return content;
+}
+
+function truncatedProcessTrace(
+  processTrace: PopulateProcessTrace,
+  limits: typeof PROCESS_TRACE_ARTIFACT_LIMITS[number]
+) {
+  return {
+    ...processTrace,
+    truncated: hasProcessTraceOverflow(processTrace, limits),
+    searchQueries: processTrace.searchQueries
+      .slice(0, limits.maxItems)
+      .map((query) => truncateArtifactString(query, limits)),
+    fetchedUrls: processTrace.fetchedUrls
+      .slice(0, limits.maxItems)
+      .map((url) => truncateArtifactString(url, limits)),
+    sourceArtifacts: processTrace.sourceArtifacts.slice(0, limits.maxItems).map((artifact) => ({
+      ...artifact,
+      url: truncateArtifactString(artifact.url, limits),
+      label: artifact.label
+        ? truncateArtifactString(artifact.label, limits)
+        : artifact.label,
+      error: artifact.error
+        ? truncateArtifactString(artifact.error, limits)
+        : artifact.error,
+    })),
+    notes: processTrace.notes
+      .slice(0, limits.maxItems)
+      .map((note) => truncateArtifactString(note, limits)),
+    steps: processTrace.steps.slice(0, limits.maxItems).map((step) => ({
+      ...step,
+      label: truncateArtifactString(step.label, limits),
+      input: truncateArtifactJson(step.input, limits),
+      output: truncateArtifactJson(step.output, limits),
+      error: step.error ? truncateArtifactString(step.error, limits) : step.error,
+    })),
+  };
+}
+
+function hasProcessTraceOverflow(
+  processTrace: PopulateProcessTrace,
+  limits: typeof PROCESS_TRACE_ARTIFACT_LIMITS[number]
+): boolean {
+  return (
+    processTrace.searchQueries.length > limits.maxItems ||
+    processTrace.fetchedUrls.length > limits.maxItems ||
+    processTrace.sourceArtifacts.length > limits.maxItems ||
+    processTrace.notes.length > limits.maxItems ||
+    processTrace.steps.length > limits.maxItems ||
+    processTrace.searchQueries.some((query) => query.length > limits.maxStringLength) ||
+    processTrace.fetchedUrls.some((url) => url.length > limits.maxStringLength) ||
+    processTrace.notes.some((note) => note.length > limits.maxStringLength) ||
+    processTrace.sourceArtifacts.some((artifact) =>
+      [
+        artifact.url,
+        artifact.label ?? "",
+        artifact.error ?? "",
+      ].some((value) => value.length > limits.maxStringLength)
+    ) ||
+    processTrace.steps.some((step) =>
+      [
+        step.label,
+        step.error ?? "",
+      ].some((value) => value.length > limits.maxStringLength)
+    )
+  );
+}
+
+function truncateArtifactJson(
+  value: unknown,
+  limits: typeof PROCESS_TRACE_ARTIFACT_LIMITS[number]
+): unknown {
+  if (typeof value === "string") {
+    return truncateArtifactString(value, limits);
+  }
+  if (Array.isArray(value)) {
+    return value
+      .slice(0, limits.maxNestedItems)
+      .map((nestedValue) => truncateArtifactJson(nestedValue, limits));
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .slice(0, limits.maxNestedItems)
+        .map(([key, nestedValue]) => [
+          key,
+          truncateArtifactJson(nestedValue, limits),
+        ])
+    );
+  }
+  return value;
+}
+
+function truncateArtifactString(
+  value: string,
+  limits: typeof PROCESS_TRACE_ARTIFACT_LIMITS[number]
+): string {
+  return value.length > limits.maxStringLength
+    ? `${value.slice(0, limits.maxStringLength)}\n[truncated]`
+    : value;
 }
 
 export function emptyPopulateRuntimeResult(validationIssues: string[]): PopulateRuntimeResult {
@@ -875,6 +1390,15 @@ export function emptyPopulateRuntimeResult(validationIssues: string[]): Populate
       capturedSources: [],
       selectedRowSource: "none",
       notes: [],
+      processTrace: {
+        runtime: "unknown",
+        searchQueries: [],
+        fetchedUrls: [],
+        sourceArtifacts: [],
+        selectedRowSource: "none",
+        notes: [],
+        steps: [],
+      },
     },
   };
 }
@@ -882,6 +1406,28 @@ export function emptyPopulateRuntimeResult(validationIssues: string[]): Populate
 function isHealthyRun(runResult: PopulateRecipeRunResult): boolean {
   return runResult.runStatus === "succeeded" &&
     runResult.productionValidation.isValid;
+}
+
+function shouldRejectAfterBoundedReplayFailure(input: {
+  activeRecipe: PopulateRecipe;
+  activeRun: PopulateRecipeRunResult;
+}): boolean {
+  return Boolean(input.activeRecipe.playwrightScript) &&
+    input.activeRun.artifacts.some((artifact) =>
+      artifact.kind === "playwright-repair-diagnostic" ||
+      artifact.kind === "playwright-replay-result"
+    );
+}
+
+function replayFailureRejectionReasons(
+  activeRun: PopulateRecipeRunResult
+): string[] {
+  return Array.from(new Set([
+    ...activeRun.productionValidation.criticalIssues,
+    ...activeRun.validationIssues,
+    ...activeRun.productionValidation.warnings,
+    "Promoted Playwright replay/repair failed; keeping prior active script.",
+  ])).filter(Boolean);
 }
 
 function shouldPromoteCandidate(input: {
@@ -915,6 +1461,18 @@ function rejectionReasonsForCandidate(input: {
   return Array.from(new Set(reasons));
 }
 
+function browserActionBoxDatasetSchemaFromContext(
+  context: DatasetContext
+): BrowserActionBoxDatasetSchema {
+  return {
+    columns: context.columns.map((column) => ({
+      name: column.name,
+      description: column.description,
+      required: column.nullable !== true,
+    })),
+  };
+}
+
 function successfulRecipe(
   recipe: PopulateRecipe,
   runResult: PopulateRecipeRunResult
@@ -924,7 +1482,49 @@ function successfulRecipe(
     status: "active",
     lastSuccessfulRunAt: runResult.completedAt,
     lastValidationScore: runResult.productionValidation.score,
+    playwrightScript: promotedPlaywrightScriptFromRunResult(recipe, runResult),
   };
+}
+
+function promotedPlaywrightScriptFromRunResult(
+  recipe: PopulateRecipe,
+  runResult: PopulateRecipeRunResult
+): PlaywrightScriptArtifact | undefined {
+  const scriptArtifact = runResult.artifacts.find((artifact) =>
+    artifact.kind === "playwright-repaired-script"
+  ) ?? runResult.artifacts.find((artifact) =>
+    artifact.kind === "playwright-candidate-script"
+  );
+  if (!scriptArtifact?.content.trim()) {
+    return recipe.playwrightScript;
+  }
+  const sourceUrl = firstRunSourceUrl(runResult);
+  if (!sourceUrl) {
+    return recipe.playwrightScript;
+  }
+  return createPlaywrightScriptArtifact({
+    sourceUrl,
+    datasetGoalPrompt: recipe.sourceDescription,
+    datasetSchema: {
+      columns: recipe.requestedColumns.map((name) => ({
+        name,
+        required: true,
+      })),
+    },
+    code: scriptArtifact.content,
+    status: "promoted",
+    createdAt: runResult.completedAt,
+    diagnostics: [],
+  });
+}
+
+function firstRunSourceUrl(
+  runResult: PopulateRecipeRunResult
+): string | undefined {
+  return runResult.rows.flatMap((row) => row.sourceUrls)[0] ??
+    runResult.debug?.processTrace.sourceArtifacts.find((artifact) =>
+      artifact.status === "succeeded"
+    )?.url;
 }
 
 function runRecordFromRunResult(
@@ -936,6 +1536,7 @@ function runRecordFromRunResult(
     runStatus: runResult.runStatus,
     completedAt: runResult.completedAt,
     productionValidation: runResult.productionValidation,
+    artifacts: runResult.artifacts,
   };
 }
 
