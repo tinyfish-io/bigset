@@ -23,7 +23,12 @@ export interface PopulateColumn {
   description?: string;
 }
 
-export interface PopulateResult {
+export interface PopulateStartResult {
+  success: boolean;
+  runId: string;
+}
+
+export interface WorkflowResult {
   success: boolean;
   result: unknown;
 }
@@ -59,7 +64,7 @@ export async function populate(
   description: string,
   columns: PopulateColumn[],
   token: string,
-): Promise<PopulateResult> {
+): Promise<PopulateStartResult> {
   const res = await fetch(`${BACKEND_URL}/populate`, {
     method: "POST",
     headers: {
@@ -84,7 +89,7 @@ export async function update(
   description: string,
   columns: PopulateColumn[],
   token: string,
-): Promise<PopulateResult> {
+): Promise<WorkflowResult> {
   const res = await fetch(`${BACKEND_URL}/update`, {
     method: "POST",
     headers: {

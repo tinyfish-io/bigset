@@ -10,7 +10,8 @@ export interface DatasetMeta {
   _id: string;
   name: string;
   description: string;
-  status: "live" | "paused" | "building";
+  status: "live" | "paused" | "building" | "failed";
+  lastStatusError?: string;
   cadence: string;
   columns: DatasetColumn[];
 }

@@ -218,7 +218,7 @@ export default function NewDatasetPage() {
                   Create a new dataset
                 </h2>
                 <p className="mt-2 text-sm text-muted">
-                  Describe what data you want to collect. Our agents will figure out the schema and start populating it.
+                  Describe what data you want to collect. Our agents will figure out the schema; you can start populating it from the dataset page.
                 </p>
               </div>
 

@@ -93,7 +93,7 @@ export default function DatasetPage() {
   }
 
   async function handleUpdate() {
-    if (!dataset || updating) return;
+    if (!dataset || updating || dataset.status === "building") return;
     setUpdating(true);
     try {
       const token = await getToken();
@@ -118,22 +118,23 @@ export default function DatasetPage() {
   }
 
   async function handlePopulate() {
-    if (!dataset || populating) return;
+    if (!dataset || populating || dataset.status === "building") return;
     setPopulating(true);
     try {
       const token = await getToken();
       if (!token) throw new Error("Not authenticated");
 
-      await populate(
+      const startedRun = await populate(
         dataset._id,
         dataset.name,
         dataset.description,
         dataset.columns,
         token,
       );
-      track(EVENTS.DATASET_POPULATED, {
+      track(EVENTS.DATASET_POPULATE_STARTED, {
         datasetId: dataset._id,
         column_count: dataset.columns.length,
+        runId: startedRun.runId,
       });
     } catch (err) {
       console.error("[populate] failed", err);
@@ -159,6 +160,21 @@ export default function DatasetPage() {
   // the "Dataset not found" UI.
 
   const exportDisabled = exporting !== null || rows.length === 0;
+  const isDatasetBuilding = dataset.status === "building";
+  const updateDisabled = updating || isDatasetBuilding;
+  const populateDisabled = populating || isDatasetBuilding;
+  const updateLabel = isDatasetBuilding
+    ? "Building…"
+    : updating
+      ? "Updating…"
+      : "Update Dataset";
+  const populateLabel = isDatasetBuilding
+    ? "Building…"
+    : populating
+      ? "Starting…"
+      : dataset.status === "failed"
+        ? "Retry Populate"
+        : "Clear & Populate";
   const csvLabel =
     exporting === "csv"
       ? "Exporting…"
@@ -216,17 +232,17 @@ export default function DatasetPage() {
           </button>
           <button
             onClick={handleUpdate}
-            disabled={updating}
+            disabled={updateDisabled}
             className="border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-foreground/[0.03] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            {updating ? "Updating…" : "Update Dataset"}
+            {updateLabel}
           </button>
           <button
             onClick={handlePopulate}
-            disabled={populating}
+            disabled={populateDisabled}
             className="border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-foreground/[0.03] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            {populating ? "Populating…" : "Clear & Populate"}
+            {populateLabel}
           </button>
           <div className="w-px h-4 bg-border mx-1" />
           <ThemeToggle />
@@ -234,9 +250,16 @@ export default function DatasetPage() {
       </header>
 
       <div className="border-b border-border px-5 py-2.5 flex items-center gap-4 bg-surface/50 shrink-0">
-        <p className="text-xs text-muted truncate max-w-2xl">
-          {dataset.description}
-        </p>
+        <div className="min-w-0 flex-1">
+          <p className="text-xs text-muted truncate">
+            {dataset.description}
+          </p>
+          {dataset.status === "failed" && dataset.lastStatusError && (
+            <p role="status" className="mt-1 truncate text-xs font-medium text-red-600 dark:text-red-400">
+              Last populate failed: {dataset.lastStatusError}
+            </p>
+          )}
+        </div>
         <div className="ml-auto flex items-center gap-4 text-[11px] text-muted shrink-0">
           {selectedCount > 0 && (
             <>

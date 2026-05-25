@@ -115,6 +115,38 @@ export const getInternal = internalQuery({
 });
 
 /**
+ * Atomically claims a user-requested populate run for a dataset.
+ *
+ * This is the concurrency gate for backend /populate calls. The workflow
+ * starts by clearing existing rows, so duplicate background runs for the same
+ * dataset must be rejected before either one reaches the row-clearing step.
+ */
+export const beginPopulateInternal = internalMutation({
+  args: {
+    id: v.id("datasets"),
+    ownerId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const dataset = await ctx.db.get(args.id);
+    if (!dataset) {
+      return { outcome: "not_found" as const };
+    }
+    if (dataset.ownerId !== args.ownerId) {
+      return { outcome: "forbidden" as const };
+    }
+    if (dataset.status === "building") {
+      return { outcome: "already_building" as const };
+    }
+
+    await ctx.db.patch(dataset._id, {
+      status: "building",
+      lastStatusError: undefined,
+    });
+    return { outcome: "started" as const };
+  },
+});
+
+/**
  * Admin-only status transition. Used by the backend orchestration layer
  * to move a dataset between lifecycle states after a workflow completes.
  *
@@ -123,16 +155,10 @@ export const getInternal = internalQuery({
  * run). This mutation is purely a controlled patch on the `status` field.
  *
  * Lifecycle today:
- *   - "building" : set by `datasets.create`, before any rows exist
- *   - "live"     : set by /populate handler after successful population
- *   - "paused"   : reserved for the future user-facing Pause/Resume UI
- *
- * Future statuses (extend the schema's `status` union when they land —
- * the validator below auto-picks up new values since it points at the
- * same union):
- *   - "refreshing"      : scheduled refresh in progress (Inngest / cron)
- *   - "failed"          : last populate / refresh failed
- *   - "quota_exceeded"  : last attempt blocked by quota
+ *   - "paused"   : default for newly created datasets before first run
+ *   - "building" : set by beginPopulateInternal after ownership passes
+ *   - "live"     : set by background populate after rows exist
+ *   - "failed"   : set by background populate on workflow failure
  *
  * NOTE: the public `datasets.updateStatus` mutation still exists for
  * user-initiated transitions (Pause/Resume) — that one goes through
@@ -145,10 +171,15 @@ export const setStatusInternal = internalMutation({
       v.literal("live"),
       v.literal("paused"),
       v.literal("building"),
+      v.literal("failed"),
     ),
+    lastStatusError: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    await ctx.db.patch(args.id, { status: args.status });
+    await ctx.db.patch(args.id, {
+      status: args.status,
+      lastStatusError: args.status === "failed" ? args.lastStatusError : undefined,
+    });
   },
 });
 
@@ -170,7 +201,7 @@ export const create = mutation({
     return await ctx.db.insert("datasets", {
       ...args,
       ownerId: identity.subject,
-      status: "building",
+      status: "paused",
       visibility: "private",
       rowCount: 0,
     });
