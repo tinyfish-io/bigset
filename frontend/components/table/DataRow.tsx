@@ -13,6 +13,7 @@ export interface DataRowData {
   columnWidths: number[];
   isSelected: (id: string) => boolean;
   toggleRow: (id: string, shiftKey: boolean) => void;
+  isBuilding: boolean;
 }
 
 function DataRowImpl({
@@ -24,15 +25,35 @@ function DataRowImpl({
   index: number;
   style: CSSProperties;
 }) {
-  const { rows, columns, columnWidths, isSelected, toggleRow } = data;
+  const { rows, columns, columnWidths, isSelected, toggleRow, isBuilding } = data;
   const row = rows[index];
 
   if (!row) {
+    const BAR_WIDTHS = [40, 62, 75, 55, 85, 48, 70, 58, 80, 45];
     return (
       <div style={style} className="flex items-center border-b border-border/40">
-        <div className="flex-1 px-3 py-2">
-          <div className="h-3 w-24 animate-pulse bg-foreground/5" />
-        </div>
+        <div
+          className="shrink-0 border-r border-border"
+          style={{ width: floorWidth(columnWidths[0] ?? 40), height: "100%" }}
+        />
+        {columns.map((col, cellIdx) => {
+          const width = floorWidth(columnWidths[cellIdx + 1] ?? 150);
+          const barPct = BAR_WIDTHS[(index * columns.length + cellIdx) % BAR_WIDTHS.length];
+          return (
+            <div
+              key={col.name}
+              className="shrink-0 overflow-hidden border-r border-border/30 last:border-r-0 flex items-center"
+              style={{ width, padding: "var(--table-cell-py) var(--table-cell-px)" }}
+            >
+              {isBuilding && (
+                <div
+                  className="h-2.5 animate-pulse rounded-sm bg-foreground/[0.06]"
+                  style={{ width: `${barPct}%` }}
+                />
+              )}
+            </div>
+          );
+        })}
       </div>
     );
   }

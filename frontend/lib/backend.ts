@@ -77,3 +77,28 @@ export async function populate(
 
   return res.json();
 }
+
+export async function update(
+  datasetId: string,
+  datasetName: string,
+  description: string,
+  columns: PopulateColumn[],
+  token: string,
+): Promise<PopulateResult> {
+  const res = await fetch(`${BACKEND_URL}/update`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ datasetId, datasetName, description, columns }),
+  });
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    const message = body?.error || `Backend error (${res.status})`;
+    throw new Error(message);
+  }
+
+  return res.json();
+}

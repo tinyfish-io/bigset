@@ -3,6 +3,10 @@ import { anyApi } from "convex/server";
 
 import { env } from "./env.js";
 
+type ConvexHttpClientWithAdminAuth = ConvexHttpClient & {
+  setAdminAuth(token: string): void;
+};
+
 /**
  * Convex client for SYSTEM-LEVEL operations from the backend.
  *
@@ -27,5 +31,5 @@ export const internal = anyApi;
 export const convex = new ConvexHttpClient(env.CONVEX_URL);
 
 if (env.CONVEX_ADMIN_KEY) {
-  convex.setAdminAuth(env.CONVEX_ADMIN_KEY);
+  (convex as ConvexHttpClientWithAdminAuth).setAdminAuth(env.CONVEX_ADMIN_KEY);
 }

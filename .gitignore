@@ -1,5 +1,6 @@
 .DS_Store
 node_modules/
+.npm-cache/
 .env
 .env.local
 Project_BigSet_brief.md

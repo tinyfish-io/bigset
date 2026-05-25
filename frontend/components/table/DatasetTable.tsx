@@ -20,6 +20,8 @@ const CHECKBOX_COL_WIDTH = 40;
 const DEFAULT_COL_WIDTH = 180;
 const MIN_COL_WIDTH = 80;
 const ROW_HEIGHT = 34;
+const GHOST_ROW_COUNT = 50;
+const LAST_COLUMN_RESIZE_GUTTER = 160;
 
 const columnHelper = createColumnHelper<DatasetRow>();
 
@@ -67,6 +69,7 @@ export function DatasetTable({
   selection: Selection;
 }) {
   const tableContainerRef = useRef<HTMLDivElement>(null);
+  const previousResizingColumnIdRef = useRef<string | false>(false);
   const [containerHeight, setContainerHeight] = useState(600);
 
   useEffect(() => {
@@ -108,8 +111,18 @@ export function DatasetTable({
   const headers = table.getHeaderGroups()[0]?.headers ?? [];
   const tableRows = table.getRowModel().rows;
   const columnWidths = useMemo(() => headers.map((h) => h.getSize()), [headers]);
+  const isBuilding = dataset.status === "building";
+  const displayCount = isBuilding ? Math.max(tableRows.length, GHOST_ROW_COUNT) : tableRows.length;
   const totalWidth = columnWidths.reduce((sum, w) => sum + w, 0);
+  const tableContentWidth = totalWidth + LAST_COLUMN_RESIZE_GUTTER;
   const resizingColumnId = table.getState().columnSizingInfo.isResizingColumn;
+
+  useEffect(() => {
+    if (previousResizingColumnIdRef.current && !resizingColumnId) {
+      persistWidths();
+    }
+    previousResizingColumnIdRef.current = resizingColumnId;
+  }, [resizingColumnId, persistWidths]);
 
   const toggleRow = useCallback(
     (id: string, shiftKey: boolean) => {
@@ -126,8 +139,9 @@ export function DatasetTable({
       columnWidths,
       isSelected: selection.has,
       toggleRow,
+      isBuilding,
     }),
-    [tableRows, dataset.columns, columnWidths, selection.has, toggleRow],
+    [tableRows, dataset.columns, columnWidths, selection.has, toggleRow, isBuilding],
   );
 
   return (
@@ -135,23 +149,20 @@ export function DatasetTable({
       ref={tableContainerRef}
       className="flex-1 overflow-auto relative"
       style={{ fontSize: "13px" }}
-      onMouseUp={() => {
-        if (resizingColumnId) persistWidths();
-      }}
     >
-      <div style={{ minWidth: totalWidth }}>
+      <div style={{ minWidth: tableContentWidth }}>
         <TableHeader
           headers={headers}
           columns={dataset.columns}
           allState={selection.allState}
           toggleAll={selection.toggleAll}
           resizingColumnId={resizingColumnId}
-          tableContainerRef={tableContainerRef}
+          containerHeight={containerHeight}
         />
 
         <FixedSizeList
           height={Math.max(containerHeight - 32, 200)}
-          itemCount={tableRows.length}
+          itemCount={displayCount}
           itemSize={ROW_HEIGHT}
           width="100%"
           itemData={itemData}

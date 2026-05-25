@@ -54,7 +54,7 @@ async function callOnce(
     model,
     output: Output.object({ schema: datasetSchemaSchema }),
     system: SYSTEM_PROMPT,
-    maxTokens: 4096,
+    maxOutputTokens: 4096,
     prompt,
   });
   if (!output) throw new Error("Model did not generate a valid schema object");

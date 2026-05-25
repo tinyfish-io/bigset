@@ -12,7 +12,7 @@ import { useSelection } from "@/components/table/use-selection";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { StatusBadge } from "@/components/dataset/StatusBadge";
 import { downloadCSV, downloadXLSX } from "@/lib/export";
-import { populate } from "@/lib/backend";
+import { populate, update } from "@/lib/backend";
 import { EVENTS, captureException, track } from "@/lib/analytics";
 
 export default function DatasetPage() {
@@ -21,6 +21,7 @@ export default function DatasetPage() {
   const { userId, getToken } = useAuth();
   const [exporting, setExporting] = useState<"csv" | "xlsx" | null>(null);
   const [populating, setPopulating] = useState(false);
+  const [updating, setUpdating] = useState(false);
 
   const datasetId = params.id as Id<"datasets">;
   const dataset = useQuery(
@@ -88,6 +89,31 @@ export default function DatasetPage() {
       });
     } finally {
       setExporting(null);
+    }
+  }
+
+  async function handleUpdate() {
+    if (!dataset || updating) return;
+    setUpdating(true);
+    try {
+      const token = await getToken();
+      if (!token) throw new Error("Not authenticated");
+
+      await update(
+        dataset._id,
+        dataset.name,
+        dataset.description,
+        dataset.columns,
+        token,
+      );
+    } catch (err) {
+      console.error("[update] failed", err);
+      captureException(err, {
+        operation: "dataset_update",
+        datasetId: dataset._id,
+      });
+    } finally {
+      setUpdating(false);
     }
   }
 
@@ -187,6 +213,13 @@ export default function DatasetPage() {
             className="border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-foreground/[0.03] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {xlsxLabel}
+          </button>
+          <button
+            onClick={handleUpdate}
+            disabled={updating}
+            className="border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-foreground/[0.03] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {updating ? "Updating…" : "Update Dataset"}
           </button>
           <button
             onClick={handlePopulate}
