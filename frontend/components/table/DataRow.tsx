@@ -74,12 +74,13 @@ function DataRowImpl({
         <button
           type="button"
           onClick={(e) => toggleRow(row.original._id, e.shiftKey)}
-          className={`relative flex h-5 w-5 items-center justify-center text-[11px] leading-none transition-colors ${
+          aria-label={`Select row ${index + 1}`}
+          aria-pressed={selected}
+          className={`relative flex h-5 w-5 items-center justify-center text-[11px] leading-none transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground focus-visible:ring-offset-1 ${
             selected
               ? "rounded-sm bg-foreground text-background"
               : "text-foreground/60 hover:text-foreground"
           }`}
-          aria-label={`Select row ${index + 1}`}
         >
           <span
             className={`transition-opacity ${
