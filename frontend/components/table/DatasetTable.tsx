@@ -149,9 +149,6 @@ export function DatasetTable({
       ref={tableContainerRef}
       className="flex-1 overflow-auto relative"
       style={{ fontSize: "13px" }}
-      onMouseUp={() => {
-        if (resizingColumnId) persistWidths();
-      }}
     >
       <div style={{ minWidth: tableContentWidth }}>
         <TableHeader
