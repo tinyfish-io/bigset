@@ -123,16 +123,10 @@ export const getInternal = internalQuery({
  * run). This mutation is purely a controlled patch on the `status` field.
  *
  * Lifecycle today:
- *   - "building" : set by `datasets.create`, before any rows exist
- *   - "live"     : set by /populate handler after successful population
- *   - "paused"   : reserved for the future user-facing Pause/Resume UI
- *
- * Future statuses (extend the schema's `status` union when they land —
- * the validator below auto-picks up new values since it points at the
- * same union):
- *   - "refreshing"      : scheduled refresh in progress (Inngest / cron)
- *   - "failed"          : last populate / refresh failed
- *   - "quota_exceeded"  : last attempt blocked by quota
+ *   - "paused"   : default for newly created datasets before first run
+ *   - "building" : set by /populate after ownership passes
+ *   - "live"     : set by background populate after rows exist
+ *   - "failed"   : set by background populate on workflow failure
  *
  * NOTE: the public `datasets.updateStatus` mutation still exists for
  * user-initiated transitions (Pause/Resume) — that one goes through
@@ -145,10 +139,15 @@ export const setStatusInternal = internalMutation({
       v.literal("live"),
       v.literal("paused"),
       v.literal("building"),
+      v.literal("failed"),
     ),
+    lastStatusError: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    await ctx.db.patch(args.id, { status: args.status });
+    await ctx.db.patch(args.id, {
+      status: args.status,
+      lastStatusError: args.status === "failed" ? args.lastStatusError : undefined,
+    });
   },
 });
 
@@ -170,7 +169,7 @@ export const create = mutation({
     return await ctx.db.insert("datasets", {
       ...args,
       ownerId: identity.subject,
-      status: "building",
+      status: "paused",
       visibility: "private",
       rowCount: 0,
     });

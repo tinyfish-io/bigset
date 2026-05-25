@@ -9,8 +9,10 @@ export default defineSchema({
     status: v.union(
       v.literal("live"),
       v.literal("paused"),
-      v.literal("building")
+      v.literal("building"),
+      v.literal("failed")
     ),
+    lastStatusError: v.optional(v.string()),
     cadence: v.string(),
     // Optional for backward compat with rows seeded before this field existed.
     // Treat undefined as "private" in authorization helpers.
