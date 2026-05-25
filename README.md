@@ -44,16 +44,12 @@ cd bigset
 
 Create a Clerk application at [dashboard.clerk.com](https://dashboard.clerk.com), then go to **JWT Templates** and enable the **Convex** template.
 
-### 2. Configure env files
+### 2. Configure env
 
 ```bash
-# Root .env — used by Docker for the frontend container
 cp .env.example .env
-# Fill in NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY and CLERK_SECRET_KEY
-
-# Frontend .env.local — used by Next.js and Convex CLI
-cp frontend/.env.example frontend/.env.local
-# Fill in all three Clerk keys (publishable, secret, and JWT issuer domain)
+# Fill in NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY, CLERK_SECRET_KEY,
+# CLERK_JWT_ISSUER_DOMAIN, OPENROUTER_API_KEY, and optional service keys.
 ```
 
 > **Required for the create-dataset wizard:** set `OPENROUTER_API_KEY` (used by the schema-inference pipeline). Get one at [openrouter.ai](https://openrouter.ai). Without it the wizard's "Generate Schema" step will fail.
@@ -76,7 +72,9 @@ cd ..
 make dev
 ```
 
-This starts all Docker services, waits for Convex to be healthy, and deploys Convex functions automatically. Once it's up:
+This starts all Docker services, waits for Convex to be healthy, and deploys Convex functions automatically.
+`make dev` checks that root `.env` contains real Clerk and OpenRouter values before it starts Docker.
+Once it's up:
 
 - App: http://localhost:3500
 - Convex dashboard: http://localhost:6791
@@ -88,26 +86,26 @@ This starts all Docker services, waits for Convex to be healthy, and deploys Con
 docker compose exec convex ./generate_admin_key.sh
 ```
 
-Paste the output into `frontend/.env.local` as `CONVEX_SELF_HOSTED_ADMIN_KEY`, then re-run `make dev`.
+Paste the output into `.env` as `CONVEX_SELF_HOSTED_ADMIN_KEY`, then re-run `make dev`.
 
 ### 6. Load curated public datasets
 
 The landing page and the dashboard's "Curated" section read from a set of 9 system-owned datasets. Load them with:
 
 ```bash
-cd frontend
-npx convex run publicSeed:seedPublicDatasets
+make seed-public-datasets
 ```
 
 The script is **idempotent** — rerunning it skips datasets that already exist (matched by a stable `seedKey`, so renaming a curated dataset never creates a duplicate). To add a 10th curated dataset, append it to `PUBLIC_DATASETS` in [frontend/convex/publicSeed.ts](frontend/convex/publicSeed.ts) with a fresh `seedKey` and rerun the command. To replace existing curated content in place, pass `force: true`:
 
 ```bash
-npx convex run publicSeed:seedPublicDatasets '{"force":true}'
+cd frontend
+node ../scripts/with-root-env.mjs npx convex run publicSeed:seedPublicDatasets '{"force":true}'
 ```
 
 Open [localhost:3500](http://localhost:3500) and click **Get started** to sign in.
 
-> **Note:** Backend env needs no setup — `backend/.env.example` has correct defaults. If you edit Convex functions in `frontend/convex/`, run `make convex-push` to deploy the changes.
+> **Note:** root `.env` is the only local env file. If you edit Convex functions in `frontend/convex/`, run `make convex-push` to deploy the changes.
 
 > **Free tier:** each signed-in account gets **2,500 row operations per calendar month** (resets on the 1st, UTC). The header shows a live usage badge; system-owned curated datasets bypass the quota.
 
@@ -133,14 +131,13 @@ Open [localhost:3500](http://localhost:3500) and click **Get started** to sign i
 bigset/
 ├── frontend/            Next.js 16 — UI + Convex schema & functions
 │   ├── convex/          Convex functions, schema, authz + quota helpers
-│   └── .env.local       Clerk + Convex keys (not committed)
 ├── backend/             Fastify + Mastra — schema inference + populate agent
 │   ├── src/pipeline/    Pure pipelines: schema inference + populate context
 │   ├── src/mastra/      Mastra workflows, agents, and tools (Studio at :4111 in dev)
 │   ├── src/email/       Transactional email (Resend) — sends "dataset ready" notifications
 │   └── src/analytics/   Server-side PostHog wrapper for backend-only events
 ├── scripts/             One-off scripts (e.g. verify-authz.sh)
-├── .env                 Clerk keys for docker-compose (not committed)
+├── .env                 Local env for frontend, backend, Convex CLI, and Docker (not committed)
 ├── docker-compose.dev.yml
 └── Makefile
 ```

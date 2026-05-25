@@ -4,6 +4,7 @@ node_modules/
 # No root package.json — ignore accidental `npm install` at repo root.
 # backend/package-lock.json is committed (npm ci in Docker). frontend uses bun.lock.
 /package-lock.json
+.npm-cache/
 .env
 .env.local
 Project_BigSet_brief.md

@@ -78,6 +78,11 @@ await fastify.register(async (instance) => {
     }
 
     try {
+      const auth = req.auth;
+      if (!auth) {
+        return reply.code(401).send({ error: "Authentication required" });
+      }
+
       // Ownership check uses the INTERNAL (admin-callable, no-authz) getter.
       // We can't use `api.datasets.get` here because that runs through
       // `loadReadableDataset`, which requires either a Clerk-identified
@@ -94,7 +99,7 @@ await fastify.register(async (instance) => {
       if (!dataset) {
         return reply.code(404).send({ error: "Dataset not found" });
       }
-      if (dataset.ownerId !== req.auth.userId) {
+      if (dataset.ownerId !== auth.userId) {
         return reply.code(403).send({ error: "Not authorized to populate this dataset" });
       }
 
@@ -108,7 +113,7 @@ await fastify.register(async (instance) => {
         inputData: {
           ...parsed.data,
           authContext: {
-            authorizedUserId: req.auth!.userId,
+            authorizedUserId: auth.userId,
             workflowRunId: run.runId,
           },
         },
@@ -257,13 +262,18 @@ await fastify.register(async (instance) => {
     }
 
     try {
+      const auth = req.auth;
+      if (!auth) {
+        return reply.code(401).send({ error: "Authentication required" });
+      }
+
       const dataset = await convex.query(internal.datasets.getInternal, {
         id: parsed.data.datasetId,
       });
       if (!dataset) {
         return reply.code(404).send({ error: "Dataset not found" });
       }
-      if (dataset.ownerId !== req.auth.userId) {
+      if (dataset.ownerId !== auth.userId) {
         return reply.code(403).send({ error: "Not authorized to update this dataset" });
       }
 
@@ -272,7 +282,7 @@ await fastify.register(async (instance) => {
         inputData: {
           ...parsed.data,
           authContext: {
-            authorizedUserId: req.auth!.userId,
+            authorizedUserId: auth.userId,
             workflowRunId: run.runId,
           },
         },
