@@ -26,6 +26,7 @@ services:
       - "3501:3501"
     volumes:
       - ./backend/src:/app/src
+      - ./scripts:/scripts:ro
     environment:
       CLIENT_ORIGIN: http://localhost:3500
       CONVEX_URL: http://convex:3210
@@ -56,6 +57,7 @@ services:
       - "4111:4111"
     volumes:
       - ./backend/src:/app/src
+      - ./scripts:/scripts:ro
     environment:
       HOST: 0.0.0.0
       PORT: 4111
@@ -86,6 +88,7 @@ services:
       # time and silently ignores local edits.
       - ./frontend/proxy.ts:/app/proxy.ts
       - ./frontend/next.config.ts:/app/next.config.ts
+      - ./scripts:/scripts:ro
     environment:
       NEXT_PUBLIC_CONVEX_URL: http://localhost:3210
       NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY}
