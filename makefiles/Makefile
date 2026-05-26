@@ -1,6 +1,6 @@
 SHELL := /usr/bin/env bash
 
-.PHONY: all dev validate-dev-env down clean convex-push convex-env seed-public-datasets ensure-admin-key install-deps
+.PHONY: all dev validate-dev-env down clean convex-push convex-env seed-public-datasets backfill-row-counts ensure-admin-key install-deps
 
 all: dev
 
@@ -20,6 +20,7 @@ dev: validate-dev-env install-deps
 	$(MAKE) ensure-admin-key
 	$(MAKE) convex-env
 	$(MAKE) convex-push
+	$(MAKE) backfill-row-counts
 	docker compose -f docker-compose.dev.yml up --build -d
 	@echo ""
 	@echo "BigSet is ready!"
@@ -145,6 +146,20 @@ convex-push:
 seed-public-datasets:
 	@test -f .env || { echo "Error: .env not found. Run: cp .env.example .env"; exit 1; }
 	@cd frontend && node ../scripts/with-root-env.mjs npx convex run publicSeed:seedPublicDatasets
+
+# One-shot idempotent migration: ensure every dataset doc has an accurate
+# `rowCount` field (the field the dashboard card footer reads). Hooked
+# into `make dev` so contributors pulling a branch that adds the field
+# don't have to remember to run it manually. Re-running on a fully
+# migrated DB reports `patched: 0, alreadyCorrect: N`.
+#
+# Matches the `seed-public-datasets` invocation shape (no --admin-key flag).
+# `with-root-env.mjs` injects CONVEX_SELF_HOSTED_ADMIN_KEY into the env so
+# the convex CLI picks it up automatically — avoids the Windows-cmd issue
+# where the `|` in the admin key gets parsed as a shell pipe.
+backfill-row-counts:
+	@test -f .env || { echo "Error: .env not found. Run: cp .env.example .env"; exit 1; }
+	@cd frontend && node ../scripts/with-root-env.mjs npx convex run datasets:backfillRowCounts
 
 down:
 	docker compose -f docker-compose.dev.yml down
