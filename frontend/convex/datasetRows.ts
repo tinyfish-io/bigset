@@ -142,6 +142,96 @@ export const update = internalMutation({
   },
 });
 
+/**
+ * Atomically merge new values into an existing row using per-field rules:
+ *
+ *   • Blank cells  → always filled with any non-empty incoming value,
+ *                    regardless of confidence. A higher-confidence partial
+ *                    row must never block a lower-confidence agent from
+ *                    filling columns that are still empty.
+ *   • Non-blank cells → only overwritten when newConfidence > existing
+ *                       row confidence (authoritative source wins).
+ *
+ * Why this lives in Convex and not in the tool layer:
+ *   The tool's in-memory rowIndex is stale during parallel agent runs.
+ *   Two concurrent investigate agents can both pass a client-side
+ *   confidence check against the same cached value, then race to write —
+ *   the slower, lower-confidence write can win. Performing the compare-
+ *   and-merge atomically inside a single Convex transaction eliminates
+ *   that window: each write reads the *committed* current state before
+ *   deciding what to change.
+ *
+ * Returns { merged: true } if at least one field was written, or
+ * { merged: false } when no field satisfied the merge rules (no-op).
+ * Quota is only charged on actual changes.
+ */
+export const mergeUpdate = internalMutation({
+  args: {
+    id: v.id("datasetRows"),
+    expectedDatasetId: v.id("datasets"),
+    /** Column values the caller wants to write. Internal _-prefixed keys are ignored. */
+    newData: v.record(v.string(), v.any()),
+    /** Caller's source confidence 0–1 (1.0 = primary source, 0.5 = aggregator). */
+    newConfidence: v.number(),
+    /** Optional per-column source URLs to merge into _sources. */
+    newSources: v.optional(v.record(v.string(), v.string())),
+  },
+  handler: async (ctx, args) => {
+    const existing = await assertRowInDataset(ctx, args.id, args.expectedDatasetId);
+    const existingData = existing.data as Record<string, unknown>;
+    const existingConfidence =
+      typeof existingData._confidence === "number" ? existingData._confidence : 0;
+
+    // Pass 1: determine which fields will actually change.
+    type FieldChange = { key: string; oldVal: string; newVal: unknown };
+    const changedFields: FieldChange[] = [];
+    const mergedData: Record<string, unknown> = { ...existingData };
+
+    for (const [key, newVal] of Object.entries(args.newData)) {
+      if (key.startsWith("_")) continue; // internal fields handled below
+      if (newVal === null || newVal === undefined || newVal === "") continue; // never write blanks
+
+      const existingVal = existingData[key];
+      const existingIsBlank =
+        existingVal === null || existingVal === undefined || existingVal === "";
+
+      if (existingIsBlank || args.newConfidence > existingConfidence) {
+        if (String(existingVal ?? "") !== String(newVal)) {
+          changedFields.push({ key, oldVal: String(existingVal ?? ""), newVal });
+          mergedData[key] = newVal;
+        }
+      }
+    }
+
+    if (changedFields.length === 0) return { merged: false };
+
+    // Charge quota only when we actually change something.
+    await consumeQuotaForDataset(ctx, args.expectedDatasetId, 1);
+
+    // Record history for each changed field.
+    for (const { key, oldVal, newVal } of changedFields) {
+      await ctx.db.insert("datasetHistory", {
+        datasetRowId: args.id,
+        columnName: key,
+        oldValue: oldVal,
+        newValue: String(newVal),
+        changedAt: Date.now(),
+      });
+    }
+
+    // Update internal housekeeping fields.
+    mergedData._confidence = Math.max(existingConfidence, args.newConfidence);
+    if (args.newSources) {
+      const existingSources =
+        (existingData._sources as Record<string, string> | undefined) ?? {};
+      mergedData._sources = { ...existingSources, ...args.newSources };
+    }
+
+    await ctx.db.patch(args.id, { data: mergedData });
+    return { merged: true };
+  },
+});
+
 export const clearByDataset = internalMutation({
   args: { datasetId: v.id("datasets") },
   handler: async (ctx, args) => {
@@ -223,6 +313,49 @@ export const remove = internalMutation({
     }
 
     await ctx.db.delete(args.id);
+  },
+});
+
+/**
+ * Delete rows from a dataset that are incomplete — i.e. any row where at
+ * least one of the required column names is missing, null, or an empty
+ * string in its data record.
+ *
+ * Called by the backend after the populate workflow completes so that only
+ * fully-filled rows appear in the live dataset. Best-effort: the backend
+ * catches and logs failures rather than failing the whole populate response.
+ *
+ * columnNames must be the FULL list of required columns for this dataset
+ * (not a subset). Internal _-prefixed fields (e.g. _confidence, _sources)
+ * are never treated as required columns.
+ *
+ * Returns { deletedCount } for backend logging.
+ */
+export const deleteIncomplete = internalMutation({
+  args: {
+    datasetId: v.id("datasets"),
+    columnNames: v.array(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const rows = await ctx.db
+      .query("datasetRows")
+      .withIndex("by_dataset", (q) => q.eq("datasetId", args.datasetId))
+      .collect();
+
+    let deletedCount = 0;
+    for (const row of rows) {
+      const data = row.data as Record<string, unknown>;
+      const isComplete = args.columnNames.every((col) => {
+        if (col.startsWith("_")) return true; // skip internal fields (_confidence, _sources, etc.)
+        const val = data[col];
+        return val !== null && val !== undefined && val !== "";
+      });
+      if (!isComplete) {
+        await ctx.db.delete(row._id);
+        deletedCount++;
+      }
+    }
+    return { deletedCount };
   },
 });
 

@@ -30,6 +30,15 @@ export const env = {
 
   OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY,
 
+  // Hard cap on the number of fully-complete rows the populate agent will
+  // insert per run. The agent stops as soon as this count is reached.
+  // Override with BIGSET_POPULATE_TARGET_ROWS=N in the root .env file.
+  // Invalid values (NaN, ≤0, non-integer) fall back to the default of 20.
+  POPULATE_TARGET_ROWS: (() => {
+    const parsed = Number(process.env.BIGSET_POPULATE_TARGET_ROWS);
+    return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 20;
+  })(),
+
   // Resend (transactional email). Optional — when RESEND_API_KEY is unset
   // the email module no-ops with a log line, so local dev works without
   // a Resend account. EMAIL_FROM must be a domain that's verified in the

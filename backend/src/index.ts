@@ -179,6 +179,26 @@ async function runPopulateWorkflowInBackground({
       return;
     }
 
+    // ── Prune incomplete rows ────────────────────────────────────────
+    // Delete any row the agent inserted but never fully filled, so only
+    // complete rows appear in the live dataset. Best-effort: log on
+    // failure but don't block the status transition.
+    try {
+      const columnNames = input.columns.map((c) => c.name);
+      const { deletedCount } = await convex.mutation(
+        internal.datasetRows.deleteIncomplete,
+        { datasetId, columnNames },
+      );
+      if (deletedCount > 0) {
+        logger.info({ deletedCount, datasetId }, "Pruned incomplete rows post-workflow");
+      }
+    } catch (pruneErr) {
+      logger.warn(
+        { err: pruneErr, datasetId },
+        "Failed to prune incomplete rows; proceeding with status transition",
+      );
+    }
+
     const rowCount = await convex.query(
       internal.datasetRows.countByDataset,
       { datasetId },

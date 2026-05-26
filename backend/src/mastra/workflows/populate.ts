@@ -71,12 +71,12 @@ const buildPromptStep = createStep({
 
     // Note: `datasetId` is intentionally OMITTED from the prompt. The
     // agent's tools are pre-bound to the authorized dataset via closure
-    // (see tools/dataset-tools.ts). If the LLM doesn't know the id, it
+    // (see tools/investigate-tool.ts). If the LLM doesn't know the id, it
     // can't be tricked into typing it into a redirect attempt — and even
     // if it could, the tools no longer accept that argument.
     //
     // The orchestrator does not call insert_row directly — only the
-    // investigate_row subagents do. So the prompt only needs to describe
+    // extract_rows subagents do. So the prompt only needs to describe
     // what data to find, not how to format insert calls.
     const prompt = `Dataset: ${inputData.datasetName}
 Description: ${inputData.description}
@@ -85,7 +85,7 @@ Data fields to collect:
 ${columnsDesc}
 
 Search the web broadly to find real entities that fit this dataset topic.
-For each lead you find, call investigate_row to hand it off to a subagent for deep research and insertion.`;
+For each batch of promising URLs you find, call extract_rows to hand them to an extraction agent.`;
 
     console.log(
       `[build-prompt] Built prompt for ${inputData.datasetName} (${inputData.columns.length} columns)`,
