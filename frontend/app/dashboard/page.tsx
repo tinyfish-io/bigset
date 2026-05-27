@@ -275,7 +275,11 @@ function ProfileMenu({
   return (
     <div ref={menuRef} className="relative">
       <button
+        type="button"
         onClick={() => setOpen((o) => !o)}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-controls="profile-menu"
         className="flex items-center gap-1.5 rounded-full py-0.5 pl-0.5 pr-2 hover:bg-foreground/[0.05] transition-colors"
       >
         {imageUrl ? (
@@ -293,7 +297,7 @@ function ProfileMenu({
       </button>
 
       {open && (
-        <div className="absolute right-0 top-full mt-1.5 w-52 rounded-xl border border-border bg-surface shadow-xl ring-1 ring-black/[0.04] z-50 overflow-hidden">
+        <div id="profile-menu" role="menu" className="absolute right-0 top-full mt-1.5 w-52 rounded-xl border border-border bg-surface shadow-xl ring-1 ring-black/[0.04] z-50 overflow-hidden">
           <div className="px-3 py-2 border-b border-border">
             <p className="text-xs font-medium text-foreground truncate">{name}</p>
             {email && (

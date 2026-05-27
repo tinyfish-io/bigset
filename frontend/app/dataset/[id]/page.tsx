@@ -2,7 +2,7 @@
 
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useConvexAuth } from "convex/react";
 import { useAuth, useUser, useClerk } from "@clerk/nextjs";
 import type { UserResource } from "@clerk/types";
@@ -64,7 +64,7 @@ export default function DatasetPage() {
       autoPopulateFired.current = dataset._id;
       handlePopulate();
     }
-  }, [dataset, userId]);
+  }, [dataset, userId, handlePopulate]);
 
   async function handleExport(format: "csv" | "xlsx") {
     if (!dataset || !rows || exporting) return;
@@ -131,7 +131,7 @@ export default function DatasetPage() {
     }
   }
 
-  async function handlePopulate() {
+  const handlePopulate = useCallback(async () => {
     if (!dataset || populating || dataset.status === "building") return;
     setPopulating(true);
     try {
@@ -159,7 +159,7 @@ export default function DatasetPage() {
     } finally {
       setPopulating(false);
     }
-  }
+  }, [dataset, populating, getToken]);
 
   if (authLoading || dataset === undefined || rows === undefined) {
     return (
@@ -485,9 +485,10 @@ function ConfirmPopulateModal({
     <div
       className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40"
       onClick={(e) => { if (e.target === e.currentTarget) onCancel(); }}
+      role="presentation"
     >
-      <div className="w-full max-w-xs rounded-xl border border-border bg-surface shadow-2xl p-4 text-center">
-        <p className="text-sm font-semibold text-foreground">
+      <div role="dialog" aria-modal="true" aria-labelledby="confirm-populate-title" className="w-full max-w-xs rounded-xl border border-border bg-surface shadow-2xl p-4 text-center">
+        <p id="confirm-populate-title" className="text-sm font-semibold text-foreground">
           This will delete {rowCount === 1 ? "1 row" : `${rowCount} rows`}. This can&apos;t be undone.
         </p>
         <div className="mt-4 flex gap-2">

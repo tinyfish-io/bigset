@@ -38,6 +38,8 @@ export function CellValue({
         style={{ textDecorationColor: "var(--link-decoration)" }}
         onMouseEnter={(e) => (e.currentTarget.style.textDecorationColor = "var(--link-decoration-hover)")}
         onMouseLeave={(e) => (e.currentTarget.style.textDecorationColor = "var(--link-decoration)")}
+        onFocus={(e) => (e.currentTarget.style.textDecorationColor = "var(--link-decoration-hover)")}
+        onBlur={(e) => (e.currentTarget.style.textDecorationColor = "var(--link-decoration)")}
         title={str}
         onClick={(e) => e.stopPropagation()}
       >
