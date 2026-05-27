@@ -26,6 +26,7 @@ export default function DatasetPage() {
   const [populating, setPopulating] = useState(false);
   const [updating, setUpdating] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [confirmPopulate, setConfirmPopulate] = useState(false);
 
   const datasetId = params.id as Id<"datasets">;
@@ -212,10 +213,6 @@ export default function DatasetPage() {
           <StatusBadge status={dataset.status} />
         </div>
         <div className="flex items-center gap-1.5">
-          <span className="text-[11px] text-muted mr-1">
-            {dataset.cadence}
-          </span>
-
           <ExportDropdown
             open={exportOpen}
             onToggle={() => setExportOpen((o) => !o)}
@@ -227,29 +224,25 @@ export default function DatasetPage() {
             onExport={(fmt) => { setExportOpen(false); handleExport(fmt); }}
           />
 
-          <button
-            onClick={handleUpdate}
-            disabled={updateDisabled}
-            className="flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium text-foreground hover:bg-foreground/[0.04] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>
-            {updateLabel}
-          </button>
-
-          <button
-            onClick={() => {
+          <SettingsDropdown
+            open={settingsOpen}
+            onToggle={() => setSettingsOpen((o) => !o)}
+            onClose={() => setSettingsOpen(false)}
+            cadence={dataset.cadence}
+            updateLabel={updateLabel}
+            updateDisabled={updateDisabled}
+            populateLabel={populateLabel}
+            populateDisabled={populateDisabled}
+            onUpdate={() => { setSettingsOpen(false); handleUpdate(); }}
+            onPopulate={() => {
+              setSettingsOpen(false);
               if (rows.length > 0) {
                 setConfirmPopulate(true);
               } else {
                 handlePopulate();
               }
             }}
-            disabled={populateDisabled}
-            className="flex items-center gap-1.5 rounded-lg bg-foreground text-surface px-2.5 py-1.5 text-xs font-medium hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-            {populateLabel}
-          </button>
+          />
 
           <div className="w-px h-4 bg-border mx-0.5" />
 
@@ -375,6 +368,83 @@ function ExportDropdown({
             >
               <span className="font-mono text-[10px] px-1 py-0.5 rounded bg-foreground/[0.06]">.xlsx</span>
               {exporting === "xlsx" ? "Exporting…" : "Excel spreadsheet"}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Settings dropdown                                                  */
+/* ------------------------------------------------------------------ */
+
+function SettingsDropdown({
+  open,
+  onToggle,
+  onClose,
+  cadence,
+  updateLabel,
+  updateDisabled,
+  populateLabel,
+  populateDisabled,
+  onUpdate,
+  onPopulate,
+}: {
+  open: boolean;
+  onToggle: () => void;
+  onClose: () => void;
+  cadence: string;
+  updateLabel: string;
+  updateDisabled: boolean;
+  populateLabel: string;
+  populateDisabled: boolean;
+  onUpdate: () => void;
+  onPopulate: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function handleClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [open, onClose]);
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={onToggle}
+        className="flex items-center justify-center rounded-lg border border-border h-[30px] w-[30px] text-foreground hover:bg-foreground/[0.04] transition-colors"
+        aria-label="Settings"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+      </button>
+
+      {open && (
+        <div className="absolute right-0 top-full mt-1.5 w-48 rounded-xl border border-border bg-surface shadow-xl ring-1 ring-black/[0.04] z-50 overflow-hidden">
+          <div className="px-3 py-1.5 border-b border-border">
+            <span className="text-[10px] font-medium text-muted uppercase tracking-wider">{cadence}</span>
+          </div>
+          <div className="p-1">
+            <button
+              onClick={onUpdate}
+              disabled={updateDisabled}
+              className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs text-foreground hover:bg-foreground/[0.05] transition-colors disabled:opacity-40"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>
+              {updateLabel}
+            </button>
+            <button
+              onClick={onPopulate}
+              disabled={populateDisabled}
+              className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs text-red-500 hover:bg-red-500/[0.08] transition-colors disabled:opacity-40"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              {populateLabel}
             </button>
           </div>
         </div>
