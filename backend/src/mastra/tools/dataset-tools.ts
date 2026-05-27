@@ -150,6 +150,11 @@ export function buildPopulateTools(
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.error(`[insert_row] Failed: ${logCtx} err=${msg}`);
+        if (msg.includes("Duplicate"))
+          return {
+            success: false,
+            error: `${msg} Move on to the next entity.`,
+          };
         if (msg.includes("Quota") || msg.includes("quota"))
           return {
             success: false,

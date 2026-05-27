@@ -4,6 +4,7 @@ export interface DatasetColumn {
   name: string;
   type: ColumnType;
   description?: string;
+  isPrimaryKey?: boolean;
 }
 
 export interface DatasetMeta {

@@ -12,9 +12,9 @@ const searchResultSchema = z.object({
 export const searchWebTool = createTool({
   id: "search_web",
   description:
-    "Search the web for information. Returns a list of results with titles, snippets, and URLs. Use this to find real data for the dataset.",
+    'Search the web for information. Returns a list of results with titles, snippets, and URLs. Call with: {"query": "your search terms"}',
   inputSchema: z.object({
-    query: z.string().describe("The search query"),
+    query: z.string().describe("The search query string"),
   }),
   outputSchema: z.object({
     results: z.array(searchResultSchema).optional(),
@@ -75,9 +75,9 @@ export const searchWebTool = createTool({
 export const fetchPageTool = createTool({
   id: "fetch_page",
   description:
-    "Fetch a web page and extract its content as clean markdown text. Use this after search_web to read the full content of a page.",
+    'Fetch a web page and extract its content as clean markdown text. Call with: {"url": "https://example.com/page"}',
   inputSchema: z.object({
-    url: z.string().describe("The URL to fetch"),
+    url: z.string().describe("The full URL to fetch, starting with https://"),
   }),
   outputSchema: z.object({
     title: z.string().optional(),

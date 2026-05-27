@@ -66,13 +66,48 @@ export const insert = internalMutation({
     sources: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
-    // `consumeQuotaForDataset` returns the dataset doc so we don't
-    // double-read it.
-    const dataset = await consumeQuotaForDataset(ctx, args.datasetId, 1);
+    const dataset = await ctx.db.get(args.datasetId);
+    if (!dataset) throw new Error("Dataset not found");
 
-    // Pre-insert count is either the cached counter (fast path) or — for
-    // datasets whose docs predate the rowCount field — recomputed once
-    // here. Subsequent inserts on the same dataset hit the fast path.
+    // Dedup: reject inserts that collide on primary key columns.
+    // Runs BEFORE quota so rejected dupes don't burn quota.
+    const pkColumns = (dataset.columns ?? []).filter(
+      (c: { isPrimaryKey?: boolean }) => c.isPrimaryKey,
+    );
+    if (pkColumns.length > 0) {
+      const existingRows = await ctx.db
+        .query("datasetRows")
+        .withIndex("by_dataset", (q) => q.eq("datasetId", args.datasetId))
+        .collect();
+
+      const isDuplicate = existingRows.some((existing) => {
+        const existingData = existing.data as Record<string, unknown>;
+        return pkColumns.every((pk: { name: string }) => {
+          const newVal = args.data[pk.name];
+          const existingVal = existingData[pk.name];
+          return (
+            newVal !== undefined &&
+            newVal !== "" &&
+            existingVal !== undefined &&
+            existingVal !== "" &&
+            String(newVal).toLowerCase() === String(existingVal).toLowerCase()
+          );
+        });
+      });
+
+      if (isDuplicate) {
+        const pkDesc = pkColumns
+          .map((pk: { name: string }) => `${pk.name}="${args.data[pk.name]}"`)
+          .join(", ");
+        throw new Error(
+          `Duplicate: a row with ${pkDesc} already exists. Skipping insert.`,
+        );
+      }
+    }
+
+    // Quota consumption only happens for genuine new rows.
+    await consumeQuotaForDataset(ctx, args.datasetId, 1);
+
     const previousCount =
       typeof dataset.rowCount === "number"
         ? dataset.rowCount
@@ -80,9 +115,6 @@ export const insert = internalMutation({
 
     const rowId = await ctx.db.insert("datasetRows", args);
 
-    // Maintain the denormalized counter the dashboard reads from. Same
-    // transaction as the row insert → atomic; quota-rejected inserts
-    // never bump the counter.
     await ctx.db.patch(args.datasetId, { rowCount: previousCount + 1 });
 
     return rowId;

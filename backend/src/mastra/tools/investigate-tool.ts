@@ -10,6 +10,11 @@ const investigateInputSchema = z.object({
     .describe(
       "What entity to look for, e.g. 'head of GTM at Appcharge' or 'Starbucks coffee products on Amazon'",
     ),
+  primary_keys: z
+    .record(z.string(), z.string())
+    .describe(
+      "REQUIRED: the primary key column value(s) for this entity. e.g. {\"Company Name\": \"Stripe\"} or {\"First Name\": \"John\", \"Last Name\": \"Doe\"}. You MUST provide at least the primary key values you have found.",
+    ),
   context: z
     .string()
     .describe(
@@ -51,7 +56,7 @@ function parseInvestigateResult(
 }
 
 /**
- * Build the investigate_row tool scoped to one dataset.
+ * Build the run_subagent tool scoped to one dataset.
  *
  * The orchestrator calls this to hand off a lead to a fresh subagent.
  * The subagent does deep research, inserts at most one row, and returns
@@ -60,20 +65,20 @@ function parseInvestigateResult(
  * authorizedDatasetId and authContext are captured by closure — not
  * exposed in the tool schema, never visible to the orchestrator LLM.
  */
-export function buildInvestigateTool(
+export function buildSubagentTool(
   authorizedDatasetId: string,
   authContext: AuthContext,
   columns: PopulateColumn[],
 ) {
   return createTool({
-    id: "investigate_row",
+    id: "run_subagent",
     description:
-      "Hand off a lead to a subagent that will research it deeply and insert a single row if it finds real, verified data. Pass all partial data and URLs you have found. Returns whether a row was inserted, plus clues for finding more entries.",
+      "Hand off a lead to a subagent that will research it deeply and insert a single row if it finds real, verified data. You MUST pass the primary key values (primary_keys) for the entity — the subagent will fill in the remaining columns. Also pass any URLs and context you have found.",
     inputSchema: investigateInputSchema,
     outputSchema: investigateOutputSchema,
-    execute: async ({ entity_hint, context, urls, notes }) => {
+    execute: async ({ entity_hint, primary_keys, context, urls, notes }) => {
       console.log(
-        `[investigate_row] spawning subagent user=${authContext.authorizedUserId} run=${authContext.workflowRunId} dataset=${authorizedDatasetId} entity="${entity_hint}"`,
+        `[run_subagent] spawning subagent user=${authContext.authorizedUserId} run=${authContext.workflowRunId} dataset=${authorizedDatasetId} entity="${entity_hint}" pk=${JSON.stringify(primary_keys)}`,
       );
       try {
         const agent = buildInvestigateAgent(
@@ -82,6 +87,9 @@ export function buildInvestigateTool(
           columns,
         );
 
+        const pkBlock = Object.entries(primary_keys)
+          .map(([k, v]) => `- ${k}: ${v}`)
+          .join("\n");
         const urlsBlock =
           urls && urls.length > 0
             ? `\nUseful URLs to start from:\n${urls.map((u) => `- ${u}`).join("\n")}`
@@ -92,13 +100,16 @@ export function buildInvestigateTool(
 
 Entity: ${entity_hint}
 
+Primary key values (MUST be included in insert_row):
+${pkBlock}
+
 Context (partial data already found):
 ${context}${urlsBlock}${notesBlock}`;
 
-        const result = await agent.generate(prompt, { maxSteps: 25 });
+        const result = await agent.generate(prompt, { maxSteps: 10 });
         const parsed = parseInvestigateResult(result.text);
         console.log(
-          `[investigate_row] done entity="${entity_hint}" inserted=${parsed.inserted} steps=${result.steps?.length ?? "?"}` +
+          `[run_subagent] done entity="${entity_hint}" inserted=${parsed.inserted} steps=${result.steps?.length ?? "?"}` +
             (parsed.row_summary ? `\n  summary: ${parsed.row_summary}` : "") +
             (parsed.reason ? `\n  reason:  ${parsed.reason}` : "") +
             (parsed.clues ? `\n  clues:   ${parsed.clues}` : ""),
@@ -106,7 +117,7 @@ ${context}${urlsBlock}${notesBlock}`;
         return parsed;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        console.error(`[investigate_row] subagent error entity="${entity_hint}" err=${msg}`);
+        console.error(`[run_subagent] subagent error entity="${entity_hint}" err=${msg}`);
         return {
           inserted: false,
           reason: `Subagent failed: ${msg}`,

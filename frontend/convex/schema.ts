@@ -43,8 +43,17 @@ export default defineSchema({
           v.literal("date")
         ),
         description: v.optional(v.string()),
+        isPrimaryKey: v.optional(v.boolean()),
       })
     ),
+    retrievalStrategy: v.optional(
+      v.union(
+        v.literal("search_fetch"),
+        v.literal("browser"),
+        v.literal("hybrid")
+      )
+    ),
+    sourceHint: v.optional(v.string()),
   })
     .index("by_owner", ["ownerId"])
     .index("by_visibility", ["visibility"])

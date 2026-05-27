@@ -1,5 +1,7 @@
 import { createStep, createWorkflow } from "@mastra/core/workflows";
 import { z } from "zod";
+import { generateText } from "ai";
+import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { datasetContextSchema, populateColumnSchema } from "../../pipeline/populate.js";
 import { convex, internal } from "../../convex.js";
 import { buildPopulateAgent } from "../agents/populate.js";
@@ -48,6 +50,90 @@ const clearRowsStep = createStep({
   },
 });
 
+const enumerationOutputSchema = populateInputSchema.extend({
+  enumerationStrategy: z.enum(["scraper", "search"]),
+  manifest: z.array(z.record(z.string(), z.string())),
+  sourceUrl: z.string().optional(),
+});
+
+const enumerateStep = createStep({
+  id: "enumerate",
+  inputSchema: populateInputSchema,
+  outputSchema: enumerationOutputSchema,
+  execute: async ({ inputData }) => {
+    console.log(`[enumerate] Classifying dataset ${inputData.datasetId}`);
+
+    const dataset = await convex.query(internal.datasets.getInternal, {
+      id: inputData.datasetId,
+    });
+
+    const retrievalStrategy = (dataset as Record<string, unknown>)?.retrievalStrategy as string ?? "search_fetch";
+    const sourceHint = (dataset as Record<string, unknown>)?.sourceHint as string ?? "";
+
+    const pkColumns = inputData.columns.filter((c) => c.isPrimaryKey);
+    const columnsDesc = inputData.columns
+      .map(
+        (c) =>
+          `- "${c.name}" (${c.type})${c.isPrimaryKey ? " [PK]" : ""}${c.description ? `: ${c.description}` : ""}`,
+      )
+      .join("\n");
+
+    const classificationPrompt = `You are classifying a dataset's enumeration strategy.
+
+Dataset: ${inputData.datasetName}
+Description: ${inputData.description}
+Retrieval strategy hint: ${retrievalStrategy}
+Source hint: ${sourceHint}
+Primary key columns: ${pkColumns.map((c) => c.name).join(", ") || "none"}
+
+Columns:
+${columnsDesc}
+
+Can ALL primary key values for this dataset be enumerated from a single source URL (a directory page, registry, listing, catalog, or API)?
+
+Answer "scraper" if yes — a single source lists all entities (e.g. YC company directory, Wikipedia list pages, product catalogs, government registries).
+Answer "search" if no — entities must be discovered through broad web searches with no single authoritative listing.
+
+Respond with EXACTLY one word: scraper or search`;
+
+    let classification: "scraper" | "search" = "search";
+    try {
+      const openrouter = createOpenRouter({
+        apiKey: process.env.OPENROUTER_API_KEY!,
+      });
+      const result = await generateText({
+        model: openrouter("anthropic/claude-sonnet-4-6"),
+        prompt: classificationPrompt,
+        maxOutputTokens: 10,
+      });
+      const answer = result.text.trim().toLowerCase();
+      if (answer === "scraper" || answer === "search") {
+        classification = answer;
+      } else {
+        console.warn(`[enumerate] Unexpected classification "${answer}", defaulting to "search"`);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[enumerate] Classification failed: ${msg}, defaulting to "search"`);
+    }
+
+    if (classification === "scraper") {
+      console.log(
+        `[enumerate] Classified as SCRAPER (source: ${sourceHint}). Stub: empty manifest, falling through to search.`,
+      );
+    } else {
+      console.log(`[enumerate] Classified as SEARCH. Proceeding with fan-out.`);
+    }
+
+    return {
+      ...inputData,
+      enumerationStrategy: classification,
+      manifest: [],
+      sourceUrl: classification === "scraper" ? sourceHint || undefined : undefined,
+    };
+  },
+});
+
 const buildPromptOutputSchema = z.object({
   prompt: z.string(),
   // Threaded through so the agent step can build a dataset-scoped agent.
@@ -59,36 +145,50 @@ const buildPromptOutputSchema = z.object({
 
 const buildPromptStep = createStep({
   id: "build-prompt",
-  inputSchema: populateInputSchema,
+  inputSchema: enumerationOutputSchema,
   outputSchema: buildPromptOutputSchema,
   execute: async ({ inputData }) => {
+    const pkColumns = inputData.columns.filter((c) => c.isPrimaryKey);
     const columnsDesc = inputData.columns
       .map(
         (c) =>
-          `- "${c.name}" (${c.type})${c.description ? `: ${c.description}` : ""}`,
+          `- "${c.name}" (${c.type})${c.isPrimaryKey ? " [PRIMARY KEY]" : ""}${c.description ? `: ${c.description}` : ""}`,
       )
       .join("\n");
 
-    // Note: `datasetId` is intentionally OMITTED from the prompt. The
-    // agent's tools are pre-bound to the authorized dataset via closure
-    // (see tools/dataset-tools.ts). If the LLM doesn't know the id, it
-    // can't be tricked into typing it into a redirect attempt — and even
-    // if it could, the tools no longer accept that argument.
-    //
-    // The orchestrator does not call insert_row directly — only the
-    // investigate_row subagents do. So the prompt only needs to describe
-    // what data to find, not how to format insert calls.
+    const pkNote =
+      pkColumns.length > 0
+        ? `\nPrimary key column(s): ${pkColumns.map((c) => `"${c.name}"`).join(", ")}. When calling run_subagent, you MUST pass these values in the primary_keys field. The subagent will research and fill in the remaining columns.`
+        : "";
+
+    let manifestNote = "";
+    if (inputData.manifest.length > 0) {
+      const manifestList = inputData.manifest
+        .map((entry) =>
+          Object.entries(entry)
+            .map(([k, v]) => `${k}: ${v}`)
+            .join(", "),
+        )
+        .join("\n  - ");
+      manifestNote = `\n\nPre-discovered entities (already enumerated — go straight to investigating these):\n  - ${manifestList}`;
+    }
+
+    let strategyNote = "";
+    if (inputData.enumerationStrategy === "scraper" && inputData.manifest.length === 0) {
+      strategyNote = `\n\nNote: This dataset has an authoritative source${inputData.sourceUrl ? ` (${inputData.sourceUrl})` : ""}. Start your search there — it likely contains a directory or listing of all entities.`;
+    }
+
     const prompt = `Dataset: ${inputData.datasetName}
 Description: ${inputData.description}
 
 Data fields to collect:
-${columnsDesc}
+${columnsDesc}${pkNote}${manifestNote}${strategyNote}
 
 Search the web broadly to find real entities that fit this dataset topic.
-For each lead you find, call investigate_row to hand it off to a subagent for deep research and insertion.`;
+For each lead you find, call run_subagent with the primary key values and any context/URLs you have found.`;
 
     console.log(
-      `[build-prompt] Built prompt for ${inputData.datasetName} (${inputData.columns.length} columns)`,
+      `[build-prompt] Built prompt for ${inputData.datasetName} (${inputData.columns.length} columns, strategy=${inputData.enumerationStrategy})`,
     );
     return {
       prompt,
@@ -136,6 +236,7 @@ export const populateWorkflow = createWorkflow({
   outputSchema: z.object({ text: z.string() }),
 })
   .then(clearRowsStep)
+  .then(enumerateStep)
   .then(buildPromptStep)
   .then(agentStep)
   .commit();
