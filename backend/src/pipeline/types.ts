@@ -61,10 +61,12 @@ export const datasetSchemaSchema = z
     }
 
     const pkNames = pkCols.map((c) => c.name);
-    const declaredPk = Array.isArray(data.primary_key)
+    const declaredPkRaw = Array.isArray(data.primary_key)
       ? data.primary_key
       : [data.primary_key];
+    const declaredPk = [...new Set(declaredPkRaw)];
     if (
+      declaredPk.length !== declaredPkRaw.length ||
       declaredPk.length !== pkNames.length ||
       !declaredPk.every((n) => pkNames.includes(n))
     ) {
