@@ -1,0 +1,46 @@
+[
+  {
+    "id": "yc-recent-batch-companies",
+    "datasetName": "YC Recent Batch Companies",
+    "description": "Companies from recent Y Combinator batches (W24, S24). Include name, website, one-line description, and batch.",
+    "columns": [
+      { "name": "company_name", "type": "text", "description": "Company name" },
+      { "name": "website", "type": "url", "description": "Company website URL" },
+      { "name": "description", "type": "text", "description": "One-line description of what the company does" },
+      { "name": "batch", "type": "text", "description": "YC batch, e.g. W24 or S24" }
+    ]
+  },
+  {
+    "id": "b2b-saas-free-tier",
+    "datasetName": "B2B SaaS with Free Tiers",
+    "description": "Popular B2B SaaS tools that offer a free tier or freemium plan. Include tool name, category, free-tier summary, and pricing page URL.",
+    "columns": [
+      { "name": "tool_name", "type": "text", "description": "Name of the SaaS tool" },
+      { "name": "category", "type": "text", "description": "Category, e.g. CRM, Analytics, DevOps" },
+      { "name": "free_tier_summary", "type": "text", "description": "What the free tier includes" },
+      { "name": "pricing_page_url", "type": "url", "description": "URL to the pricing page" }
+    ]
+  },
+  {
+    "id": "us-national-parks",
+    "datasetName": "US National Parks",
+    "description": "All US National Parks with state, year established, and official NPS page URL.",
+    "columns": [
+      { "name": "park_name", "type": "text", "description": "Official park name" },
+      { "name": "state", "type": "text", "description": "US state(s) the park is in" },
+      { "name": "established_year", "type": "number", "description": "Year the park was established" },
+      { "name": "official_page_url", "type": "url", "description": "URL on nps.gov" }
+    ]
+  },
+  {
+    "id": "ai-research-labs",
+    "datasetName": "University AI Research Labs",
+    "description": "Academic AI research labs at major universities. Include lab name, university, research focus, and lab website URL.",
+    "columns": [
+      { "name": "lab_name", "type": "text", "description": "Name of the research lab" },
+      { "name": "university", "type": "text", "description": "Host university" },
+      { "name": "research_focus", "type": "text", "description": "Primary research area, e.g. NLP, robotics, RL" },
+      { "name": "lab_website_url", "type": "url", "description": "Lab homepage URL" }
+    ]
+  }
+]
