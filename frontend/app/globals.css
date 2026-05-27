@@ -11,6 +11,9 @@
   --muted: #7c7f74;
   --accent: #1d1b16;
   --accent-text: rgb(243, 244, 240);
+  --link: #2563eb;
+  --link-decoration: rgba(37, 99, 235, 0.3);
+  --link-decoration-hover: rgba(37, 99, 235, 0.6);
   --table-row-height: 34px;
   --table-header-height: 32px;
   --table-cell-px: 12px;
@@ -25,6 +28,9 @@
   --muted: #7a756c;
   --accent: #e8e4de;
   --accent-text: #141210;
+  --link: #93b4f5;
+  --link-decoration: rgba(147, 180, 245, 0.25);
+  --link-decoration-hover: rgba(147, 180, 245, 0.5);
 }
 
 @theme inline {
@@ -35,6 +41,7 @@
   --color-muted: var(--muted);
   --color-accent: var(--accent);
   --color-accent-text: var(--accent-text);
+  --color-link: var(--link);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }

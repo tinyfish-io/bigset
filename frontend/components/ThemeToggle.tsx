@@ -44,7 +44,7 @@ function readServerTheme(): Theme {
   return "light";
 }
 
-export function ThemeToggle({ className = "" }: { className?: string }) {
+export function useTheme() {
   const theme = useSyncExternalStore(
     subscribeToThemeChange,
     readEffectiveTheme,
@@ -56,14 +56,16 @@ export function ThemeToggle({ className = "" }: { className?: string }) {
     applyTheme(next);
     try {
       window.localStorage.setItem(STORAGE_KEY, next);
-    } catch {
-      // localStorage may be blocked (Safari private mode etc.) — toggle
-      // still works for the session, just doesn't persist.
-    }
+    } catch {}
     window.dispatchEvent(new Event(THEME_CHANGED_EVENT));
     track(EVENTS.THEME_CHANGED, { theme: next });
   }
 
+  return { theme, toggle } as const;
+}
+
+export function ThemeToggle({ className = "" }: { className?: string }) {
+  const { theme, toggle } = useTheme();
   const label = theme === "dark" ? "Switch to light mode" : "Switch to dark mode";
 
   return (
@@ -74,8 +76,6 @@ export function ThemeToggle({ className = "" }: { className?: string }) {
       title={label}
       className={`inline-flex items-center justify-center h-7 w-7 text-muted hover:text-foreground transition-colors ${className}`}
     >
-      {/* Both icons rendered, one shown based on theme. Avoids a flash
-          when switching since neither has to mount/unmount. */}
       {theme === "dark" ? <SunIcon /> : <MoonIcon />}
     </button>
   );
