@@ -436,7 +436,7 @@ function SettingsDropdown({
             <button
               onClick={onPopulate}
               disabled={populateDisabled}
-              className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs text-red-500 hover:bg-red-500/[0.08] transition-colors disabled:opacity-40"
+              className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs text-red-500 bg-red-500/[0.04] hover:bg-red-500/[0.1] transition-colors disabled:opacity-40"
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polygon points="5 3 19 12 5 21 5 3"/></svg>
               {populateLabel}
