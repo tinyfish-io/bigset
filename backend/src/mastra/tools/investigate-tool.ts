@@ -12,6 +12,9 @@ const investigateInputSchema = z.object({
     ),
   primary_keys: z
     .record(z.string(), z.string())
+    .refine((v) => Object.keys(v).length > 0, {
+      message: "primary_keys must include at least one primary-key value",
+    })
     .describe(
       "REQUIRED: the primary key column value(s) for this entity. e.g. {\"Company Name\": \"Stripe\"} or {\"First Name\": \"John\", \"Last Name\": \"Doe\"}. You MUST provide at least the primary key values you have found.",
     ),
