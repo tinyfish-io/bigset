@@ -13,13 +13,6 @@ import { sendTransactionalEmail } from "./email/send.js";
 import { datasetReadyTemplate } from "./email/templates/dataset-ready.js";
 import { capture, shutdown as shutdownAnalytics } from "./analytics/posthog.js";
 import { EVENTS } from "./analytics/events.js";
-import { patchMastraSanitizeToolCallInput } from "./mastra/tools/model-middleware.js";
-
-// Patch JSON.parse globally so that double-encoded tool-call inputs from kimi-k2
-// (e.g. `"{"key":"val"}"` instead of `{"key":"val"}`) are recovered before
-// Mastra's stream parser throws "Error converting tool call input to JSON".
-// Must run before any agent or workflow is executed.
-await patchMastraSanitizeToolCallInput();
 
 /** Domain part of an email, for analytics (we never log full addresses). */
 function emailDomain(email: string): string {
