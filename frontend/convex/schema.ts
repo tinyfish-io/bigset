@@ -99,4 +99,47 @@ export default defineSchema({
     // "before current period", which forces a reset on next write.
     periodStart: v.optional(v.number()),
   }).index("by_user", ["userId"]),
+
+  // One row per populate workflow run. Written once at the end of each run
+  // (success or error) by the backend agent runner — never by the frontend.
+  // Tracks tool-call counts, token usage, and timing so runs can be
+  // compared across datasets, users, and benchmark sessions.
+  populateRuns: defineTable({
+    workflowRunId: v.string(),
+    // v.string() (not v.id) so benchmark runs can use synthetic dataset ids
+    // without needing a real Convex dataset document.
+    datasetId: v.string(),
+    userId: v.string(),
+    startedAt: v.number(),
+    finishedAt: v.number(),
+    durationMs: v.number(),
+
+    // Tool-call counts
+    searchCalls: v.number(),
+    fetchCalls: v.number(),
+    investigateCalls: v.number(),
+    rowsInserted: v.number(),
+
+    // Token usage — totals across all agent invocations in this run
+    tokensInput: v.number(),
+    tokensOutput: v.number(),
+
+    // Breakdown by agent tier
+    orchestratorTokensInput: v.number(),
+    orchestratorTokensOutput: v.number(),
+    orchestratorSteps: v.number(),
+    investigateTokensInput: v.number(),
+    investigateTokensOutput: v.number(),
+    investigateSteps: v.number(),
+    investigateRuns: v.number(),
+
+    status: v.union(v.literal("success"), v.literal("error")),
+    error: v.optional(v.string()),
+
+    // True when written by the benchmark runner rather than a real user session.
+    isBenchmark: v.optional(v.boolean()),
+  })
+    .index("by_dataset", ["datasetId"])
+    .index("by_user", ["userId"])
+    .index("by_workflow_run", ["workflowRunId"]),
 });
