@@ -43,6 +43,36 @@ export default function DatasetPage() {
   const selection = useSelection(rowIds);
   const selectedCount = selection.selected.size;
 
+  const handlePopulate = useCallback(async () => {
+    if (!dataset || populating || dataset.status === "building") return;
+    setPopulating(true);
+    try {
+      const token = await getToken();
+      if (!token) throw new Error("Not authenticated");
+
+      const startedRun = await populate(
+        dataset._id,
+        dataset.name,
+        dataset.description,
+        dataset.columns,
+        token,
+      );
+      track(EVENTS.DATASET_POPULATE_STARTED, {
+        datasetId: dataset._id,
+        column_count: dataset.columns.length,
+        runId: startedRun.runId,
+      });
+    } catch (err) {
+      console.error("[populate] failed", err);
+      captureException(err, {
+        operation: "dataset_populate",
+        datasetId: dataset._id,
+      });
+    } finally {
+      setPopulating(false);
+    }
+  }, [dataset, populating, getToken]);
+
   const openedFired = useRef<string | null>(null);
   const autoPopulateFired = useRef<string | null>(null);
   useEffect(() => {
@@ -70,9 +100,6 @@ export default function DatasetPage() {
   async function handleExport(format: "csv" | "xlsx") {
     if (!dataset || !rows || exporting) return;
 
-    // If the user has rows selected, export ONLY those. Otherwise the
-    // entire dataset. Preserves column ordering (handled by the export
-    // util — it iterates `dataset.columns` in order).
     const exportRows =
       selectedCount > 0
         ? rows.filter((r) => selection.selected.has(r._id))
@@ -131,36 +158,6 @@ export default function DatasetPage() {
       setUpdating(false);
     }
   }
-
-  const handlePopulate = useCallback(async () => {
-    if (!dataset || populating || dataset.status === "building") return;
-    setPopulating(true);
-    try {
-      const token = await getToken();
-      if (!token) throw new Error("Not authenticated");
-
-      const startedRun = await populate(
-        dataset._id,
-        dataset.name,
-        dataset.description,
-        dataset.columns,
-        token,
-      );
-      track(EVENTS.DATASET_POPULATE_STARTED, {
-        datasetId: dataset._id,
-        column_count: dataset.columns.length,
-        runId: startedRun.runId,
-      });
-    } catch (err) {
-      console.error("[populate] failed", err);
-      captureException(err, {
-        operation: "dataset_populate",
-        datasetId: dataset._id,
-      });
-    } finally {
-      setPopulating(false);
-    }
-  }, [dataset, populating, getToken]);
 
   if (authLoading || dataset === undefined || rows === undefined) {
     return (
