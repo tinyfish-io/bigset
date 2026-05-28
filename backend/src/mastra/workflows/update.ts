@@ -144,8 +144,13 @@ ${row.howFound ? `\nPreviously found via: ${row.howFound}` : ""}`;
             id: row._id,
             expectedDatasetId: datasetId,
           });
-        } catch {
-          // Row may have been deleted during the update.
+        } catch (cleanupErr) {
+          const cleanupMsg = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
+          if (/not found/i.test(cleanupMsg)) {
+            return;
+          }
+          console.error(`[refresh-rows] Failed to clear update status for row ${row._id}: ${cleanupMsg}`);
+          errors++;
         }
       }
     }

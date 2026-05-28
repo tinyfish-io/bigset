@@ -157,9 +157,9 @@ export function buildPopulateTools(
         await convex.mutation(internal.datasetRows.insert, {
           datasetId: authorizedDatasetId,
           data: cleanedData,
-          ...(sources && sources.length > 0 ? { sources } : {}),
-          ...(row_summary ? { rowSummary: row_summary } : {}),
-          ...(how_found ? { howFound: how_found } : {}),
+          ...(sources !== undefined ? { sources } : {}),
+          ...(row_summary !== undefined ? { rowSummary: row_summary } : {}),
+          ...(how_found !== undefined ? { howFound: how_found } : {}),
         });
         return { success: true };
       } catch (err) {
@@ -292,9 +292,9 @@ export function buildPopulateTools(
           id: rowId,
           expectedDatasetId: authorizedDatasetId,
           data: cleanedData,
-          ...(sources && sources.length > 0 ? { sources } : {}),
-          ...(row_summary ? { rowSummary: row_summary } : {}),
-          ...(how_found ? { howFound: how_found } : {}),
+          ...(sources !== undefined ? { sources } : {}),
+          ...(row_summary !== undefined ? { rowSummary: row_summary } : {}),
+          ...(how_found !== undefined ? { howFound: how_found } : {}),
         });
         return { success: true };
       } catch (err) {

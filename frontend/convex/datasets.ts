@@ -256,7 +256,6 @@ export const updateStatus = mutation({
       v.literal("live"),
       v.literal("paused"),
       v.literal("building"),
-      v.literal("updating"),
     ),
   },
   handler: async (ctx, args) => {

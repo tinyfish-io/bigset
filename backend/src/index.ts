@@ -73,6 +73,7 @@ async function sendDatasetReadyNotification({
   datasetId,
   datasetName,
   rowCount,
+  workflowType = "populate",
 }: {
   logger: FastifyBaseLogger;
   clerk: ClerkClient;
@@ -80,12 +81,13 @@ async function sendDatasetReadyNotification({
   datasetId: string;
   datasetName: string;
   rowCount: number;
+  workflowType?: "populate" | "update";
 }): Promise<void> {
   const baseProps = {
     datasetId,
     datasetName,
     rowCount,
-    workflowType: "populate" as const,
+    workflowType,
   };
 
   try {
@@ -212,6 +214,7 @@ async function runUpdateWorkflowInBackground({
       datasetId,
       datasetName: currentDataset.name,
       rowCount,
+      workflowType: "update",
     });
   } catch (err) {
     const lastStatusError = statusErrorMessage(err);
@@ -483,8 +486,8 @@ await fastify.register(async (instance) => {
       try {
         run = await updateWorkflow.createRun();
       } catch (runErr) {
-        req.log.error(runErr, "Failed to create update workflow run; releasing dataset claim");
-        await setDatasetPopulateStatus(parsed.data.datasetId, "failed", statusErrorMessage(runErr));
+        req.log.error(runErr, "Failed to create update workflow run; reverting dataset status");
+        await setDatasetPopulateStatus(parsed.data.datasetId, "live");
         return reply.code(502).send({ error: "Failed to update dataset. Please try again." });
       }
 

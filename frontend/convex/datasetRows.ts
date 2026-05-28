@@ -272,13 +272,15 @@ export const markForUpdate = internalMutation({
   },
   handler: async (ctx, args) => {
     if (args.rowIds && args.rowIds.length > 0) {
+      let marked = 0;
       for (const rowId of args.rowIds) {
         const row = await ctx.db.get(rowId);
         if (row && row.datasetId === args.datasetId) {
           await ctx.db.patch(rowId, { updateStatus: "pending" as const });
+          marked++;
         }
       }
-      return args.rowIds.length;
+      return marked;
     }
     const rows = await ctx.db
       .query("datasetRows")

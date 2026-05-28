@@ -5,7 +5,15 @@ const FLASH_DURATION_MS = 1500;
 
 export function useRowChangeDetection(rows: DatasetRow[]) {
   const prevRowsRef = useRef<Map<string, DatasetRow>>(new Map());
+  const flashTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
   const [flashingCells, setFlashingCells] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    return () => {
+      for (const timer of flashTimersRef.current) clearTimeout(timer);
+      flashTimersRef.current.clear();
+    };
+  }, []);
 
   const pendingRowIds = useMemo(() => {
     const set = new Set<string>();
@@ -57,9 +65,9 @@ export function useRowChangeDetection(rows: DatasetRow[]) {
           for (const key of newFlashes) next.delete(key);
           return next;
         });
+        flashTimersRef.current.delete(timer);
       }, FLASH_DURATION_MS);
-
-      return () => clearTimeout(timer);
+      flashTimersRef.current.add(timer);
     }
   }, [rows]);
 

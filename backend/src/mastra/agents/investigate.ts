@@ -38,7 +38,7 @@ TOOL CALL FORMAT — every tool call argument must be a JSON object wrapped in c
 WORKFLOW:
 1. Fetch 1-2 of the provided URLs to get real data (if URLs were given).
 2. If you need more, run ONE search and fetch the best result.
-3. Call insert_row with whatever real data you have. Use "" for mdissing fields.
+3. Call insert_row with whatever real data you have. Use "" for missing fields.
    Include "sources" (URLs you fetched), "row_summary" (one line about this entity), and "how_found" (a step by step guide on how you found this data. eg, 1. fetch the contents of this url "<insert url>", 2. Look for the pricing field, and title name field, 3. etc...)
 4. Write your final response:
    INSERTED: true/false
