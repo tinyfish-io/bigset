@@ -38,12 +38,12 @@ export const insert = internalMutation({
   },
   handler: async (ctx, args) => {
     if (args.status === "success" && args.error) {
-      throw new Error("populateRuns.insert: error must be absent on a successful run");
+      throw new Error("runStats.insert: error must be absent on a successful run");
     }
     if (args.status === "error" && !args.error) {
-      throw new Error("populateRuns.insert: error message is required on a failed run");
+      throw new Error("runStats.insert: error message is required on a failed run");
     }
-    await ctx.db.insert("populateRuns", args);
+    await ctx.db.insert("runStats", args);
   },
 });
 
@@ -55,7 +55,7 @@ export const getByWorkflowRunId = internalQuery({
   args: { workflowRunId: v.string() },
   handler: async (ctx, args) => {
     return await ctx.db
-      .query("populateRuns")
+      .query("runStats")
       .withIndex("by_workflow_run", (q) =>
         q.eq("workflowRunId", args.workflowRunId),
       )
@@ -70,7 +70,7 @@ export const listByDataset = internalQuery({
   args: { datasetId: v.string() },
   handler: async (ctx, args) => {
     const runs = await ctx.db
-      .query("populateRuns")
+      .query("runStats")
       .withIndex("by_dataset", (q) => q.eq("datasetId", args.datasetId))
       .collect();
     return runs.sort((a, b) => b.startedAt - a.startedAt);
@@ -84,7 +84,7 @@ export const listByUser = internalQuery({
   args: { userId: v.string() },
   handler: async (ctx, args) => {
     const runs = await ctx.db
-      .query("populateRuns")
+      .query("runStats")
       .withIndex("by_user", (q) => q.eq("userId", args.userId))
       .collect();
     return runs.sort((a, b) => b.startedAt - a.startedAt);

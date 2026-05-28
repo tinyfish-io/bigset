@@ -104,7 +104,7 @@ export default defineSchema({
   // (success or error) by the backend agent runner — never by the frontend.
   // Tracks tool-call counts, token usage, and timing so runs can be
   // compared across datasets, users, and benchmark sessions.
-  populateRuns: defineTable({
+  runStats: defineTable({
     workflowRunId: v.string(),
     // v.string() (not v.id) so benchmark runs can use synthetic dataset ids
     // without needing a real Convex dataset document.

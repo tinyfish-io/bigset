@@ -3,7 +3,7 @@
  *
  * A single RunMetrics instance is created at the start of each agentStep,
  * passed by reference into every tool factory and agent builder, and read
- * once at the end to write the populateRuns Convex record.
+ * once at the end to write the runStats Convex record.
  *
  * All operations are synchronous integer increments or field reads — zero
  * I/O, zero meaningful overhead on the hot path.

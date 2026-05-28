@@ -14,14 +14,14 @@ export interface SaveRunMetricsInput {
 }
 
 /**
- * Persist a completed run's metrics to the populateRuns Convex table.
+ * Persist a completed run's metrics to the runStats Convex table.
  *
  * Called from the agentStep finally-block as a fire-and-forget operation —
  * any error here is logged but must never propagate to the populate workflow.
  */
 export async function saveRunMetrics(input: SaveRunMetricsInput): Promise<void> {
   const totals = input.metrics.totals();
-  await convex.mutation(internal.populateRuns.insert, {
+  await convex.mutation(internal.runStats.insert, {
     workflowRunId: input.workflowRunId,
     datasetId: input.datasetId,
     userId: input.userId,
