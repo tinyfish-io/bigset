@@ -18,9 +18,6 @@ export function SideSheet({ open, onClose, children }: SideSheetProps) {
     if (open) {
       prevOverflowRef.current = document.body.style.overflow;
       document.body.style.overflow = "hidden";
-    } else {
-      document.body.style.overflow = prevOverflowRef.current ?? "";
-      prevOverflowRef.current = null;
     }
     return () => {
       document.body.style.overflow = prevOverflowRef.current ?? "";
@@ -28,10 +25,51 @@ export function SideSheet({ open, onClose, children }: SideSheetProps) {
     };
   }, [open]);
 
+  useEffect(() => {
+    if (!open || !panelRef.current) return;
+
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+
+    const panel = panelRef.current;
+    const focusable = panel.querySelectorAll<HTMLElement>(
+      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+    );
+    const firstFocusable = focusable[0];
+    const lastFocusable = focusable[focusable.length - 1];
+
+    function handleTab(e: KeyboardEvent) {
+      if (e.key !== "Tab") return;
+      if (focusable.length === 0) return;
+
+      if (e.shiftKey) {
+        if (document.activeElement === firstFocusable) {
+          e.preventDefault();
+          lastFocusable.focus();
+        }
+      } else {
+        if (document.activeElement === lastFocusable) {
+          e.preventDefault();
+          firstFocusable.focus();
+        }
+      }
+    }
+
+    panel.addEventListener("keydown", handleKeyDown);
+    panel.addEventListener("keydown", handleTab);
+    firstFocusable?.focus();
+
+    return () => {
+      panel.removeEventListener("keydown", handleKeyDown);
+      panel.removeEventListener("keydown", handleTab);
+    };
+  }, [open, onClose]);
+
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end">
+    <div className="fixed inset-0 z-50 flex justify-end" role="dialog" aria-modal="true">
       <div
         className="absolute inset-0 bg-foreground/10 backdrop-blur-sm"
         onClick={onClose}
@@ -74,7 +112,6 @@ export function CellDetail({
 
   async function handleCopy() {
     try {
-      // Write the raw underlying value, not the display fallback "—".
       await navigator.clipboard.writeText(value == null ? "" : String(value));
       toast.success("Copied to clipboard");
     } catch {
@@ -85,7 +122,6 @@ export function CellDetail({
   return (
     <div className="space-y-6">
       <div>
-       
         <p className="text-sm font-semibold text-foreground">{columnName}</p>
         {description && (
           <p className="text-xs text-muted mt-0.5">{description}</p>
@@ -109,12 +145,13 @@ export function CellDetail({
             onClick={handleCopy}
             className="inline-flex items-center gap-1.5 text-[11px] font-medium text-muted hover:text-foreground transition-colors"
             aria-label="Copy value"
+            data-ph-mask-text="true"
           >
             <Copy className="size-3" />
             <span>Copy</span>
           </button>
         </div>
-        <div className="rounded-lg border border-border bg-background px-4 py-3">
+        <div className="rounded-lg border border-border bg-background px-4 py-3" data-ph-mask-text="true">
           <p className="text-sm text-foreground break-all whitespace-pre-wrap">
             {displayValue}
           </p>

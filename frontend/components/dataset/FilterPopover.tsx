@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Filter, Search, X } from "lucide-react";
 import type { DatasetColumn, DatasetRow } from "@/components/table/types";
 
@@ -64,17 +64,19 @@ export function FilterPopover({ columns, rows, onFilter }: FilterPopoverProps) {
   /**
    * Unique, sorted cell values for the selected column derived from all rows.
    * Used only for "exact" match mode where we display a pickable list.
+   * Memoized to avoid recomputing on every render (e.g., keystroke in search box).
    */
-  const colValues = selectedColDef
-    ? Array.from(
-        new Set(
-          rows
-            .map((r) => r.data[selectedColDef.name])
-            .map((v) => String(v ?? ""))
-            .filter(Boolean),
-        ),
-      ).sort()
-    : [];
+  const colValues = useMemo(() => {
+    if (!selectedColDef) return [];
+    return Array.from(
+      new Set(
+        rows
+          .map((r) => r.data[selectedColDef.name])
+          .map((v) => String(v ?? ""))
+          .filter(Boolean),
+      ),
+    ).sort();
+  }, [rows, selectedColDef]);
 
   function handleApply() {
     if (!selectedColumn || !selectedValue) return;

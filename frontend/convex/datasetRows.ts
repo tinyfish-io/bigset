@@ -236,6 +236,10 @@ export const get = internalQuery({
 export const countByDataset = internalQuery({
   args: { datasetId: v.id("datasets") },
   handler: async (ctx, args) => {
+    const dataset = await ctx.db.get(args.datasetId);
+    if (dataset && typeof dataset.rowCount === "number") {
+      return dataset.rowCount;
+    }
     const rows = await ctx.db
       .query("datasetRows")
       .withIndex("by_dataset", (q) => q.eq("datasetId", args.datasetId))

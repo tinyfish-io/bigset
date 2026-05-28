@@ -135,19 +135,18 @@ export const updateDetails = mutation({
   args: {
     id: v.id("datasets"),
     name: v.string(),
-    description: v.string(),
+    description: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const trimmedName = args.name.trim();
     if (!trimmedName) throw new Error("Dataset name cannot be empty");
     const dataset = await loadOwnedDataset(ctx, args.id);
 
-    // Skip entirely if neither field actually changed.
     const nameChanged = trimmedName !== dataset.name;
-    const descChanged = args.description !== dataset.description;
+    const descChanged = args.description !== undefined && args.description !== dataset.description;
     if (!nameChanged && !descChanged) return;
 
-    const patch: Record<string, unknown> = { name: trimmedName };
+    const patch: Partial<Doc<"datasets">> = { name: trimmedName };
     if (descChanged) patch.description = args.description;
     await ctx.db.patch(dataset._id, patch);
   },

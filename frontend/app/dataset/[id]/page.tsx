@@ -2,7 +2,7 @@
 
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useMutation, useConvexAuth } from "convex/react";
 import { useAuth } from "@clerk/nextjs";
 import { api } from "@/convex/_generated/api";
@@ -207,7 +207,6 @@ export default function DatasetPage() {
       await updateDetails({
         id: dataset._id,
         name: trimmed,
-        description: dataset.description,
       });
       toast.success("Dataset name updated");
     } catch {
@@ -221,12 +220,12 @@ export default function DatasetPage() {
     setEditingName(false);
   }
 
-  function handleCellExpand(columnName: string, value: unknown, rowId: string) {
+  const handleCellExpand = useCallback((columnName: string, value: unknown, rowId: string) => {
     if (!dataset) return;
     const column = dataset.columns.find((c) => c.name === columnName);
     if (!column) return;
     setSideSheet({ column, value, rowId });
-  }
+  }, [dataset]);
 
   /** Set a single filter — called by FilterPopover when user clicks Apply. */
   function handleAddFilter(
@@ -300,7 +299,10 @@ export default function DatasetPage() {
               onChange={(e) => setNameValue(e.target.value)}
               onBlur={saveName}
               onKeyDown={(e) => {
-                if (e.key === "Enter") saveName();
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  nameInputRef.current?.blur();
+                }
                 if (e.key === "Escape") cancelNameEdit();
               }}
               className="text-sm font-semibold tracking-tight truncate max-w-md rounded border border-border bg-background px-2 py-0.5 outline-none focus:border-foreground/30"
@@ -395,16 +397,6 @@ export default function DatasetPage() {
             matchType={filter.matchType}
             onClear={handleClearFilter}
           />
-        )}
-
-        {filter && (
-          <button
-            type="button"
-            onClick={handleClearFilter}
-            className="text-[11px] text-muted hover:text-foreground transition-colors underline underline-offset-2"
-          >
-            Clear
-          </button>
         )}
       </div>
 
