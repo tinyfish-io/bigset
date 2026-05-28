@@ -150,7 +150,6 @@ ${row.howFound ? `\nPreviously found via: ${row.howFound}` : ""}`;
             return;
           }
           console.error(`[refresh-rows] Failed to clear update status for row ${row._id}: ${cleanupMsg}`);
-          errors++;
         }
       }
     }
