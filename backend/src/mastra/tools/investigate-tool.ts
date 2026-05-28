@@ -116,8 +116,9 @@ ${context}${urlsBlock}${notesBlock}`;
         if (metrics) {
           for (const step of (result.steps ?? []) as any[]) {
             for (const tc of (step.toolCalls ?? []) as any[]) {
-              if (tc.toolName === "search_web") metrics.searchCalls++;
-              else if (tc.toolName === "fetch_page") metrics.fetchCalls++;
+              const name = tc.payload?.toolName ?? tc.toolName;
+              if (name === "search_web") metrics.searchCalls++;
+              else if (name === "fetch_page") metrics.fetchCalls++;
             }
           }
           metrics.addInvestigateResult(result);

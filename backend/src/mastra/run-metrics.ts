@@ -10,14 +10,25 @@
  */
 
 interface AgentResult {
+  // Mastra FullOutput: totalUsage sums across all steps; usage is last-step only.
+  // Prefer totalUsage for accurate multi-step accounting.
+  totalUsage?: { inputTokens?: number; outputTokens?: number };
   usage?: { inputTokens?: number; outputTokens?: number };
   steps?: unknown[];
+}
+
+function tokens(result: AgentResult): { input: number; output: number } {
+  const src = result.totalUsage ?? result.usage;
+  return {
+    input: src?.inputTokens ?? 0,
+    output: src?.outputTokens ?? 0,
+  };
 }
 
 export class RunMetrics {
   searchCalls = 0;
   fetchCalls = 0;
-  /** investigate_row tool calls dispatched by the orchestrator. */
+  /** run_subagent tool calls dispatched by the orchestrator. */
   investigateCalls = 0;
   /** Rows successfully inserted across all investigate subagents. */
   rowsInserted = 0;
@@ -31,14 +42,16 @@ export class RunMetrics {
   };
 
   addOrchestratorResult(result: AgentResult): void {
-    this.orchestrator.inputTokens += result.usage?.inputTokens ?? 0;
-    this.orchestrator.outputTokens += result.usage?.outputTokens ?? 0;
+    const { input, output } = tokens(result);
+    this.orchestrator.inputTokens += input;
+    this.orchestrator.outputTokens += output;
     this.orchestrator.steps += result.steps?.length ?? 0;
   }
 
   addInvestigateResult(result: AgentResult): void {
-    this.investigate.inputTokens += result.usage?.inputTokens ?? 0;
-    this.investigate.outputTokens += result.usage?.outputTokens ?? 0;
+    const { input, output } = tokens(result);
+    this.investigate.inputTokens += input;
+    this.investigate.outputTokens += output;
     this.investigate.steps += result.steps?.length ?? 0;
     this.investigate.runs += 1;
   }
