@@ -2,6 +2,7 @@ import { Agent } from "@mastra/core/agent";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { buildPopulateTools } from "../tools/dataset-tools.js";
 import { searchWebTool, fetchPageTool } from "../tools/web-tools.js";
+import { env } from "../../env.js";
 import type { AuthContext } from "../workflows/populate.js";
 import type { PopulateColumn } from "../../pipeline/populate.js";
 
@@ -68,7 +69,7 @@ export function buildInvestigateAgent(
     id: "investigate-agent",
     name: "Dataset Investigate Agent",
     instructions: buildInvestigateInstructions(columns),
-    model: openrouter("qwen/qwen3.7-max"),
+    model: openrouter(env.BIGSET_INVESTIGATE_MODEL),
 
     tools: {
       insert_row,

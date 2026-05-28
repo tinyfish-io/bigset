@@ -30,6 +30,19 @@ export const env = {
 
   OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY,
 
+  // Populate pipeline tuning. All optional — defaults shown here.
+  // Override in .env to adjust without code changes.
+  BIGSET_POPULATE_TARGET_ROWS: (() => {
+    const v = parseInt(process.env.BIGSET_POPULATE_TARGET_ROWS ?? "20", 10);
+    return Number.isFinite(v) && v > 0 ? v : 20;
+  })(),
+  BIGSET_ORCHESTRATOR_MODEL:
+    process.env.BIGSET_ORCHESTRATOR_MODEL ?? "deepseek/deepseek-v4-0324",
+  BIGSET_INVESTIGATE_MODEL:
+    process.env.BIGSET_INVESTIGATE_MODEL ?? "deepseek/deepseek-v4-0324",
+  BIGSET_EXTRACT_MODEL:
+    process.env.BIGSET_EXTRACT_MODEL ?? "deepseek/deepseek-v4-0324",
+
   // Resend (transactional email). Optional — when RESEND_API_KEY is unset
   // the email module no-ops with a log line, so local dev works without
   // a Resend account. EMAIL_FROM must be a domain that's verified in the

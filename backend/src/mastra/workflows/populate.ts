@@ -141,6 +141,9 @@ const buildPromptOutputSchema = z.object({
   authorizedDatasetId: z.string(),
   authContext: authContextSchema,
   columns: z.array(populateColumnSchema),
+  // Passed to buildPopulateAgent so the extract tool's LLM knows what to look for.
+  datasetName: z.string(),
+  description: z.string(),
 });
 
 const buildPromptStep = createStep({
@@ -195,6 +198,8 @@ For each lead you find, call run_subagent with the primary key values and any co
       authorizedDatasetId: inputData.datasetId,
       authContext: inputData.authContext,
       columns: inputData.columns,
+      datasetName: inputData.datasetName,
+      description: inputData.description,
     };
   },
 });
@@ -218,6 +223,8 @@ const agentStep = createStep({
       inputData.authorizedDatasetId,
       inputData.authContext,
       inputData.columns,
+      inputData.datasetName,
+      inputData.description,
     );
     try {
       const result = await agent.generate(inputData.prompt, { maxSteps: 80 });
