@@ -12,7 +12,7 @@ const colors: Record<ColumnType, string> = {
   text: "text-foreground/30",
   number: "text-violet-500/70",
   boolean: "text-emerald-500/70",
-  url: "text-blue-500/70",
+  url: "text-link/70",
   date: "text-amber-500/70",
 };
 

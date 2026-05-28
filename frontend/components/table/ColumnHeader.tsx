@@ -35,6 +35,15 @@ export function ColumnHeader({
         style={{ padding: "var(--table-cell-py) var(--table-cell-px)" }}
       >
         {column && <ColumnIcon type={column.type} />}
+        {column?.isPrimaryKey && (
+          <svg
+            className="h-3 w-3 shrink-0 text-amber-500/70"
+            viewBox="0 0 16 16"
+            fill="currentColor"
+          >
+            <path d="M12.5 0a3.5 3.5 0 0 0-3.29 4.7L1 12.92V16h3.08l.13-1.85 1.79-.13.13-1.79L7.92 12.1l.13-1.79 1.79-.13L10 8.39A3.5 3.5 0 1 0 12.5 0zm1.17 3.5a1.17 1.17 0 1 1-2.34 0 1.17 1.17 0 0 1 2.34 0z" />
+          </svg>
+        )}
         <span className="truncate">{column?.name ?? header.id}</span>
       </div>
 

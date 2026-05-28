@@ -20,6 +20,7 @@ const columnValidator = v.object({
     v.literal("date"),
   ),
   description: v.optional(v.string()),
+  isPrimaryKey: v.optional(v.boolean()),
 });
 
 const PREVIEW_ROW_COUNT = 5;
@@ -98,6 +99,14 @@ export const create = mutation({
     description: v.string(),
     cadence: v.string(),
     columns: v.array(columnValidator),
+    retrievalStrategy: v.optional(
+      v.union(
+        v.literal("search_fetch"),
+        v.literal("browser"),
+        v.literal("hybrid")
+      )
+    ),
+    sourceHint: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const identity = await requireIdentity(ctx);

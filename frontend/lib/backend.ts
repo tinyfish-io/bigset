@@ -21,6 +21,7 @@ export interface PopulateColumn {
   name: string;
   type: "text" | "number" | "boolean" | "url" | "date";
   description?: string;
+  isPrimaryKey?: boolean;
 }
 
 export interface PopulateStartResult {

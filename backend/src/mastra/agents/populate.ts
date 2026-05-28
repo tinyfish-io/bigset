@@ -1,6 +1,6 @@
 import { Agent } from "@mastra/core/agent";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
-import { buildInvestigateTool } from "../tools/investigate-tool.js";
+import { buildSubagentTool } from "../tools/investigate-tool.js";
 import { searchWebTool, fetchPageTool } from "../tools/web-tools.js";
 import type { AuthContext } from "../workflows/populate.js";
 import type { PopulateColumn } from "../../pipeline/populate.js";
@@ -9,30 +9,30 @@ const openrouter = createOpenRouter({
   apiKey: process.env.OPENROUTER_API_KEY!,
 });
 
-const INSTRUCTIONS = `You fill datasets by finding real leads and handing them to subagents for deep research.
+const INSTRUCTIONS = `You are an expert dataset builder. You conduct research using your web tools.
+You do broad research to see which rows to add, and then you spin up sub-agents that can do the deep research and fill in each row for you.
+Your job is to make sure you dispatch and manage your army of sub agents to build up a dataset with 100 rows in it.
 
-1. Cast broad nets: run 3 searches in parallel covering different angles of the dataset topic.
-   Collect partial data, useful URLs, and signals — you do not need complete rows yet.
+WORKFLOW:
+1. Understand the data that is is needed and do some research to find places on the web where this data may be obvious and easy to find, collect these links to see what the task of scraping the web is going to look like.
+If the dataset is to look at YC Companies, collect links for the YC Startup registry and so on.
 
-2. Hand off leads: call investigate_row for each promising lead.
-   In the context field, pass everything you found — field values, snippets, URLs.
-   - First batch: exactly 3 in parallel. Wait for all to finish and read every clue.
-   - Second batch: up to 10 in parallel. Wait for all to finish and read every clue.
-   - All subsequent batches: no limit — spawn as many as you have good leads.
+2. Trigger sub agents. Start doing broad research and identify basic information of the rows in the dataset. Let's say you find a company named "Boody", trigger the run_subagent tool with all the necesarry context (links and places to look) so that it can go and effectivly fill in the data.
 
-3. Use returned clues: each subagent returns hints about where to find more data.
-   Feed those clues into the next batch of investigate_row calls.
+3. See what the subagent reports back with, if all good and it gives you some information, use that to give better instuctions to subsequent sub agents.
 
-4. Keep going until you have 20 inserted rows or have exhausted real leads.
+Keep going till you have 100 rows.
 
-Do not insert rows yourself — only investigate_row subagents can write to the dataset.
-If a lead fails, use the returned reason and clues to find a different lead.`;
+This process should become faster overtime as you just find new rows to go and build, and you keep invoking sub agents in parallel to fill them in.
+
+Duplicates are rejected automatically based on primary key columns. If a subagent reports a duplicate, don't re-investigate the same entity — move on to a new one.
+`;
 
 /**
  * Build the orchestrator Agent for a populate run.
  *
  * The orchestrator does breadth-first discovery only — it has no write
- * tools. All row insertions go through investigate_row, which spawns a
+ * tools. All row insertions go through run_subagent, which spawns a
  * fresh subagent scoped to the same authorized dataset via closure.
  *
  * A fresh orchestrator is constructed per workflow run; do not cache.
@@ -46,11 +46,11 @@ export function buildPopulateAgent(
     id: "populate-agent",
     name: "Dataset Populate Orchestrator",
     instructions: INSTRUCTIONS,
-    model: openrouter("moonshotai/kimi-k2-0905"),
+    model: openrouter("qwen/qwen3.7-max"),
     tools: {
       search_web: searchWebTool,
       fetch_page: fetchPageTool,
-      investigate_row: buildInvestigateTool(
+      run_subagent: buildSubagentTool(
         authorizedDatasetId,
         authContext,
         columns,

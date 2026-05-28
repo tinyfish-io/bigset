@@ -17,7 +17,7 @@ const LABELS: Record<DatasetStatus, string> = {
 export function StatusBadge({ status }: { status: DatasetStatus }) {
   return (
     <span
-      className={`inline-flex items-center gap-1.5 border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider ${STYLES[status]}`}
+      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[10px] font-medium uppercase tracking-wider ${STYLES[status]}`}
     >
       {status === "live" && (
         <span className="h-1.5 w-1.5 rounded-full bg-emerald-600 animate-pulse" />

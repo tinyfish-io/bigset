@@ -34,7 +34,12 @@ export function CellValue({
         href={safeUrl}
         target="_blank"
         rel="noopener noreferrer"
-        className="text-blue-600 underline underline-offset-2 decoration-blue-600/30 hover:decoration-blue-600/60"
+        className="text-link underline underline-offset-2"
+        style={{ textDecorationColor: "var(--link-decoration)" }}
+        onMouseEnter={(e) => (e.currentTarget.style.textDecorationColor = "var(--link-decoration-hover)")}
+        onMouseLeave={(e) => (e.currentTarget.style.textDecorationColor = "var(--link-decoration)")}
+        onFocus={(e) => (e.currentTarget.style.textDecorationColor = "var(--link-decoration-hover)")}
+        onBlur={(e) => (e.currentTarget.style.textDecorationColor = "var(--link-decoration)")}
         title={str}
         onClick={(e) => e.stopPropagation()}
       >

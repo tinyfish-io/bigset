@@ -35,7 +35,7 @@ export const datasetSchemaSchema = z
     dataset_name: z.string().regex(snakeCase, "must be snake_case"),
     description: z.string().min(1),
     columns: z.array(columnDefinitionSchema).min(1),
-    primary_key: z.string(),
+    primary_key: z.union([z.string(), z.array(z.string())]),
     retrieval_strategy: retrievalStrategySchema,
     source_hint: z.string().min(1),
   })
@@ -51,36 +51,46 @@ export const datasetSchemaSchema = z
     }
 
     const pkCols = data.columns.filter((c) => c.is_primary_key);
-    if (pkCols.length !== 1) {
+    if (pkCols.length < 1) {
       ctx.addIssue({
         code: "custom",
-        message: `exactly one column must have is_primary_key=true (found ${pkCols.length})`,
+        message: `at least one column must have is_primary_key=true (found 0)`,
         path: ["columns"],
       });
       return;
     }
 
-    const pk = pkCols[0];
-    if (pk.name !== data.primary_key) {
+    const pkNames = pkCols.map((c) => c.name);
+    const declaredPkRaw = Array.isArray(data.primary_key)
+      ? data.primary_key
+      : [data.primary_key];
+    const declaredPk = [...new Set(declaredPkRaw)];
+    if (
+      declaredPk.length !== declaredPkRaw.length ||
+      declaredPk.length !== pkNames.length ||
+      !declaredPk.every((n) => pkNames.includes(n))
+    ) {
       ctx.addIssue({
         code: "custom",
-        message: `primary_key '${data.primary_key}' does not match the column flagged is_primary_key ('${pk.name}')`,
+        message: `primary_key ${JSON.stringify(declaredPk)} does not match columns flagged is_primary_key (${JSON.stringify(pkNames)})`,
         path: ["primary_key"],
       });
     }
-    if (pk.nullable) {
-      ctx.addIssue({
-        code: "custom",
-        message: "primary key column must not be nullable",
-        path: ["columns"],
-      });
-    }
-    if (!pk.is_enumerable) {
-      ctx.addIssue({
-        code: "custom",
-        message: "primary key column must have is_enumerable=true",
-        path: ["columns"],
-      });
+    for (const pk of pkCols) {
+      if (pk.nullable) {
+        ctx.addIssue({
+          code: "custom",
+          message: `primary key column '${pk.name}' must not be nullable`,
+          path: ["columns"],
+        });
+      }
+      if (!pk.is_enumerable) {
+        ctx.addIssue({
+          code: "custom",
+          message: `primary key column '${pk.name}' must have is_enumerable=true`,
+          path: ["columns"],
+        });
+      }
     }
   });
 export type DatasetSchema = z.infer<typeof datasetSchemaSchema>;
