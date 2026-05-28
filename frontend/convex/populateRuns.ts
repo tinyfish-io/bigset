@@ -37,6 +37,12 @@ export const insert = internalMutation({
     isBenchmark: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
+    if (args.status === "success" && args.error) {
+      throw new Error("populateRuns.insert: error must be absent on a successful run");
+    }
+    if (args.status === "error" && !args.error) {
+      throw new Error("populateRuns.insert: error message is required on a failed run");
+    }
     await ctx.db.insert("populateRuns", args);
   },
 });

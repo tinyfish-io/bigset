@@ -226,14 +226,13 @@ const agentStep = createStep({
     let status: "success" | "error" = "success";
     let errorMsg: string | undefined;
 
-    const agent = buildPopulateAgent(
-      inputData.authorizedDatasetId,
-      inputData.authContext,
-      inputData.columns,
-      metrics,
-    );
-
     try {
+      const agent = buildPopulateAgent(
+        inputData.authorizedDatasetId,
+        inputData.authContext,
+        inputData.columns,
+        metrics,
+      );
       const result = await agent.generate(inputData.prompt, { maxSteps: 80 });
       metrics.addOrchestratorResult(result);
       for (const step of (result.steps ?? []) as any[]) {
