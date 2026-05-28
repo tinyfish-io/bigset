@@ -9,8 +9,10 @@ export default defineSchema({
     status: v.union(
       v.literal("live"),
       v.literal("paused"),
-      v.literal("building")
+      v.literal("building"),
+      v.literal("failed")
     ),
+    lastStatusError: v.optional(v.string()),
     cadence: v.string(),
     // Optional for backward compat with rows seeded before this field existed.
     // Treat undefined as "private" in authorization helpers.
@@ -21,6 +23,15 @@ export default defineSchema({
     // time doesn't rely on `name` (which marketing changes). User-created
     // datasets do not set this. See convex/publicSeed.ts.
     seedKey: v.optional(v.string()),
+    // Denormalized row count maintained by `datasetRows.insert / remove /
+    // clearByDataset` and by the seed/create paths. Read by the dashboard
+    // card's "X rows" footer via `datasets.attachPreview` so the count
+    // stays reactive past the first PREVIEW_ROW_COUNT inserts (a query
+    // over `.take(5)` only invalidates when one of the first 5 rows
+    // changes, freezing the dashboard at 5). Optional for backward compat
+    // with rows created before this field existed — write paths self-heal
+    // on first hit, and `datasets.backfillRowCounts` migrates all at once.
+    rowCount: v.optional(v.number()),
     columns: v.array(
       v.object({
         name: v.string(),

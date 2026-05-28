@@ -4,10 +4,10 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "dev": "tsx watch src/index.ts",
+    "dev": "node ../scripts/with-root-env.mjs tsx watch src/index.ts",
     "build": "tsc",
-    "start": "node dist/index.js",
-    "mastra:dev": "mastra dev"
+    "start": "node ../scripts/with-root-env.mjs node dist/index.js",
+    "mastra:dev": "node ../scripts/with-root-env.mjs mastra dev"
   },
   "dependencies": {
     "@clerk/backend": "^3.4.11",
@@ -19,6 +19,8 @@
     "dotenv": "^16.4.0",
     "fastify": "^5.0.0",
     "fastify-plugin": "^5.1.0",
+    "posthog-node": "^5.35.1",
+    "resend": "^6.12.3",
     "zod": "^4.4.3"
   },
   "devDependencies": {

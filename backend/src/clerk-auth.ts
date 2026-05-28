@@ -55,6 +55,25 @@ const clerkPlugin: FastifyPluginAsync = async (fastify: FastifyInstance) => {
   fastify.decorate("clerk", clerk);
 };
 
+/**
+ * Resolve a user's primary email address by Clerk user id.
+ *
+ * Returns `null` if the user has no primary email (phone-only auth, rare
+ * config) or if Clerk's API errors. Callers should treat `null` as
+ * "skip the email" — never throw, since email is always best-effort.
+ */
+export async function getUserEmail(
+  clerk: ClerkClient,
+  userId: string,
+): Promise<string | null> {
+  try {
+    const user = await clerk.users.getUser(userId);
+    return user.primaryEmailAddress?.emailAddress ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export default fp(clerkPlugin, { name: "clerk-auth" });
 
 /**

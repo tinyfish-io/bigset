@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useEffect, type RefObject } from "react";
+import { useRef, useEffect } from "react";
 import type { Header } from "@tanstack/react-table";
 import type { DatasetRow, DatasetColumn } from "./types";
 import { ColumnHeader } from "./ColumnHeader";
@@ -12,14 +12,14 @@ export function TableHeader({
   allState,
   toggleAll,
   resizingColumnId,
-  tableContainerRef,
+  containerHeight,
 }: {
   headers: Header<DatasetRow, unknown>[];
   columns: DatasetColumn[];
   allState: boolean | "indeterminate";
   toggleAll: () => void;
   resizingColumnId: string | false;
-  tableContainerRef: RefObject<HTMLDivElement | null>;
+  containerHeight: number;
 }) {
   const checkboxRef = useRef<HTMLInputElement>(null);
 
@@ -58,7 +58,7 @@ export function TableHeader({
           header={header}
           column={columns[i]}
           isResizing={resizingColumnId === header.id}
-          tableContainerRef={tableContainerRef}
+          containerHeight={containerHeight}
         />
       ))}
     </div>

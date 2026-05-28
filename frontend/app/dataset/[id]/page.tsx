@@ -15,7 +15,7 @@ import { StatusBadge } from "@/components/dataset/StatusBadge";
 import { SideSheet, CellDetail } from "@/components/SideSheet";
 import { FilterPopover, ActiveFilter } from "@/components/dataset/FilterPopover";
 import { downloadCSV, downloadXLSX } from "@/lib/export";
-import { populate } from "@/lib/backend";
+import { populate, update } from "@/lib/backend";
 import { EVENTS, captureException, track } from "@/lib/analytics";
 import { toast } from "@/components/Toaster";
 
@@ -45,6 +45,7 @@ export default function DatasetPage() {
     value: string;
     matchType: "contains" | "exact";
   } | null>(null);
+  const [updating, setUpdating] = useState(false);
 
   const datasetId = params.id as Id<"datasets">;
   const dataset = useQuery(
@@ -133,23 +134,49 @@ export default function DatasetPage() {
     }
   }
 
-  async function handlePopulate() {
-    if (!dataset || populating) return;
-    setPopulating(true);
+  async function handleUpdate() {
+    if (!dataset || updating || dataset.status === "building") return;
+    setUpdating(true);
     try {
       const token = await getToken();
       if (!token) throw new Error("Not authenticated");
 
-      await populate(
+      await update(
         dataset._id,
         dataset.name,
         dataset.description,
         dataset.columns,
         token,
       );
-      track(EVENTS.DATASET_POPULATED, {
+    } catch (err) {
+      console.error("[update] failed", err);
+      captureException(err, {
+        operation: "dataset_update",
+        datasetId: dataset._id,
+      });
+    } finally {
+      setUpdating(false);
+    }
+  }
+
+  async function handlePopulate() {
+    if (!dataset || populating || dataset.status === "building") return;
+    setPopulating(true);
+    try {
+      const token = await getToken();
+      if (!token) throw new Error("Not authenticated");
+
+      const startedRun = await populate(
+        dataset._id,
+        dataset.name,
+        dataset.description,
+        dataset.columns,
+        token,
+      );
+      track(EVENTS.DATASET_POPULATE_STARTED, {
         datasetId: dataset._id,
         column_count: dataset.columns.length,
+        runId: startedRun.runId,
       });
     } catch (err) {
       console.error("[populate] failed", err);
@@ -228,6 +255,21 @@ export default function DatasetPage() {
   // the "Dataset not found" UI.
 
   const exportDisabled = exporting !== null || rows.length === 0;
+  const isDatasetBuilding = dataset.status === "building";
+  const updateDisabled = updating || isDatasetBuilding;
+  const populateDisabled = populating || isDatasetBuilding;
+  const updateLabel = isDatasetBuilding
+    ? "Building…"
+    : updating
+      ? "Updating…"
+      : "Update Dataset";
+  const populateLabel = isDatasetBuilding
+    ? "Building…"
+    : populating
+      ? "Starting…"
+      : dataset.status === "failed"
+        ? "Retry Populate"
+        : "Clear & Populate";
   const csvLabel =
     exporting === "csv"
       ? "Exporting…"
@@ -317,11 +359,18 @@ export default function DatasetPage() {
             {xlsxLabel}
           </button>
           <button
-            onClick={handlePopulate}
-            disabled={populating}
+            onClick={handleUpdate}
+            disabled={updateDisabled}
             className="border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-foreground/[0.03] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            {populating ? "Populating…" : "Clear & Populate"}
+            {updateLabel}
+          </button>
+          <button
+            onClick={handlePopulate}
+            disabled={populateDisabled}
+            className="border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-foreground/[0.03] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {populateLabel}
           </button>
           <div className="w-px h-4 bg-border mx-1" />
           <ThemeToggle />
@@ -357,20 +406,6 @@ export default function DatasetPage() {
             Clear
           </button>
         )}
-
-        <div className="ml-auto flex items-center gap-4 text-[11px] text-muted shrink-0">
-          {selectedCount > 0 && (
-            <>
-              <span className="text-foreground/80 font-medium">
-                {selectedCount} selected
-              </span>
-              <span className="text-foreground/10">|</span>
-            </>
-          )}
-          <span>{rows.length} rows</span>
-          <span className="text-foreground/10">|</span>
-          <span>{dataset.columns.length} columns</span>
-        </div>
       </div>
 
       <DatasetTable

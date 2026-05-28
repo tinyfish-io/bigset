@@ -23,7 +23,12 @@ export interface PopulateColumn {
   description?: string;
 }
 
-export interface PopulateResult {
+export interface PopulateStartResult {
+  success: boolean;
+  runId: string;
+}
+
+export interface WorkflowResult {
   success: boolean;
   result: unknown;
 }
@@ -59,7 +64,7 @@ export async function populate(
   description: string,
   columns: PopulateColumn[],
   token: string,
-): Promise<PopulateResult> {
+): Promise<PopulateStartResult> {
   const res = await fetch(`${BACKEND_URL}/populate`, {
     method: "POST",
     headers: {
@@ -67,6 +72,31 @@ export async function populate(
       Authorization: `Bearer ${token}`,
     },
     body: JSON.stringify({ datasetId, datasetName: datasetName, description, columns }),
+  });
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    const message = body?.error || `Backend error (${res.status})`;
+    throw new Error(message);
+  }
+
+  return res.json();
+}
+
+export async function update(
+  datasetId: string,
+  datasetName: string,
+  description: string,
+  columns: PopulateColumn[],
+  token: string,
+): Promise<WorkflowResult> {
+  const res = await fetch(`${BACKEND_URL}/update`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ datasetId, datasetName, description, columns }),
   });
 
   if (!res.ok) {

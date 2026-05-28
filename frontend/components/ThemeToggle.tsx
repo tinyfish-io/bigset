@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 import { EVENTS, track } from "@/lib/analytics";
 
 type Theme = "light" | "dark";
 
 const STORAGE_KEY = "bigset:theme";
+const THEME_CHANGED_EVENT = "bigset:theme-changed";
 
 /**
  * The same selection logic that runs in the inline `<head>` script
@@ -29,21 +30,29 @@ function applyTheme(theme: Theme): void {
   document.documentElement.setAttribute("data-theme", theme);
 }
 
-export function ThemeToggle({ className = "" }: { className?: string }) {
-  // We don't know the theme until we've mounted (server can't read
-  // localStorage). Render the toggle invisible-but-laid-out until then
-  // so it doesn't pop in and shift layout.
-  const [mounted, setMounted] = useState(false);
-  const [theme, setTheme] = useState<Theme>("light");
+function subscribeToThemeChange(onThemeChange: () => void): () => void {
+  if (typeof window === "undefined") return () => {};
+  window.addEventListener("storage", onThemeChange);
+  window.addEventListener(THEME_CHANGED_EVENT, onThemeChange);
+  return () => {
+    window.removeEventListener("storage", onThemeChange);
+    window.removeEventListener(THEME_CHANGED_EVENT, onThemeChange);
+  };
+}
 
-  useEffect(() => {
-    setTheme(readEffectiveTheme());
-    setMounted(true);
-  }, []);
+function readServerTheme(): Theme {
+  return "light";
+}
+
+export function ThemeToggle({ className = "" }: { className?: string }) {
+  const theme = useSyncExternalStore(
+    subscribeToThemeChange,
+    readEffectiveTheme,
+    readServerTheme,
+  );
 
   function toggle() {
     const next: Theme = theme === "dark" ? "light" : "dark";
-    setTheme(next);
     applyTheme(next);
     try {
       window.localStorage.setItem(STORAGE_KEY, next);
@@ -51,6 +60,7 @@ export function ThemeToggle({ className = "" }: { className?: string }) {
       // localStorage may be blocked (Safari private mode etc.) — toggle
       // still works for the session, just doesn't persist.
     }
+    window.dispatchEvent(new Event(THEME_CHANGED_EVENT));
     track(EVENTS.THEME_CHANGED, { theme: next });
   }
 
@@ -63,7 +73,6 @@ export function ThemeToggle({ className = "" }: { className?: string }) {
       aria-label={label}
       title={label}
       className={`inline-flex items-center justify-center h-7 w-7 text-muted hover:text-foreground transition-colors ${className}`}
-      style={{ opacity: mounted ? 1 : 0 }}
     >
       {/* Both icons rendered, one shown based on theme. Avoids a flash
           when switching since neither has to mount/unmount. */}

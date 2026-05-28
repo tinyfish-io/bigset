@@ -1,6 +1,5 @@
 "use client";
 
-import type { RefObject } from "react";
 import type { Header } from "@tanstack/react-table";
 import type { DatasetRow, DatasetColumn } from "./types";
 import { ColumnIcon } from "./ColumnIcon";
@@ -10,12 +9,12 @@ export function ColumnHeader({
   header,
   column,
   isResizing,
-  tableContainerRef,
+  containerHeight,
 }: {
   header: Header<DatasetRow, unknown>;
   column?: DatasetColumn;
   isResizing: boolean;
-  tableContainerRef: RefObject<HTMLDivElement | null>;
+  containerHeight: number;
 }) {
   return (
     <div
@@ -26,7 +25,7 @@ export function ColumnHeader({
         <div
           className="absolute top-0 right-0 z-10 w-0.5 bg-foreground/40"
           style={{
-            height: tableContainerRef.current?.offsetHeight || "100%",
+            height: containerHeight,
           }}
         />
       )}

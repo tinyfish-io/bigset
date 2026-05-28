@@ -1,10 +1,27 @@
 import { query, internalMutation, internalQuery } from "./_generated/server.js";
+import type { MutationCtx } from "./_generated/server.js";
 import { v } from "convex/values";
-import { loadReadableDataset } from "./lib/authz.js";
-import {
-  consumeQuotaForDataset,
-  consumeQuotaForRow,
-} from "./lib/quota.js";
+import type { Id } from "./_generated/dataModel.js";
+import { assertRowInDataset, loadReadableDataset } from "./lib/authz.js";
+import { consumeQuotaForDataset } from "./lib/quota.js";
+
+/**
+ * Authoritative row count for a dataset. O(N), so use only on the slow
+ * paths: self-heal in `insert` / `remove` when the dataset doc predates
+ * the `rowCount` field, or the explicit `datasets.backfillRowCounts`
+ * migration. Steady-state writes hit the cached counter and never call
+ * this.
+ */
+async function actualRowCount(
+  ctx: MutationCtx,
+  datasetId: Id<"datasets">,
+): Promise<number> {
+  const rows = await ctx.db
+    .query("datasetRows")
+    .withIndex("by_dataset", (q) => q.eq("datasetId", datasetId))
+    .collect();
+  return rows.length;
+}
 
 /**
  * Read all rows of a dataset.
@@ -106,23 +123,64 @@ export const insert = internalMutation({
     sources: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
-    await consumeQuotaForDataset(ctx, args.datasetId, 1);
-    return await ctx.db.insert("datasetRows", args);
+    // `consumeQuotaForDataset` returns the dataset doc so we don't
+    // double-read it.
+    const dataset = await consumeQuotaForDataset(ctx, args.datasetId, 1);
+
+    // Pre-insert count is either the cached counter (fast path) or — for
+    // datasets whose docs predate the rowCount field — recomputed once
+    // here. Subsequent inserts on the same dataset hit the fast path.
+    const previousCount =
+      typeof dataset.rowCount === "number"
+        ? dataset.rowCount
+        : await actualRowCount(ctx, args.datasetId);
+
+    const rowId = await ctx.db.insert("datasetRows", args);
+
+    // Maintain the denormalized counter the dashboard reads from. Same
+    // transaction as the row insert → atomic; quota-rejected inserts
+    // never bump the counter.
+    await ctx.db.patch(args.datasetId, { rowCount: previousCount + 1 });
+
+    return rowId;
   },
 });
 
+/**
+ * Update a row by id. Capability-scoped: the caller MUST pass the
+ * dataset this row is expected to belong to. If the row doesn't exist
+ * or belongs to a different dataset, throws `"Row not found"` (uniform
+ * with the existence-oracle policy in lib/authz.ts).
+ *
+ * Why `expectedDatasetId` is required, not optional:
+ *   - The only callers are system-trusted code paths (the populate agent,
+ *     future scheduled refreshers). Each operates with a single
+ *     authorized dataset in scope.
+ *   - Making it required forces every caller to think about which
+ *     dataset they're writing to. A future caller that forgot the scope
+ *     hits a TypeScript error, not a security hole.
+ */
 export const update = internalMutation({
   args: {
     id: v.id("datasetRows"),
+    expectedDatasetId: v.id("datasets"),
     data: v.record(v.string(), v.any()),
   },
   handler: async (ctx, args) => {
-    // Resolves row → dataset → consumes 1 unit of owner's quota.
-    const existing = await consumeQuotaForRow(ctx, args.id, 1);
+    // 1. Capability scope check (security): atomically verifies the row
+    //    exists AND belongs to expectedDatasetId. Throws otherwise.
+    const existing = await assertRowInDataset(
+      ctx,
+      args.id,
+      args.expectedDatasetId,
+    );
 
+    // 2. Quota: charge the dataset's owner for 1 row modification.
+    await consumeQuotaForDataset(ctx, args.expectedDatasetId, 1);
+
+    // 3. Diff + history.
     const oldData = existing.data as Record<string, unknown>;
     const newData = args.data;
-
     for (const [key, newVal] of Object.entries(newData)) {
       const oldVal = oldData[key];
       if (String(oldVal) !== String(newVal)) {
@@ -136,6 +194,7 @@ export const update = internalMutation({
       }
     }
 
+    // 4. Patch.
     await ctx.db.patch(args.id, { data: newData });
   },
 });
@@ -150,6 +209,9 @@ export const clearByDataset = internalMutation({
     for (const row of rows) {
       await ctx.db.delete(row._id);
     }
+    // Reset the cached counter. We know the post-state exactly, so this
+    // doesn't need the read-then-add dance that `insert` / `remove` use.
+    await ctx.db.patch(args.datasetId, { rowCount: 0 });
     return rows.length;
   },
 });
@@ -161,36 +223,87 @@ export const get = internalQuery({
   },
 });
 
-export const remove = internalMutation({
-  args: { id: v.id("datasetRows") },
+/**
+ * Admin-only row count for a dataset. Used by the backend after a populate
+ * workflow completes to decide whether to send the "Your dataset is ready"
+ * email — only sent when at least one row exists.
+ *
+ * Exposed as `internalQuery` rather than reusing `api.datasetRows.listByDataset`
+ * because that query runs through `loadReadableDataset` which requires
+ * either ownership or visibility="public" — neither holds when the backend
+ * uses admin auth without an identity context.
+ */
+export const countByDataset = internalQuery({
+  args: { datasetId: v.id("datasets") },
   handler: async (ctx, args) => {
+    const rows = await ctx.db
+      .query("datasetRows")
+      .withIndex("by_dataset", (q) => q.eq("datasetId", args.datasetId))
+      .collect();
+    return rows.length;
+  },
+});
+
+/**
+ * Delete a row by id. Capability-scoped just like `update` above: caller
+ * MUST pass the dataset this row is expected to belong to. Throws
+ * `"Row not found"` if the row is missing or lives in a different dataset
+ * (uniform error — no existence oracle for prompt-injected models).
+ *
+ * Deletions are NOT quota-charged: quota measures generative cost (rows
+ * the agent had to discover + author), not cleanup. A user-facing future
+ * caller could still apply its own quota policy.
+ */
+export const remove = internalMutation({
+  args: {
+    id: v.id("datasetRows"),
+    expectedDatasetId: v.id("datasets"),
+  },
+  handler: async (ctx, args) => {
+    await assertRowInDataset(ctx, args.id, args.expectedDatasetId);
+
+    // Decrement the cached counter, self-healing if the dataset doc
+    // predates the rowCount field. `dataset` is guaranteed to exist —
+    // assertRowInDataset above verified the row belongs to it.
+    const dataset = await ctx.db.get(args.expectedDatasetId);
+    if (dataset) {
+      const previousCount =
+        typeof dataset.rowCount === "number"
+          ? dataset.rowCount
+          : await actualRowCount(ctx, args.expectedDatasetId);
+      await ctx.db.patch(args.expectedDatasetId, {
+        // clamp at 0 as a paranoid guard — counter should never go
+        // negative because we just confirmed the row exists, but a bug
+        // that drove it negative would manifest as an even weirder UI.
+        rowCount: Math.max(0, previousCount - 1),
+      });
+    }
+
     await ctx.db.delete(args.id);
   },
 });
 
 /**
- * Insert N rows in one transaction.
+ * Admin-only row listing for a dataset. Used by the populate agent's
+ * `list_rows` tool to see what's already been inserted in the dataset
+ * it's authorized for (so the LLM can diff/append rather than dup).
  *
- * All-or-nothing semantics by design:
- *   - The quota layer's only job is hard enforcement (yes/no, atomic).
- *   - The agent runner's job is batch sizing — call `quota:getMy` to
- *     see `remaining`, then call insertBatch with at most that many.
- *   - Partial accept would push policy decisions ("which rows survived?")
- *     into the quota layer, which has no business making them.
+ * Exposed as `internalQuery` for the same reason as `countByDataset`:
+ * the backend has admin auth but no user identity, so the public
+ * `listByDataset` (which goes through `loadReadableDataset`) would
+ * reject it as `anonymous_private`.
+ *
+ * Caller is responsible for passing the dataset id it's scoped to —
+ * at the tool layer, that id is captured by closure, not LLM-supplied,
+ * so the agent can't read other users' rows even via prompt injection.
  */
-export const insertBatch = internalMutation({
-  args: {
-    datasetId: v.id("datasets"),
-    rows: v.array(v.record(v.string(), v.any())),
-  },
+export const listInternal = internalQuery({
+  args: { datasetId: v.id("datasets") },
   handler: async (ctx, args) => {
-    await consumeQuotaForDataset(ctx, args.datasetId, args.rows.length);
-
-    for (const data of args.rows) {
-      await ctx.db.insert("datasetRows", {
-        datasetId: args.datasetId,
-        data,
-      });
-    }
+    return await ctx.db
+      .query("datasetRows")
+      .withIndex("by_dataset", (q) => q.eq("datasetId", args.datasetId))
+      .collect();
   },
 });
+
