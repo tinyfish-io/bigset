@@ -114,12 +114,16 @@ ${context}${urlsBlock}${notesBlock}`;
 
         const result = await agent.generate(prompt, { maxSteps: 10 });
         if (metrics) {
-          for (const step of (result.steps ?? []) as any[]) {
-            for (const tc of (step.toolCalls ?? []) as any[]) {
-              const name = tc.payload?.toolName ?? tc.toolName;
-              if (name === "search_web") metrics.searchCalls++;
-              else if (name === "fetch_page") metrics.fetchCalls++;
-            }
+          // Use result.toolCalls (the flat accumulated list across all steps) rather
+          // than iterating result.steps[n].toolCalls. The per-step arrays are snapshots
+          // captured at step-finish time; tool-call chunks that arrive after their
+          // step-finish event end up attributed to the wrong step, causing systematic
+          // miscounts. result.toolCalls is the authoritative list maintained by Mastra's
+          // stream processor as chunks arrive.
+          for (const tc of (result.toolCalls ?? []) as any[]) {
+            const name = tc.payload?.toolName ?? tc.toolName;
+            if (name === "search_web") metrics.searchCalls++;
+            else if (name === "fetch_page") metrics.fetchCalls++;
           }
           metrics.addInvestigateResult(result);
         }
@@ -128,7 +132,7 @@ ${context}${urlsBlock}${notesBlock}`;
         if (metrics && parsed.inserted) metrics.rowsInserted++;
 
         console.log(
-          `[run_subagent] done entity="${entity_hint}" inserted=${parsed.inserted} steps=${result.steps?.length ?? "?"}` +
+          `[run_subagent] done entity="${entity_hint}" inserted=${parsed.inserted} steps=${result.steps?.length ?? "?"} toolCalls=${result.toolCalls?.length ?? "?"}` +
             (parsed.row_summary ? `\n  summary: ${parsed.row_summary}` : "") +
             (parsed.reason ? `\n  reason:  ${parsed.reason}` : "") +
             (parsed.clues ? `\n  clues:   ${parsed.clues}` : ""),
