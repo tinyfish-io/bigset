@@ -64,6 +64,8 @@ export const insert = internalMutation({
     datasetId: v.id("datasets"),
     data: v.record(v.string(), v.any()),
     sources: v.optional(v.array(v.string())),
+    rowSummary: v.optional(v.string()),
+    howFound: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const dataset = await ctx.db.get(args.datasetId);
@@ -140,20 +142,19 @@ export const update = internalMutation({
     id: v.id("datasetRows"),
     expectedDatasetId: v.id("datasets"),
     data: v.record(v.string(), v.any()),
+    sources: v.optional(v.array(v.string())),
+    rowSummary: v.optional(v.string()),
+    howFound: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    // 1. Capability scope check (security): atomically verifies the row
-    //    exists AND belongs to expectedDatasetId. Throws otherwise.
     const existing = await assertRowInDataset(
       ctx,
       args.id,
       args.expectedDatasetId,
     );
 
-    // 2. Quota: charge the dataset's owner for 1 row modification.
     await consumeQuotaForDataset(ctx, args.expectedDatasetId, 1);
 
-    // 3. Diff + history.
     const oldData = existing.data as Record<string, unknown>;
     const newData = args.data;
     for (const [key, newVal] of Object.entries(newData)) {
@@ -169,8 +170,14 @@ export const update = internalMutation({
       }
     }
 
-    // 4. Patch.
-    await ctx.db.patch(args.id, { data: newData });
+    const patch: Record<string, unknown> = {
+      data: newData,
+      updateStatus: undefined,
+    };
+    if (args.sources !== undefined) patch.sources = args.sources;
+    if (args.rowSummary !== undefined) patch.rowSummary = args.rowSummary;
+    if (args.howFound !== undefined) patch.howFound = args.howFound;
+    await ctx.db.patch(args.id, patch);
   },
 });
 
@@ -255,6 +262,43 @@ export const remove = internalMutation({
     }
 
     await ctx.db.delete(args.id);
+  },
+});
+
+export const markForUpdate = internalMutation({
+  args: {
+    datasetId: v.id("datasets"),
+    rowIds: v.optional(v.array(v.id("datasetRows"))),
+  },
+  handler: async (ctx, args) => {
+    if (args.rowIds && args.rowIds.length > 0) {
+      for (const rowId of args.rowIds) {
+        const row = await ctx.db.get(rowId);
+        if (row && row.datasetId === args.datasetId) {
+          await ctx.db.patch(rowId, { updateStatus: "pending" as const });
+        }
+      }
+      return args.rowIds.length;
+    }
+    const rows = await ctx.db
+      .query("datasetRows")
+      .withIndex("by_dataset", (q) => q.eq("datasetId", args.datasetId))
+      .collect();
+    for (const row of rows) {
+      await ctx.db.patch(row._id, { updateStatus: "pending" as const });
+    }
+    return rows.length;
+  },
+});
+
+export const clearUpdateStatus = internalMutation({
+  args: {
+    id: v.id("datasetRows"),
+    expectedDatasetId: v.id("datasets"),
+  },
+  handler: async (ctx, args) => {
+    await assertRowInDataset(ctx, args.id, args.expectedDatasetId);
+    await ctx.db.patch(args.id, { updateStatus: undefined });
   },
 });
 

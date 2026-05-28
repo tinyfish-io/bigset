@@ -97,3 +97,34 @@ body {
 :root[data-theme="dark"] .group:hover .card-glow::before {
   opacity: 0.45;
 }
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+@keyframes cell-flash {
+  0% { background-color: rgba(16, 185, 129, 0.25); }
+  100% { background-color: transparent; }
+}
+
+.shimmer-overlay {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--foreground) 50%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.8s ease-in-out infinite;
+  opacity: 0.04;
+  pointer-events: none;
+}
+
+:root[data-theme="dark"] .shimmer-overlay {
+  opacity: 0.06;
+}
+
+.cell-flash {
+  animation: cell-flash 1.5s ease-out forwards;
+}

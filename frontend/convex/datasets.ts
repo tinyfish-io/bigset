@@ -138,9 +138,40 @@ export const beginPopulateInternal = internalMutation({
     if (dataset.status === "building") {
       return { outcome: "already_building" as const };
     }
+    if (dataset.status === "updating") {
+      return { outcome: "already_updating" as const };
+    }
 
     await ctx.db.patch(dataset._id, {
       status: "building",
+      lastStatusError: undefined,
+    });
+    return { outcome: "started" as const };
+  },
+});
+
+export const beginUpdateInternal = internalMutation({
+  args: {
+    id: v.id("datasets"),
+    ownerId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const dataset = await ctx.db.get(args.id);
+    if (!dataset) {
+      return { outcome: "not_found" as const };
+    }
+    if (dataset.ownerId !== args.ownerId) {
+      return { outcome: "forbidden" as const };
+    }
+    if (dataset.status === "building") {
+      return { outcome: "already_building" as const };
+    }
+    if (dataset.status === "updating") {
+      return { outcome: "already_updating" as const };
+    }
+
+    await ctx.db.patch(dataset._id, {
+      status: "updating",
       lastStatusError: undefined,
     });
     return { outcome: "started" as const };
@@ -172,6 +203,7 @@ export const setStatusInternal = internalMutation({
       v.literal("live"),
       v.literal("paused"),
       v.literal("building"),
+      v.literal("updating"),
       v.literal("failed"),
     ),
     lastStatusError: v.optional(v.string()),
@@ -224,6 +256,7 @@ export const updateStatus = mutation({
       v.literal("live"),
       v.literal("paused"),
       v.literal("building"),
+      v.literal("updating"),
     ),
   },
   handler: async (ctx, args) => {

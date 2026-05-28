@@ -33,6 +33,7 @@ export const EVENTS = {
   DATASET_OPENED: "dataset_opened",
   DATASET_EXPORTED: "dataset_exported",
   DATASET_POPULATE_STARTED: "dataset_populate_started",
+  DATASET_UPDATE_STARTED: "dataset_update_started",
 
   // Creation flow
   DATASET_CREATION_STARTED: "dataset_creation_started",
