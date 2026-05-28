@@ -1,12 +1,16 @@
 /**
- * Per-run metrics collector for the populate workflow.
+ * Per-run metrics collector for the populate and update workflows.
  *
- * A single RunMetrics instance is created at the start of each agentStep,
+ * A single RunMetrics instance is created at the start of each workflow run,
  * passed by reference into every tool factory and agent builder, and read
  * once at the end to write the runStats Convex record.
  *
  * All operations are synchronous integer increments or field reads — zero
  * I/O, zero meaningful overhead on the hot path.
+ *
+ * Tier mapping:
+ *   populate workflow  → orchestrator = populate agent, investigate = investigate subagents
+ *   update workflow    → orchestrator = (unused, stays 0),  investigate = refresh agents
  */
 
 interface AgentResult {
@@ -28,12 +32,19 @@ function tokens(result: AgentResult): { input: number; output: number } {
 export class RunMetrics {
   searchCalls = 0;
   fetchCalls = 0;
-  /** run_subagent tool calls dispatched by the orchestrator. */
+  /** run_subagent tool calls dispatched by the orchestrator (populate only). */
   investigateCalls = 0;
-  /** Rows successfully inserted across all investigate subagents. */
+  /** Rows successfully inserted across all investigate subagents (populate only). */
   rowsInserted = 0;
+  /** Rows successfully updated by refresh agents (update workflow only). */
+  rowsUpdated = 0;
 
   readonly orchestrator = { inputTokens: 0, outputTokens: 0, steps: 0 };
+  /**
+   * Accumulates tokens for investigate subagents (populate) or refresh agents
+   * (update workflow). The `runs` field equals the number of subagent invocations
+   * in either workflow.
+   */
   readonly investigate = {
     inputTokens: 0,
     outputTokens: 0,
@@ -54,6 +65,14 @@ export class RunMetrics {
     this.investigate.outputTokens += output;
     this.investigate.steps += result.steps?.length ?? 0;
     this.investigate.runs += 1;
+  }
+
+  /**
+   * Accumulate tokens for one refresh agent run (update workflow).
+   * Stored in the `investigate` tier so the runStats schema needs no new columns.
+   */
+  addRefreshResult(result: AgentResult): void {
+    this.addInvestigateResult(result);
   }
 
   totals(): { inputTokens: number; outputTokens: number } {

@@ -35,6 +35,10 @@ export const insert = internalMutation({
     status: v.union(v.literal("success"), v.literal("error")),
     error: v.optional(v.string()),
     isBenchmark: v.optional(v.boolean()),
+    workflowType: v.optional(
+      v.union(v.literal("populate"), v.literal("update"))
+    ),
+    rowsUpdated: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     if (args.status === "success" && args.error) {

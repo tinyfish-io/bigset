@@ -142,6 +142,15 @@ export default defineSchema({
 
     // True when written by the benchmark runner rather than a real user session.
     isBenchmark: v.optional(v.boolean()),
+
+    // "populate" = initial fill workflow; "update" = refresh/update workflow.
+    // Optional for backward compat with rows written before this field existed
+    // (treat missing as "populate").
+    workflowType: v.optional(
+      v.union(v.literal("populate"), v.literal("update"))
+    ),
+    // Rows successfully updated by the refresh agent (update workflow only).
+    rowsUpdated: v.optional(v.number()),
   })
     .index("by_dataset", ["datasetId"])
     .index("by_user", ["userId"])

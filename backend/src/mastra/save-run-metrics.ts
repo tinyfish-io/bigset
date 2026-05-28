@@ -11,6 +11,7 @@ export interface SaveRunMetricsInput {
   status: "success" | "error";
   error?: string;
   isBenchmark?: boolean;
+  workflowType?: "populate" | "update";
 }
 
 /**
@@ -48,5 +49,7 @@ export async function saveRunMetrics(input: SaveRunMetricsInput): Promise<void> 
     status: input.status,
     error: input.error,
     isBenchmark: input.isBenchmark,
+    workflowType: input.workflowType,
+    rowsUpdated: input.metrics.rowsUpdated > 0 ? input.metrics.rowsUpdated : undefined,
   });
 }
