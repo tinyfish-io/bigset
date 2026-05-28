@@ -135,19 +135,29 @@ export default function DatasetPage() {
   }
 
   async function handleUpdate() {
-    if (!dataset || updating || dataset.status === "building") return;
+    if (!dataset || updating || dataset.status === "building" || dataset.status === "updating") return;
     setUpdating(true);
     try {
       const token = await getToken();
       if (!token) throw new Error("Not authenticated");
 
-      await update(
+      const selectedRowIds = selectedCount > 0 ? Array.from(selection.selected) : undefined;
+      const result = await update(
         dataset._id,
         dataset.name,
         dataset.description,
         dataset.columns,
         token,
+        selectedRowIds,
       );
+      if (selectedCount > 0) selection.clear();
+      track(EVENTS.DATASET_UPDATE_STARTED, {
+        datasetId: dataset._id,
+        column_count: dataset.columns.length,
+        row_count: selectedRowIds?.length ?? rows.length,
+        selective: selectedCount > 0,
+        runId: result.runId,
+      });
     } catch (err) {
       console.error("[update] failed", err);
       captureException(err, {
@@ -172,16 +182,20 @@ export default function DatasetPage() {
   // the "Dataset not found" UI.
 
   const exportDisabled = exporting !== null || rows.length === 0;
-  const isDatasetBuilding = dataset.status === "building";
-  const updateDisabled = updating || isDatasetBuilding;
-  const populateDisabled = populating || isDatasetBuilding;
-  const updateLabel = isDatasetBuilding
-    ? "Building…"
-    : updating
-      ? "Updating…"
-      : "Update Dataset";
-  const populateLabel = isDatasetBuilding
-    ? "Building…"
+  const isDatasetBusy = dataset.status === "building" || dataset.status === "updating";
+  const updateDisabled = updating || isDatasetBusy;
+  const populateDisabled = populating || isDatasetBusy;
+  const updateLabel = dataset.status === "updating"
+    ? "Updating…"
+    : dataset.status === "building"
+      ? "Building…"
+      : updating
+        ? "Starting…"
+        : selectedCount > 0
+          ? `Update (${selectedCount})`
+          : "Update Dataset";
+  const populateLabel = isDatasetBusy
+    ? (dataset.status === "updating" ? "Updating…" : "Building…")
     : populating
       ? "Starting…"
       : dataset.status === "failed"

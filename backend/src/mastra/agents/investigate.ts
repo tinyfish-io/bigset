@@ -33,19 +33,19 @@ RULES:
 TOOL CALL FORMAT — every tool call argument must be a JSON object wrapped in curly braces:
   search_web: {"query": "your search terms"}
   fetch_page: {"url": "https://example.com"}
-  insert_row: {"data": {${columnNames.map((n) => `"${n}": "value"`).join(", ")}}}
+  insert_row: {"data": {${columnNames.map((n) => `"${n}": "value"`).join(", ")}}, "sources": ["https://url-you-fetched.com"], "row_summary": "one line about this entity", "how_found": "step by step guide on how to extract the data so an agent in the future can do it too"}
 
 WORKFLOW:
 1. Fetch 1-2 of the provided URLs to get real data (if URLs were given).
 2. If you need more, run ONE search and fetch the best result.
 3. Call insert_row with whatever real data you have. Use "" for missing fields.
+   Include "sources" (URLs you fetched), "row_summary" (one line about this entity), and "how_found" (a step by step guide on how you found this data. eg, 1. fetch the contents of this url "<insert url>", 2. Look for the pricing field, and title name field, 3. etc...)
 4. Write your final response:
    INSERTED: true/false
    SUMMARY: one line
    CLUES: hints for finding more entities
    REASON: why you succeeded or what was missing
-
-You are scoped to ONE dataset. Do not pass a datasetId to any tool.`;
+`;
 }
 
 /**

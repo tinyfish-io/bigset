@@ -127,9 +127,21 @@ export function buildPopulateTools(
       "Insert a single row into the dataset you are populating. Call this each time you have a row ready — don't wait to batch them.",
     inputSchema: z.object({
       data: z.record(z.string(), z.any()),
+      sources: z
+        .array(z.string())
+        .optional()
+        .describe("URLs you visited or used to gather data for this row"),
+      row_summary: z
+        .string()
+        .optional()
+        .describe("One-line summary of this entity"),
+      how_found: z
+        .string()
+        .optional()
+        .describe("Brief description of how you found and verified this data"),
     }),
     outputSchema: writeResultSchema,
-    execute: async ({ data }) => {
+    execute: async ({ data, sources, row_summary, how_found }) => {
       if (!data || Object.keys(data).length === 0)
         return {
           success: false,
@@ -139,12 +151,15 @@ export function buildPopulateTools(
 
       const cleanedData = cleanDataKeys(data);
       console.log(
-        `[insert_row] ${logCtx} cols=${Object.keys(cleanedData).length}`,
+        `[insert_row] ${logCtx} cols=${Object.keys(cleanedData).length} sources=${sources?.length ?? 0}`,
       );
       try {
         await convex.mutation(internal.datasetRows.insert, {
           datasetId: authorizedDatasetId,
           data: cleanedData,
+          ...(sources !== undefined ? { sources } : {}),
+          ...(row_summary !== undefined ? { rowSummary: row_summary } : {}),
+          ...(how_found !== undefined ? { howFound: how_found } : {}),
         });
         return { success: true };
       } catch (err) {
@@ -246,9 +261,21 @@ export function buildPopulateTools(
     inputSchema: z.object({
       rowId: z.string(),
       data: z.record(z.string(), z.any()),
+      sources: z
+        .array(z.string())
+        .optional()
+        .describe("Updated source URLs where this data was verified"),
+      row_summary: z
+        .string()
+        .optional()
+        .describe("Updated one-line summary of this entity"),
+      how_found: z
+        .string()
+        .optional()
+        .describe("Brief description of how the updated data was found"),
     }),
     outputSchema: writeResultSchema,
-    execute: async ({ rowId, data }) => {
+    execute: async ({ rowId, data, sources, row_summary, how_found }) => {
       if (!rowId) return { success: false, error: "rowId is required." };
       if (!data || Object.keys(data).length === 0)
         return {
@@ -261,13 +288,13 @@ export function buildPopulateTools(
         `[update_row] ${logCtx} row=${rowId} cols=${Object.keys(cleanedData).length}`,
       );
       try {
-        // expectedDatasetId pins the Convex-side atomic capability check.
-        // If `rowId` belongs to another dataset, the mutation throws
-        // "Row not found" — uniform with the get_row policy.
         await convex.mutation(internal.datasetRows.update, {
           id: rowId,
           expectedDatasetId: authorizedDatasetId,
           data: cleanedData,
+          ...(sources !== undefined ? { sources } : {}),
+          ...(row_summary !== undefined ? { rowSummary: row_summary } : {}),
+          ...(how_found !== undefined ? { howFound: how_found } : {}),
         });
         return { success: true };
       } catch (err) {

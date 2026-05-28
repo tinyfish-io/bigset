@@ -10,6 +10,7 @@ export default defineSchema({
       v.literal("live"),
       v.literal("paused"),
       v.literal("building"),
+      v.literal("updating"),
       v.literal("failed")
     ),
     lastStatusError: v.optional(v.string()),
@@ -63,6 +64,9 @@ export default defineSchema({
     datasetId: v.id("datasets"),
     data: v.record(v.string(), v.any()),
     sources: v.optional(v.array(v.string())),
+    rowSummary: v.optional(v.string()),
+    howFound: v.optional(v.string()),
+    updateStatus: v.optional(v.literal("pending")),
     scrapeScript: v.optional(v.string()),
   }).index("by_dataset", ["datasetId"]),
 
