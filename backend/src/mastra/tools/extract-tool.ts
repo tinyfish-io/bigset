@@ -87,19 +87,25 @@ export function buildExtractTool(
     )
     .join("\n");
 
-  // Per-run dedup set. One entry per PK column value:
-  // key format: `${columnName}:${normalizedValue}`
-  // An entity is a duplicate if ANY of its PK column keys is already present.
-  // All found PK column keys are added when an entity is dispatched.
+  // Per-run dedup set. One entry per non-empty primary_keys value returned
+  // by the extract LLM. Key format: `${fieldName}:${normalizedValue}`.
+  // An entity is a duplicate if ANY of its keys is already present (OR logic).
+  // All keys are added when an entity is dispatched.
+  //
+  // Note: we use ALL non-empty values the LLM returns in primary_keys,
+  // not just the ones matching pkColumns by name. This handles:
+  //   - Old schemas with URL-only PK (LLM still returns whatever it finds)
+  //   - New compound PK schemas (entity name always present)
+  //   - Mild LLM key-name drift (e.g. "url" vs "company_url")
+  // The authoritative duplicate check at insert time (Convex OR-dedup on
+  // the actual pkColumns) is the final guard; this set only prevents
+  // double-dispatching the same entity to run_subagent within one run.
   const dispatchedKeys = new Set<string>();
 
   function makePkKeys(primaryKeys: Record<string, string>): string[] {
-    const keys: string[] = [];
-    for (const col of pkColumns) {
-      const val = (primaryKeys[col.name] ?? "").toLowerCase().trim();
-      if (val) keys.push(`${col.name}:${val}`);
-    }
-    return keys;
+    return Object.entries(primaryKeys)
+      .filter(([, v]) => v.toLowerCase().trim() !== "")
+      .map(([k, v]) => `${k}:${v.toLowerCase().trim()}`);
   }
 
   function isAlreadyDispatched(keys: string[]): boolean {
