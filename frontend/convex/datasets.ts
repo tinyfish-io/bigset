@@ -281,6 +281,53 @@ export const remove = mutation({
 });
 
 /**
+ * Create a dataset without Clerk auth. Used exclusively by the benchmark
+ * runner, which calls populateWorkflow directly (no HTTP layer) and
+ * therefore has no Clerk identity. The ownerId must be supplied by the
+ * caller; for benchmark runs pass "benchmark-runner".
+ */
+export const createInternal = internalMutation({
+  args: {
+    name: v.string(),
+    description: v.string(),
+    cadence: v.string(),
+    columns: v.array(columnValidator),
+    ownerId: v.string(),
+    visibility: v.optional(v.union(v.literal("public"), v.literal("private"))),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db.insert("datasets", {
+      name: args.name,
+      description: args.description,
+      cadence: args.cadence,
+      columns: args.columns,
+      ownerId: args.ownerId,
+      status: "paused",
+      visibility: args.visibility ?? "private",
+      rowCount: 0,
+    });
+  },
+});
+
+/**
+ * Delete a dataset and all its rows without Clerk auth. Used exclusively
+ * by the benchmark runner for cleanup after a benchmark run.
+ */
+export const deleteInternal = internalMutation({
+  args: { id: v.id("datasets") },
+  handler: async (ctx, args) => {
+    const rows = await ctx.db
+      .query("datasetRows")
+      .withIndex("by_dataset", (q) => q.eq("datasetId", args.id))
+      .collect();
+    for (const row of rows) {
+      await ctx.db.delete(row._id);
+    }
+    await ctx.db.delete(args.id);
+  },
+});
+
+/**
  * One-shot migration: scan every dataset, count its rows, and patch
  * `rowCount` to the true value. Idempotent and safe to re-run.
  *

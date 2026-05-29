@@ -1,4 +1,4 @@
-.PHONY: all dev validate-dev-env down clean convex-push convex-env seed-public-datasets
+.PHONY: all dev validate-dev-env down clean convex-push convex-env seed-public-datasets benchmark
 
 all: dev
 
@@ -69,6 +69,13 @@ convex-push:
 seed-public-datasets:
 	@test -f .env || { echo "Error: .env not found. Run: cp .env.example .env"; exit 1; }
 	@cd frontend && node ../scripts/with-root-env.mjs npx convex run publicSeed:seedPublicDatasets
+
+## Run the benchmark suite against the real populate workflow.
+## Requires: make dev running, .env filled in.
+## Pass ARGS to forward CLI flags, e.g.:
+##   make benchmark ARGS="--prompt yc-recent-batch-companies --no-cleanup"
+benchmark:
+	cd backend && npx tsx ../benchmarks/run.mts $(ARGS)
 
 down:
 	docker compose -f docker-compose.dev.yml down
