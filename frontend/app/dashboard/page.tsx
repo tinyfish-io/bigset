@@ -5,7 +5,6 @@ import Link from "next/link";
 import { useQuery, useConvexAuth } from "convex/react";
 import { useUser, useClerk } from "@clerk/nextjs";
 import { api } from "@/convex/_generated/api";
-import type { UserResource } from "@clerk/types";
 import {
   DatasetCard,
   type DatasetCardData,
@@ -23,16 +22,16 @@ export default function DashboardPage() {
   const mine = useQuery(
     api.datasets.listMine,
     isAuthenticated ? {} : "skip",
-  );
+  ) as DatasetCardData[] | undefined;
   // Public datasets are open to anonymous users too, so no `skip` gate.
-  const curated = useQuery(api.datasets.listPublic, {});
+  const curated = useQuery(api.datasets.listPublic, {}) as DatasetCardData[] | undefined;
 
   // Quota state drives the "+ New Dataset" button — disabled when the
   // user is at their free-tier limit. `undefined` while loading.
   const usage = useQuery(
     api.quota.getMy,
     isAuthenticated ? {} : "skip",
-  );
+  ) as { remaining: number } | undefined;
   const atLimit = usage !== undefined && usage.remaining === 0;
 
   // Fire dashboard_viewed once per mount when both queries have resolved,
@@ -56,7 +55,7 @@ export default function DashboardPage() {
 
   const { filteredMine, filteredCurated } = useMemo(() => {
     const q = search.trim().toLowerCase();
-    const apply = (list: typeof mine) =>
+    const apply = (list: DatasetCardData[] | undefined) =>
       (list ?? []).filter((ds) =>
         !q ||
         ds.name.toLowerCase().includes(q) ||
@@ -176,7 +175,7 @@ export default function DashboardPage() {
           eyebrow="Yours"
           heading="Datasets you own"
           isLoading={mine === undefined}
-          datasets={filteredMine as unknown as DatasetCardData[]}
+          datasets={filteredMine}
           emptyState={
             search
               ? `No datasets of yours match "${search}".`
@@ -192,7 +191,7 @@ export default function DashboardPage() {
           eyebrow="Curated by BigSet"
           heading="Explore live datasets"
           isLoading={curated === undefined}
-          datasets={filteredCurated as unknown as DatasetCardData[]}
+          datasets={filteredCurated}
           emptyState={
             search
               ? `No curated datasets match "${search}".`
@@ -251,7 +250,7 @@ function ProfileMenu({
   user,
   onSignOut,
 }: {
-  user: UserResource | null | undefined;
+  user: ReturnType<typeof useUser>["user"];
   onSignOut: () => void;
 }) {
   const [open, setOpen] = useState(false);

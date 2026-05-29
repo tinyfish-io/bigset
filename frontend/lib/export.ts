@@ -2,9 +2,8 @@
  * Client-side exporters for dataset views.
  *
  * CSV: hand-rolled, no dependencies. Tiny payload, fast.
- * XLSX: dynamically imports `xlsx` (SheetJS) on demand so the ~700KB
- *       library doesn't enter the main bundle. Users who never click
- *       "Export XLSX" never download it.
+ * XLSX: dynamically imports `write-excel-file` on demand so users who
+ *       never click "Export XLSX" never download it.
  */
 
 export interface ExportColumn {
@@ -17,13 +16,36 @@ export interface ExportRow {
 
 // ── CSV ─────────────────────────────────────────────────────────────────────
 
+function stringifyCellValue(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value == null) return "";
+  if (typeof value === "object") {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+  return String(value);
+}
+
+function neutralizeSpreadsheetFormula(value: string): string {
+  return /^[=+\-@]/.test(value) ? `'${value}` : value;
+}
+
+type ExcelCellValue = string | number | boolean | Date | null;
+
+function toExcelCellValue(value: unknown): ExcelCellValue {
+  if (value == null) return null;
+  if (value instanceof Date) return value;
+  if (typeof value === "number") return Number.isFinite(value) ? value : String(value);
+  if (typeof value === "boolean") return value;
+  return neutralizeSpreadsheetFormula(stringifyCellValue(value));
+}
+
 function csvEscape(value: unknown): string {
   if (value == null) return "";
-  let str = String(value);
-  // Neutralize spreadsheet formula injection (=, +, -, @).
-  if (/^[=+\-@]/.test(str)) {
-    str = `'${str}`;
-  }
+  const str = neutralizeSpreadsheetFormula(stringifyCellValue(value));
   // RFC 4180: fields containing comma, quote, CR, or LF must be quoted;
   // quotes inside the field are doubled.
   if (/[",\r\n]/.test(str)) {
@@ -88,22 +110,14 @@ export async function downloadXLSX(
   columns: ExportColumn[],
   rows: ExportRow[],
 ): Promise<void> {
-  // Dynamic import — keeps the ~700KB xlsx library out of the main bundle.
-  const XLSX = await import("xlsx");
+  const { default: writeExcelFile } = await import("write-excel-file/browser");
 
-  // sheet_aoa expects a 2-D array. First row is headers.
-  const aoa: unknown[][] = [
-    columns.map((c) => c.name),
-    ...rows.map((row) => columns.map((c) => row.data[c.name] ?? "")),
+  const sheetData = [
+    columns.map((column) => neutralizeSpreadsheetFormula(column.name)),
+    ...rows.map((row) =>
+      columns.map((column) => toExcelCellValue(row.data[column.name])),
+    ),
   ];
 
-  const worksheet = XLSX.utils.aoa_to_sheet(aoa);
-  const workbook = XLSX.utils.book_new();
-  // Sheet names are limited to 31 chars; truncate datasets like
-  // "Browser Automation & Web Agent Companies".
-  const sheetName =
-    datasetName.replace(/[\\/?*[\]:]/g, "-").slice(0, 31) || "Dataset";
-  XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
-
-  XLSX.writeFile(workbook, safeFilename(datasetName, "xlsx"));
+  await writeExcelFile(sheetData).toFile(safeFilename(datasetName, "xlsx"));
 }

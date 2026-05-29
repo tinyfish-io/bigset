@@ -14,7 +14,7 @@ const PUBLIC_GRID_COUNT = 9;
 export default function Home() {
   const { isAuthenticated, isLoading } = useConvexAuth();
   const router = useRouter();
-  const publicDatasets = useQuery(api.datasets.listPublic, {});
+  const publicDatasets = useQuery(api.datasets.listPublic, {}) as DatasetCardData[] | undefined;
 
   useEffect(() => {
     if (isAuthenticated) {
@@ -105,7 +105,7 @@ export default function Home() {
                 {shownDatasets.map((ds) => (
                   <DatasetCard
                     key={ds._id}
-                    dataset={ds as unknown as DatasetCardData}
+                    dataset={ds}
                   />
                 ))}
               </div>

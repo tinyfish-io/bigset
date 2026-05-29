@@ -66,6 +66,23 @@ function mapBackendColumn(col: InferredColumn, index: number): ProposedColumn {
   };
 }
 
+function getSchemaValidationError(datasetName: string, columns: ProposedColumn[]): string | null {
+  if (!datasetName.trim()) return "Dataset name is required.";
+  if (columns.length === 0) return "Add at least one column.";
+
+  const seenColumnNames = new Set<string>();
+  for (const column of columns) {
+    const normalizedName = column.name.trim().toLowerCase();
+    if (!normalizedName) return "Every column needs a name.";
+    if (seenColumnNames.has(normalizedName)) {
+      return `Column names must be unique. "${column.name.trim()}" is duplicated.`;
+    }
+    seenColumnNames.add(normalizedName);
+  }
+
+  return null;
+}
+
 function TypeSelector({ value, onChange }: { value: ColumnType; onChange: (v: ColumnType) => void }) {
   return (
     <div className="relative inline-flex">
@@ -176,20 +193,28 @@ export default function NewDatasetPage() {
 
   async function handleConfirm() {
     if (isCreating) return;
+    const validationError = getSchemaValidationError(datasetName, columns);
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
+
     setIsCreating(true);
     setError(null);
     let datasetId: string;
+    const normalizedColumns = columns.map((column) => ({
+      name: column.name.trim(),
+      type: column.type,
+      description: column.description.trim() || undefined,
+      isPrimaryKey: column.isPrimaryKey || undefined,
+    }));
+
     try {
       datasetId = await createDataset({
-        name: datasetName,
-        description: prompt,
+        name: datasetName.trim(),
+        description: prompt.trim(),
         cadence: CADENCE_LABELS[cadence],
-        columns: columns.map((c) => ({
-          name: c.name,
-          type: c.type,
-          description: c.description || undefined,
-          isPrimaryKey: c.isPrimaryKey || undefined,
-        })),
+        columns: normalizedColumns,
         retrievalStrategy: retrievalStrategy ?? undefined,
         sourceHint: sourceHint || undefined,
       });
@@ -203,7 +228,7 @@ export default function NewDatasetPage() {
       setIsCreating(false);
       return;
     }
-    try { track(EVENTS.DATASET_CREATED, { datasetId, column_count: columns.length, cadence: CADENCE_LABELS[cadence] }); } catch {}
+    try { track(EVENTS.DATASET_CREATED, { datasetId, column_count: normalizedColumns.length, cadence: CADENCE_LABELS[cadence] }); } catch {}
     router.push(`/dataset/${datasetId}`);
   }
 

@@ -5,16 +5,22 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useConvexAuth } from "convex/react";
 import { useAuth, useUser, useClerk } from "@clerk/nextjs";
-import type { UserResource } from "@clerk/types";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
-import { DatasetTable } from "@/components/table";
+import { DatasetTable, type DatasetMeta, type DatasetRow } from "@/components/table";
 import { useSelection } from "@/components/table/use-selection";
 import { useTheme } from "@/components/ThemeToggle";
 import { StatusBadge } from "@/components/dataset/StatusBadge";
 import { downloadCSV, downloadXLSX } from "@/lib/export";
 import { populate, update } from "@/lib/backend";
 import { EVENTS, captureException, track } from "@/lib/analytics";
+
+type DatasetDetail = DatasetMeta & {
+  ownerId: string;
+  rowCount?: number;
+  seedKey?: string;
+  visibility?: "public" | "private";
+};
 
 export default function DatasetPage() {
   const params = useParams();
@@ -33,11 +39,11 @@ export default function DatasetPage() {
   const dataset = useQuery(
     api.datasets.get,
     authLoading ? "skip" : { id: datasetId },
-  );
+  ) as DatasetDetail | undefined;
   const rows = useQuery(
     api.datasetRows.listByDataset,
     authLoading ? "skip" : { datasetId },
-  );
+  ) as DatasetRow[] | undefined;
 
   const rowIds = useMemo(() => (rows ?? []).map((r) => r._id), [rows]);
   const selection = useSelection(rowIds);
@@ -135,7 +141,7 @@ export default function DatasetPage() {
   }
 
   async function handleUpdate() {
-    if (!dataset || updating || dataset.status === "building" || dataset.status === "updating") return;
+    if (!dataset || !rows || updating || dataset.status === "building" || dataset.status === "updating") return;
     setUpdating(true);
     try {
       const token = await getToken();
@@ -473,7 +479,7 @@ function DatasetProfileMenu({
   user,
   onSignOut,
 }: {
-  user: UserResource | null | undefined;
+  user: ReturnType<typeof useUser>["user"];
   onSignOut: () => void;
 }) {
   const [open, setOpen] = useState(false);

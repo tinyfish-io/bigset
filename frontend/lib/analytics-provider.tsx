@@ -26,6 +26,8 @@ import { identify, initAnalytics, reset } from "./analytics";
 export function AnalyticsProvider({ children }: { children: ReactNode }) {
   const { isLoaded, isSignedIn, user } = useUser();
   const wasSignedIn = useRef<boolean>(false);
+  const userId = user?.id;
+  const userEmail = user?.primaryEmailAddress?.emailAddress;
 
   useEffect(() => {
     initAnalytics();
@@ -34,16 +36,16 @@ export function AnalyticsProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!isLoaded) return;
 
-    if (isSignedIn && user) {
-      identify(user.id, {
-        email: user.primaryEmailAddress?.emailAddress,
+    if (isSignedIn && userId) {
+      identify(userId, {
+        email: userEmail,
       });
     } else if (wasSignedIn.current) {
       reset();
     }
 
     wasSignedIn.current = !!isSignedIn;
-  }, [isLoaded, isSignedIn, user?.id, user?.primaryEmailAddress?.emailAddress]);
+  }, [isLoaded, isSignedIn, userId, userEmail]);
 
   return <>{children}</>;
 }
