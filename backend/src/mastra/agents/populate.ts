@@ -48,7 +48,7 @@ export function buildPopulateAgent(
     id: "populate-agent",
     name: "Dataset Populate Orchestrator",
     instructions: INSTRUCTIONS,
-    model: openrouter("deepseek/deepseek-v4-pro"),
+    model: openrouter("qwen/qwen3.7-max"),
     tools: {
       search_web: searchWebTool,
       fetch_page: fetchPageTool,
