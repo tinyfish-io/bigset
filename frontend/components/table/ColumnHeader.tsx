@@ -88,6 +88,17 @@ export function ColumnHeader({
         style={{ padding: "var(--table-cell-py) var(--table-cell-px)" }}
         onClick={canSort ? toggleSort : undefined}
         role={canSort ? "button" : undefined}
+        tabIndex={canSort ? 0 : undefined}
+        onKeyDown={
+          canSort
+            ? (e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  header.column.toggleSorting();
+                }
+              }
+            : undefined
+        }
         aria-sort={
           isSorted === "asc"
             ? "ascending"

@@ -45,9 +45,26 @@ function buildColumns(
       header: col.name,
       size: storedWidths[col.name] ?? DEFAULT_COL_WIDTH,
       minSize: MIN_COL_WIDTH,
-      // alphanumeric handles both plain strings and numeric values stored as
-      // strings (e.g. "42", "$1,234") and does case-insensitive comparison.
-      sortingFn: "alphanumeric",
+      // Custom sort: strip currency/thousands formatting then compare numerically;
+      // fall back to case-insensitive locale comparison for non-numeric values.
+      // TanStack's built-in "alphanumeric" sorts digit chunks individually so
+      // "$1,234" and "1234.56" don't sort correctly as numbers.
+      sortingFn: (rowA, rowB, columnId) => {
+        const a = rowA.getValue(columnId);
+        const b = rowB.getValue(columnId);
+        const toNum = (v: unknown): number => {
+          if (typeof v === "number") return v;
+          if (typeof v !== "string") return Number.NaN;
+          const n = Number(v.replace(/[^0-9.-]/g, ""));
+          return Number.isFinite(n) ? n : Number.NaN;
+        };
+        const na = toNum(a);
+        const nb = toNum(b);
+        if (!Number.isNaN(na) && !Number.isNaN(nb)) return na - nb;
+        return String(a ?? "").localeCompare(String(b ?? ""), undefined, {
+          sensitivity: "base",
+        });
+      },
     }),
   );
 
