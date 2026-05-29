@@ -143,14 +143,17 @@ ${row.howFound ? `\nPreviously found via: ${row.howFound}` : ""}`;
         // can misattribute chunks that arrive after the step-finish event.
         metrics.countToolCalls(result.toolCalls ?? []);
 
-        const text = result.text.toLowerCase();
-        if (text.includes("updated: true")) {
+        // Use a tolerant regex so variants like `"updated":true` or
+        // `updated : true` are all caught, not just the exact string
+        // "updated: true" that the agent is instructed to produce.
+        const updated = /\bupdated"?\s*:\s*true\b/i.test(result.text);
+        if (updated) {
           updatedCount++;
           metrics.rowsUpdated++;
         }
 
         console.log(
-          `[refresh-rows] Row ${row._id}: updated=${text.includes("updated: true")} steps=${result.steps?.length ?? "?"} toolCalls=${(result.toolCalls as any[])?.length ?? "?"}`,
+          `[refresh-rows] Row ${row._id}: updated=${updated} steps=${result.steps?.length ?? "?"} toolCalls=${(result.toolCalls as any[])?.length ?? "?"}`,
         );
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
