@@ -236,11 +236,7 @@ const agentStep = createStep({
       const result = await agent.generate(inputData.prompt, { maxSteps: 80 });
       metrics.addOrchestratorResult(result);
       // Use result.toolCalls (flat accumulated list) — same reasoning as investigate-tool.ts.
-      for (const tc of (result.toolCalls ?? []) as any[]) {
-        const name = tc.payload?.toolName ?? tc.toolName;
-        if (name === "search_web") metrics.searchCalls++;
-        else if (name === "fetch_page") metrics.fetchCalls++;
-      }
+      metrics.countToolCalls(result.toolCalls ?? []);
       return { text: result.text };
     } catch (err) {
       status = "error";

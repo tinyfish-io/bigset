@@ -75,6 +75,19 @@ export class RunMetrics {
     this.addInvestigateResult(result);
   }
 
+  /**
+   * Tally tool calls from a flat result.toolCalls array into searchCalls /
+   * fetchCalls. Centralised here so callers don't duplicate the loop and
+   * tool-name strings.
+   */
+  countToolCalls(toolCalls: unknown[]): void {
+    for (const tc of toolCalls as any[]) {
+      const name = tc.payload?.toolName ?? tc.toolName;
+      if (name === "search_web") this.searchCalls++;
+      else if (name === "fetch_page") this.fetchCalls++;
+    }
+  }
+
   totals(): { inputTokens: number; outputTokens: number } {
     return {
       inputTokens: this.orchestrator.inputTokens + this.investigate.inputTokens,

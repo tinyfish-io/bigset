@@ -69,6 +69,9 @@ export const getByWorkflowRunId = internalQuery({
 
 /**
  * List all runs for a dataset, newest first.
+ * TODO: paginate — .collect() loads all docs into memory and will degrade
+ * as run history grows. Add cursor-based pagination when this is exposed
+ * to the frontend or run counts become large.
  */
 export const listByDataset = internalQuery({
   args: { datasetId: v.string() },
@@ -83,6 +86,7 @@ export const listByDataset = internalQuery({
 
 /**
  * List all runs for a user, newest first.
+ * TODO: paginate — same concern as listByDataset above.
  */
 export const listByUser = internalQuery({
   args: { userId: v.string() },

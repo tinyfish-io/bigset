@@ -120,11 +120,7 @@ ${context}${urlsBlock}${notesBlock}`;
           // step-finish event end up attributed to the wrong step, causing systematic
           // miscounts. result.toolCalls is the authoritative list maintained by Mastra's
           // stream processor as chunks arrive.
-          for (const tc of (result.toolCalls ?? []) as any[]) {
-            const name = tc.payload?.toolName ?? tc.toolName;
-            if (name === "search_web") metrics.searchCalls++;
-            else if (name === "fetch_page") metrics.fetchCalls++;
-          }
+          metrics.countToolCalls(result.toolCalls ?? []);
           metrics.addInvestigateResult(result);
         }
 

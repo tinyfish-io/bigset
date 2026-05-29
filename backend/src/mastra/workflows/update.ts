@@ -141,11 +141,7 @@ ${row.howFound ? `\nPreviously found via: ${row.howFound}` : ""}`;
         // Use result.toolCalls (flat accumulated list) — same reasoning as
         // investigate-tool.ts. Per-step arrays are step-finish snapshots and
         // can misattribute chunks that arrive after the step-finish event.
-        for (const tc of (result.toolCalls ?? []) as any[]) {
-          const name = tc.payload?.toolName ?? tc.toolName;
-          if (name === "search_web") metrics.searchCalls++;
-          else if (name === "fetch_page") metrics.fetchCalls++;
-        }
+        metrics.countToolCalls(result.toolCalls ?? []);
 
         const text = result.text.toLowerCase();
         if (text.includes("updated: true")) {
@@ -187,27 +183,28 @@ ${row.howFound ? `\nPreviously found via: ${row.howFound}` : ""}`;
       `[refresh-rows] Done: ${updatedCount} updated, ${errors} errors, ${rows.length - updatedCount - errors} unchanged`,
     );
 
-    // Persist metrics — fire-and-forget; never propagate errors to the workflow.
-    try {
-      await saveRunMetrics({
-        workflowRunId: authContext.workflowRunId,
-        datasetId,
-        userId: authContext.authorizedUserId,
-        startedAt,
-        finishedAt,
-        metrics,
-        status: errors > 0 && updatedCount === 0 && rows.length === errors ? "error" : "success",
-        error:
-          errors > 0 && updatedCount === 0 && rows.length === errors
-            ? `All ${errors} row(s) failed to refresh`
-            : undefined,
-        workflowType: "update",
-      });
-    } catch (metricsErr) {
+    // Persist metrics — fire-and-forget; never block the workflow return.
+    void saveRunMetrics({
+      workflowRunId: authContext.workflowRunId,
+      datasetId,
+      userId: authContext.authorizedUserId,
+      startedAt,
+      finishedAt,
+      metrics,
+      // Total failure: every row errored. Partial failure: some rows errored
+      // but at least one succeeded — still "success" overall, but the error
+      // field records how many failed so partial issues are visible in the data.
+      status: errors > 0 && updatedCount === 0 ? "error" : "success",
+      error: errors > 0
+        ? `${errors} of ${rows.length} row(s) failed to refresh`
+        : undefined,
+      workflowType: "update",
+    }).catch((err) =>
       console.error(
-        `[refresh-rows] Failed to save run metrics: ${metricsErr instanceof Error ? metricsErr.message : String(metricsErr)}`,
-      );
-    }
+        `[refresh-rows] metrics save failed run=${authContext.workflowRunId}:`,
+        err,
+      ),
+    );
 
     return { updatedCount, totalCount: rows.length, errors };
   },
