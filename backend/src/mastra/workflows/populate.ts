@@ -117,6 +117,7 @@ Respond with EXACTLY one word: scraper or search`;
         model: openrouter(modelSlug),
         prompt: classificationPrompt,
         maxOutputTokens: 10,
+        abortSignal: getSignal(inputData.datasetId),
       });
       const answer = result.text.trim().toLowerCase();
       if (answer === "scraper" || answer === "search") {
@@ -125,6 +126,7 @@ Respond with EXACTLY one word: scraper or search`;
         console.warn(`[enumerate] Unexpected classification "${answer}", defaulting to "search"`);
       }
     } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") throw err;
       const msg = err instanceof Error ? err.message : String(err);
       console.error(`[enumerate] Classification failed: ${msg}, defaulting to "search"`);
     }

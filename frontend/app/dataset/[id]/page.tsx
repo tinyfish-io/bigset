@@ -81,6 +81,20 @@ export default function DatasetPage() {
     }
   }, [dataset, populating, getToken]);
 
+  // Once a stop request has been sent, keep the button latched in "Stopping…"
+  // until Convex confirms the dataset has actually left the busy state. Without
+  // this, the button re-enables the moment POST /stop returns (which is before
+  // the background cleanup finishes), allowing duplicate stop requests.
+  useEffect(() => {
+    if (
+      stopping &&
+      dataset?.status !== "building" &&
+      dataset?.status !== "updating"
+    ) {
+      setStopping(false);
+    }
+  }, [dataset?.status, stopping]);
+
   const openedFired = useRef<string | null>(null);
   const autoPopulateFired = useRef<string | null>(null);
   useEffect(() => {
@@ -208,13 +222,17 @@ export default function DatasetPage() {
         datasetId: dataset._id,
         status: dataset.status,
       });
+      // Do NOT clear stopping here. Keep it true until Convex confirms the
+      // dataset has left the busy state (via the useEffect above). This
+      // prevents the button from briefly re-enabling during the cleanup window.
     } catch (err) {
       console.error("[stop] failed", err);
       captureException(err, {
         operation: "dataset_stop",
         datasetId: dataset._id,
       });
-    } finally {
+      // Request didn't reach the server — clear immediately so the user can
+      // retry rather than being stuck with a permanently disabled button.
       setStopping(false);
     }
   }

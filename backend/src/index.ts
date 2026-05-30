@@ -444,7 +444,15 @@ async function runPopulateWorkflowInBackground({
       try {
         await finaliseRunAsLive({ logger, clerk, datasetId, authorizedUserId });
       } catch (stopErr) {
-        logger.error({ err: stopErr, datasetId }, "Failed to finalise stopped populate run");
+        logger.error({ err: stopErr, datasetId }, "Failed to finalise stopped populate run; marking as failed");
+        // Ensure the dataset always leaves "building" — without this fallback,
+        // a failed finalisation leaves the dataset with no active registry entry
+        // and no way for /stop to act on it again.
+        try {
+          await setDatasetPopulateStatus(datasetId, "failed", "Workflow stopped but could not be finalised");
+        } catch (fallbackErr) {
+          logger.error({ err: fallbackErr, datasetId }, "Could not update dataset status after stop finalisation failure");
+        }
       }
       return;
     }
