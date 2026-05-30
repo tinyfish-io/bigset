@@ -1,3 +1,5 @@
+SHELL := /usr/bin/env bash
+
 .PHONY: all dev validate-dev-env down clean convex-push convex-env seed-public-datasets ensure-admin-key install-deps
 
 all: dev
@@ -102,7 +104,7 @@ ensure-admin-key:
 			echo "Error: Failed to generate admin key."; exit 1; \
 		fi; \
 		if grep -q '^CONVEX_SELF_HOSTED_ADMIN_KEY=' .env; then \
-			sed -i '' "s#^CONVEX_SELF_HOSTED_ADMIN_KEY=.*#CONVEX_SELF_HOSTED_ADMIN_KEY=$$generated#" .env; \
+			sed -i.bak "s#^CONVEX_SELF_HOSTED_ADMIN_KEY=.*#CONVEX_SELF_HOSTED_ADMIN_KEY=$$generated#" .env && rm -f .env.bak; \
 		else \
 			echo "CONVEX_SELF_HOSTED_ADMIN_KEY=$$generated" >> .env; \
 		fi; \
@@ -150,6 +152,6 @@ down:
 clean:
 	docker compose -f docker-compose.dev.yml down -v --rmi local
 	@if [ -f .env ]; then \
-		sed -i '' 's|^CONVEX_SELF_HOSTED_ADMIN_KEY=.*|CONVEX_SELF_HOSTED_ADMIN_KEY=|' .env; \
+		sed -i.bak 's|^CONVEX_SELF_HOSTED_ADMIN_KEY=.*|CONVEX_SELF_HOSTED_ADMIN_KEY=|' .env && rm -f .env.bak; \
 		echo "Cleared CONVEX_SELF_HOSTED_ADMIN_KEY from .env (volumes wiped)."; \
 	fi
