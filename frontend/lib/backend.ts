@@ -69,18 +69,22 @@ const BACKEND_URL =
 /**
  * Fetch the current user's effective (resolved) model config from the backend.
  *
- * The backend resolves the authenticated user from the request (via Clerk JWT cookie)
+ * The backend resolves the authenticated user from the Clerk JWT in the Authorization header
  * and looks up their row in the modelConfig Convex table.
  * If the user has no saved preference, returns the system defaults from env.
  *
  * Always returns a complete config — no nulls, no partials.
  *
+ * @param token - Clerk JWT obtained via getToken()
  * Throws if the request fails (network error, 401, 500).
  */
-export async function getModelConfig(): Promise<EffectiveModelConfig> {
+export async function getModelConfig(token: string): Promise<EffectiveModelConfig> {
   const res = await fetch(`${BACKEND_URL}/settings/models`, {
     method: "GET",
-    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
   });
 
   if (!res.ok) {
@@ -96,22 +100,26 @@ export async function getModelConfig(): Promise<EffectiveModelConfig> {
 /**
  * Save (upsert) one or more of the current user's model preferences.
  *
- * The backend resolves the authenticated user from the request (via Clerk JWT cookie)
+ * The backend resolves the authenticated user from the Clerk JWT in the Authorization header
  * and does a partial upsert — only the fields provided in the body are updated.
  * Unset fields retain their existing values.
  *
  * @param config - A partial model config. e.g. { schemaInference: "google/gemini-2.0-flash-001" }
  *                Only the roles the user wants to change need to be included.
+ * @param token - Clerk JWT obtained via getToken()
  *
  * Throws if the request fails (network error, 401, 500).
  */
 export async function saveModelConfig(
-  config: Partial<SavedModelConfig>
+  config: Partial<SavedModelConfig>,
+  token: string,
 ): Promise<void> {
   const res = await fetch(`${BACKEND_URL}/settings/models`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
     body: JSON.stringify(config),
   });
 
@@ -154,12 +162,17 @@ export async function getOpenRouterModels(): Promise<OpenRouterModel[]> {
  * This is called when the user clicks "Refresh" in the settings UI to ensure
  * they see the most up-to-date model list and pricing.
  *
+ * @param token - Clerk JWT obtained via getToken()
  * Returns the newly fetched model list.
  * Throws if the request fails (network error, 500).
  */
-export async function refreshOpenRouterModels(): Promise<OpenRouterModel[]> {
+export async function refreshOpenRouterModels(token: string): Promise<OpenRouterModel[]> {
   const res = await fetch(`${BACKEND_URL}/openrouter/refresh`, {
     method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
   });
 
   if (!res.ok) {

@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useQuery } from "convex/react";
+import { useAuth } from "@clerk/nextjs";
 import { api } from "@/convex/_generated/api";
 import { getModelConfig, saveModelConfig, getOpenRouterModels, refreshOpenRouterModels, type EffectiveModelConfig, type OpenRouterModel } from "@/lib/backend";
 import { SettingsPageLayout } from "@/components/settings/SettingsPageLayout";
@@ -12,6 +13,7 @@ import { MODEL_ROLES, type ModelRole } from "@/components/settings/types";
 import { SkeletonList } from "@/components/settings/Skeleton";
 
 export default function ModelSettingsPage() {
+  const { getToken } = useAuth();
   const convexModels = useQuery(api.openRouterModels.list, {});
 
   const [effectiveConfig, setEffectiveConfig] = useState<EffectiveModelConfig | null>(null);
@@ -24,11 +26,15 @@ export default function ModelSettingsPage() {
   const isLoading = convexModels === undefined || isLoadingConfig;
 
   useEffect(() => {
-    getModelConfig()
+    getToken()
+      .then((token) => {
+        if (!token) throw new Error("Not authenticated");
+        return getModelConfig(token);
+      })
       .then((config) => setEffectiveConfig(config))
       .catch(() => setEffectiveConfig(null))
       .finally(() => setIsLoadingConfig(false));
-  }, []);
+  }, [getToken]);
 
   const models: OpenRouterModel[] = convexModels
     ? convexModels.map((m) => ({
@@ -47,7 +53,9 @@ export default function ModelSettingsPage() {
   async function handleModelSelect(role: ModelRole, model: OpenRouterModel) {
     setIsSavingModel(true);
     try {
-      await saveModelConfig({ [role.key]: model.canonicalSlug });
+      const token = await getToken();
+      if (!token) throw new Error("Not authenticated");
+      await saveModelConfig({ [role.key]: model.canonicalSlug }, token);
       setEffectiveConfig((prev: EffectiveModelConfig | null) =>
         prev ? { ...prev, [role.key]: model.canonicalSlug } : null
       );
@@ -143,7 +151,9 @@ export default function ModelSettingsPage() {
           onRefresh={async () => {
             setRefreshing(true);
             try {
-              const models = await refreshOpenRouterModels();
+              const token = await getToken();
+              if (!token) throw new Error("Not authenticated");
+              const models = await refreshOpenRouterModels(token);
               setSheetModels(models);
             } catch {
               // we will add toast later
