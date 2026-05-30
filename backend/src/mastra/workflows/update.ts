@@ -133,7 +133,7 @@ ${sourcesBlock}
 ${row.rowSummary ? `\nPrevious summary: ${row.rowSummary}` : ""}
 ${row.howFound ? `\nPreviously found via: ${row.howFound}` : ""}`;
 
-        const abortSignal = getSignal(authContext.workflowRunId);
+        const abortSignal = getSignal(datasetId);
         const result = await agent.generate(prompt, { abortSignal, maxSteps: 10 });
 
         // Accumulate token usage into the investigate tier (refresh agents map
@@ -192,7 +192,7 @@ ${row.howFound ? `\nPreviously found via: ${row.howFound}` : ""}`;
     // If the run was stopped mid-update, workers exited early via AbortError.
     // Rows that were never processed still have updateStatus:"pending".
     // Clear them now so the UI doesn't show stale shimmer indicators.
-    const abortSignal = getSignal(authContext.workflowRunId);
+    const abortSignal = getSignal(datasetId);
     if (abortSignal?.aborted) {
       console.log(`[refresh-rows] Run was stopped — clearing remaining pending row statuses`);
       try {

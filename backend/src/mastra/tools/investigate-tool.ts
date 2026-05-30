@@ -113,7 +113,7 @@ ${pkBlock}
 Context (partial data already found):
 ${context}${urlsBlock}${notesBlock}`;
 
-        const abortSignal = getSignal(authContext.workflowRunId);
+        const abortSignal = getSignal(authorizedDatasetId);
         const result = await agent.generate(prompt, { abortSignal, maxSteps: 10 });
         if (metrics) {
           // Use result.toolCalls (the flat accumulated list across all steps) rather

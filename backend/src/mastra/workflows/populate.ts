@@ -242,7 +242,7 @@ const agentStep = createStep({
         inputData.columns,
         metrics,
       );
-      const abortSignal = getSignal(inputData.authContext.workflowRunId);
+      const abortSignal = getSignal(inputData.authorizedDatasetId);
       const result = await agent.generate(inputData.prompt, { abortSignal, maxSteps: 80 });
       metrics.addOrchestratorResult(result);
       // Use result.toolCalls (flat accumulated list) — same reasoning as investigate-tool.ts.
