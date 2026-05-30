@@ -4,8 +4,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   useReactTable,
   getCoreRowModel,
+  getSortedRowModel,
   createColumnHelper,
   type ColumnDef,
+  type SortingState,
 } from "@tanstack/react-table";
 import { FixedSizeList } from "react-window";
 import type { DatasetMeta, DatasetRow, DatasetColumn } from "./types";
@@ -44,6 +46,26 @@ function buildColumns(
       header: col.name,
       size: storedWidths[col.name] ?? DEFAULT_COL_WIDTH,
       minSize: MIN_COL_WIDTH,
+      // Custom sort: strip currency/thousands formatting then compare numerically;
+      // fall back to case-insensitive locale comparison for non-numeric values.
+      // TanStack's built-in "alphanumeric" sorts digit chunks individually so
+      // "$1,234" and "1234.56" don't sort correctly as numbers.
+      sortingFn: (rowA, rowB, columnId) => {
+        const a = rowA.getValue(columnId);
+        const b = rowB.getValue(columnId);
+        const toNum = (v: unknown): number => {
+          if (typeof v === "number") return v;
+          if (typeof v !== "string") return Number.NaN;
+          const n = Number(v.replace(/[^0-9.-]/g, ""));
+          return Number.isFinite(n) ? n : Number.NaN;
+        };
+        const na = toNum(a);
+        const nb = toNum(b);
+        if (!Number.isNaN(na) && !Number.isNaN(nb)) return na - nb;
+        return String(a ?? "").localeCompare(String(b ?? ""), undefined, {
+          sensitivity: "base",
+        });
+      },
     }),
   );
 
@@ -85,6 +107,8 @@ export function DatasetTable({
     return () => observer.disconnect();
   }, []);
 
+  const [sorting, setSorting] = useState<SortingState>([]);
+
   const [storedWidths, setStoredWidths] = usePersistedColumnWidths(datasetId);
 
   const columns = useMemo(
@@ -97,6 +121,9 @@ export function DatasetTable({
     columns,
     columnResizeMode: "onChange",
     getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+    onSortingChange: setSorting,
+    state: { sorting },
     getRowId: (row) => row._id,
   });
 

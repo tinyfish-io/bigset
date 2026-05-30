@@ -5,6 +5,51 @@ import type { DatasetRow, DatasetColumn } from "./types";
 import { ColumnIcon } from "./ColumnIcon";
 import { floorWidth } from "./utils";
 
+function SortIndicator({ direction }: { direction: false | "asc" | "desc" }) {
+  if (direction === "asc") {
+    return (
+      <svg
+        className="ml-auto shrink-0 text-foreground/60"
+        width="10"
+        height="10"
+        viewBox="0 0 10 10"
+        fill="none"
+        aria-hidden="true"
+      >
+        <path d="M5 2L8.5 7H1.5L5 2Z" fill="currentColor" />
+      </svg>
+    );
+  }
+  if (direction === "desc") {
+    return (
+      <svg
+        className="ml-auto shrink-0 text-foreground/60"
+        width="10"
+        height="10"
+        viewBox="0 0 10 10"
+        fill="none"
+        aria-hidden="true"
+      >
+        <path d="M5 8L1.5 3H8.5L5 8Z" fill="currentColor" />
+      </svg>
+    );
+  }
+  // Unsorted: show a faint up/down chevron pair as a hint that the column is sortable
+  return (
+    <svg
+      className="ml-auto shrink-0 opacity-0 group-hover/header:opacity-30 transition-opacity"
+      width="10"
+      height="10"
+      viewBox="0 0 10 10"
+      fill="none"
+      aria-hidden="true"
+    >
+      <path d="M5 1.5L7.5 4H2.5L5 1.5Z" fill="currentColor" />
+      <path d="M5 8.5L2.5 6H7.5L5 8.5Z" fill="currentColor" />
+    </svg>
+  );
+}
+
 export function ColumnHeader({
   header,
   column,
@@ -16,6 +61,10 @@ export function ColumnHeader({
   isResizing: boolean;
   containerHeight: number;
 }) {
+  const isSorted = header.column.getIsSorted();
+  const canSort = header.column.getCanSort();
+  const toggleSort = header.column.getToggleSortingHandler();
+
   return (
     <div
       className="shrink-0 relative select-none border-r border-border text-left text-xs font-medium tracking-wide text-foreground/70"
@@ -31,8 +80,32 @@ export function ColumnHeader({
       )}
 
       <div
-        className="flex w-full items-center gap-1.5"
+        className={`group/header flex w-full items-center gap-1.5 ${
+          canSort
+            ? "cursor-pointer hover:bg-foreground/[0.04] active:bg-foreground/[0.07] transition-colors"
+            : ""
+        }`}
         style={{ padding: "var(--table-cell-py) var(--table-cell-px)" }}
+        onClick={canSort ? toggleSort : undefined}
+        role={canSort ? "button" : undefined}
+        tabIndex={canSort ? 0 : undefined}
+        onKeyDown={
+          canSort
+            ? (e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  header.column.toggleSorting();
+                }
+              }
+            : undefined
+        }
+        aria-sort={
+          isSorted === "asc"
+            ? "ascending"
+            : isSorted === "desc"
+              ? "descending"
+              : undefined
+        }
       >
         {column && <ColumnIcon type={column.type} />}
         {column?.isPrimaryKey && (
@@ -45,6 +118,7 @@ export function ColumnHeader({
           </svg>
         )}
         <span className="truncate">{column?.name ?? header.id}</span>
+        {canSort && <SortIndicator direction={isSorted} />}
       </div>
 
       <div
