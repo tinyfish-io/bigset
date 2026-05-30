@@ -378,7 +378,7 @@ fastify.addHook("onClose", async () => {
 fastify.get("/health", async () => ({ status: "ok" }));
 
 
-fastify.post("/openrouter/refresh", async (req, reply) => {
+fastify.post("/openrouter/refresh", { preHandler: requireAuth }, async (req, reply) => {
   const { fetchModelsFromOpenRouter, upsertModelBatch } = await import("./config/models.js");
   try {
     const models = await fetchModelsFromOpenRouter();

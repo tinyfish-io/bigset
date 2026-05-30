@@ -32,18 +32,17 @@ export const upsert = mutation({
       .first();
 
     if (existing) {
-      await ctx.db.patch(existing._id, {
-        schemaInference: args.schemaInference,
-        populateOrchestrator: args.populateOrchestrator,
-        investigateSubagent: args.investigateSubagent,
-      });
-    } else {
-      await ctx.db.insert("modelConfig", {
-        userId: identity.subject,
-        schemaInference: args.schemaInference,
-        populateOrchestrator: args.populateOrchestrator,
-        investigateSubagent: args.investigateSubagent,
-      });
+      const patch: Record<string, string | null> = {};
+      if (args.schemaInference !== undefined) patch.schemaInference = args.schemaInference;
+      if (args.populateOrchestrator !== undefined) patch.populateOrchestrator = args.populateOrchestrator;
+      if (args.investigateSubagent !== undefined) patch.investigateSubagent = args.investigateSubagent;
+      await ctx.db.patch(existing._id, patch);
+} else {
+      const insert: Record<string, string> = { userId: args.userId };
+      if (args.schemaInference !== undefined) insert.schemaInference = args.schemaInference;
+      if (args.populateOrchestrator !== undefined) insert.populateOrchestrator = args.populateOrchestrator;
+      if (args.investigateSubagent !== undefined) insert.investigateSubagent = args.investigateSubagent;
+      await ctx.db.insert("modelConfig", insert);
     }
   },
 });

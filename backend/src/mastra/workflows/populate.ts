@@ -32,9 +32,9 @@ export const authContextSchema = z.object({
   authorizedUserId: z.string().min(1),
   workflowRunId: z.string().min(1),
   modelConfig: z.object({
-    schemaInference: z.string(),
-    populateOrchestrator: z.string(),
-    investigateSubagent: z.string(),
+    schemaInference: z.string().min(1),
+    populateOrchestrator: z.string().min(1),
+    investigateSubagent: z.string().min(1),
   }),
   isBenchmark: z.boolean().optional(),
 });

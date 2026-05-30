@@ -1,4 +1,4 @@
-import { query, mutation } from "./_generated/server.js";
+import { query, internalMutation } from "./_generated/server.js";
 import { v } from "convex/values";
 
 export const list = query({
@@ -9,7 +9,7 @@ export const list = query({
   },
 });
 
-export const upsertBatch = mutation({
+export const upsertBatch = internalMutation({
   args: {
     models: v.array(
       v.object({

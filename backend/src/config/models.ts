@@ -81,7 +81,7 @@ export async function validateModelSlug(
  * Called after successfully fetching from OpenRouter API.
  */
 export async function upsertModelBatch(models: OpenRouterModel[]): Promise<void> {
-  await convex.mutation(api.openRouterModels.upsertBatch, { models });
+  await convex.mutation(internal.openRouterModels.upsertBatch, { models });
 }
 
 /**

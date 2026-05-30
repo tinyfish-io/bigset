@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { flushSync } from "react-dom";
 import { X, Search, RefreshCw } from "lucide-react";
 import type { OpenRouterModel } from "./types";
 
@@ -87,7 +86,7 @@ export function ModelSideSheet({
 
   useEffect(() => {
     if (open) {
-      flushSync(() => setSearch(""));
+      setSearch("");
       setTimeout(() => inputRef.current?.focus(), 100);
     }
   }, [open]);
@@ -227,12 +226,12 @@ export function ModelSideSheet({
                           </div>
                           <div className="text-right shrink-0 w-14">
                             <p className="text-[11px] text-muted">
-                              ${model.promptCost.toFixed(2)}
+                              ${model.promptCost.toFixed(2)}/1M
                             </p>
                           </div>
                           <div className="text-right shrink-0 w-14">
                             <p className="text-[11px] text-muted">
-                              ${model.completionCost.toFixed(2)}
+                              ${model.completionCost.toFixed(2)}/1M
                             </p>
                           </div>
                         </button>
