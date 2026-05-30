@@ -4,6 +4,7 @@ import { buildSubagentTool } from "../tools/investigate-tool.js";
 import { searchWebTool, fetchPageTool } from "../tools/web-tools.js";
 import type { AuthContext } from "../workflows/populate.js";
 import type { PopulateColumn } from "../../pipeline/populate.js";
+import type { RunMetrics } from "../run-metrics.js";
 
 const openrouter = createOpenRouter({
   apiKey: process.env.OPENROUTER_API_KEY!,
@@ -41,6 +42,7 @@ export function buildPopulateAgent(
   authorizedDatasetId: string,
   authContext: AuthContext,
   columns: PopulateColumn[],
+  metrics?: RunMetrics,
 ): Agent {
   return new Agent({
     id: "populate-agent",
@@ -54,6 +56,7 @@ export function buildPopulateAgent(
         authorizedDatasetId,
         authContext,
         columns,
+        metrics,
       ),
     },
   });

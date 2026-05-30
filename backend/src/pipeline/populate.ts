@@ -13,5 +13,6 @@ export const datasetContextSchema = z.object({
   datasetName: z.string(),
   description: z.string(),
   columns: z.array(populateColumnSchema).min(1),
+  rowIds: z.array(z.string()).min(1).optional(),
 });
 export type DatasetContext = z.infer<typeof datasetContextSchema>;

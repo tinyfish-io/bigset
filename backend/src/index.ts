@@ -25,8 +25,17 @@ type DatasetPopulateBeginOutcome =
   | "started"
   | "not_found"
   | "forbidden"
-  | "already_building";
+  | "already_building"
+  | "already_updating";
 type PopulateWorkflowRun = Awaited<ReturnType<typeof populateWorkflow.createRun>>;
+
+type DatasetUpdateBeginOutcome =
+  | "started"
+  | "not_found"
+  | "forbidden"
+  | "already_building"
+  | "already_updating";
+type UpdateWorkflowRun = Awaited<ReturnType<typeof updateWorkflow.createRun>>;
 
 function statusErrorMessage(err: unknown): string {
   const message = err instanceof Error ? err.message : String(err);
@@ -64,6 +73,7 @@ async function sendDatasetReadyNotification({
   datasetId,
   datasetName,
   rowCount,
+  workflowType = "populate",
 }: {
   logger: FastifyBaseLogger;
   clerk: ClerkClient;
@@ -71,12 +81,13 @@ async function sendDatasetReadyNotification({
   datasetId: string;
   datasetName: string;
   rowCount: number;
+  workflowType?: "populate" | "update";
 }): Promise<void> {
   const baseProps = {
     datasetId,
     datasetName,
     rowCount,
-    workflowType: "populate" as const,
+    workflowType,
   };
 
   try {
@@ -127,6 +138,106 @@ async function sendDatasetReadyNotification({
       { err: notifyErr, datasetId },
       "Notify block crashed unexpectedly; populate already succeeded",
     );
+  }
+}
+
+async function beginDatasetUpdate(
+  datasetId: string,
+  ownerId: string,
+): Promise<DatasetUpdateBeginOutcome> {
+  const claim = await convex.mutation(internal.datasets.beginUpdateInternal, {
+    id: datasetId,
+    ownerId,
+  });
+  return claim.outcome;
+}
+
+async function runUpdateWorkflowInBackground({
+  input,
+  run,
+  authorizedUserId,
+  logger,
+  clerk,
+}: {
+  input: DatasetContext;
+  run: UpdateWorkflowRun;
+  authorizedUserId: string;
+  logger: FastifyBaseLogger;
+  clerk: ClerkClient;
+}): Promise<void> {
+  const datasetId = input.datasetId;
+
+  try {
+    const result = await run.start({
+      inputData: {
+        ...input,
+        authContext: {
+          authorizedUserId,
+          workflowRunId: run.runId,
+        },
+      },
+    });
+
+    logger.info(
+      {
+        workflowStatus: result.status,
+        steps: JSON.stringify(result.steps).slice(0, 2000),
+      },
+      "Update workflow completed",
+    );
+
+    if (result.status !== "success") {
+      throw new Error(`Workflow ended with status: ${result.status}`);
+    }
+
+    const currentDataset = await convex.query(internal.datasets.getInternal, {
+      id: datasetId,
+    });
+    if (!currentDataset) {
+      logger.info(
+        { datasetId },
+        "Dataset no longer exists post-update; skipping status transition",
+      );
+      return;
+    }
+
+    await setDatasetPopulateStatus(datasetId, "live");
+
+    const rowCount = await convex.query(
+      internal.datasetRows.countByDataset,
+      { datasetId },
+    );
+    await sendDatasetReadyNotification({
+      logger,
+      clerk,
+      userId: authorizedUserId,
+      datasetId,
+      datasetName: currentDataset.name,
+      rowCount,
+      workflowType: "update",
+    });
+  } catch (err) {
+    const lastStatusError = statusErrorMessage(err);
+    logger.error({ err, datasetId }, "Update background workflow failed");
+
+    try {
+      const currentDataset = await convex.query(internal.datasets.getInternal, {
+        id: datasetId,
+      });
+      if (!currentDataset) {
+        logger.info(
+          { datasetId },
+          "Dataset no longer exists after failed update; skipping failed status transition",
+        );
+        return;
+      }
+      await setDatasetPopulateStatus(datasetId, "failed", lastStatusError);
+    } catch (statusErr) {
+      logger.error(
+        { err: statusErr, datasetId },
+        "Failed to transition dataset status to 'failed' after update",
+      );
+    }
   }
 }
 
@@ -350,34 +461,45 @@ await fastify.register(async (instance) => {
         return reply.code(401).send({ error: "Authentication required" });
       }
 
-      const dataset = await convex.query(internal.datasets.getInternal, {
-        id: parsed.data.datasetId,
-      });
-      if (!dataset) {
+      const updateOutcome = await beginDatasetUpdate(
+        parsed.data.datasetId,
+        auth.userId,
+      );
+
+      if (updateOutcome === "not_found") {
         return reply.code(404).send({ error: "Dataset not found" });
       }
-      if (dataset.ownerId !== auth.userId) {
+      if (updateOutcome === "forbidden") {
         return reply.code(403).send({ error: "Not authorized to update this dataset" });
       }
-
-      const run = await updateWorkflow.createRun();
-      const result = await run.start({
-        inputData: {
-          ...parsed.data,
-          authContext: {
-            authorizedUserId: auth.userId,
-            workflowRunId: run.runId,
-          },
-        },
-      });
-
-      req.log.info({ workflowStatus: result.status }, "Update workflow completed");
-
-      if (result.status !== "success") {
-        throw new Error(`Workflow ended with status: ${result.status}`);
+      if (updateOutcome === "already_building") {
+        return reply.code(409).send({ error: "Dataset is being populated" });
+      }
+      if (updateOutcome === "already_updating") {
+        return reply.code(409).send({ error: "Dataset is already being updated" });
+      }
+      if (updateOutcome !== "started") {
+        throw new Error(`Unexpected update claim outcome: ${updateOutcome}`);
       }
 
-      return { success: true, result: result.result };
+      let run: UpdateWorkflowRun;
+      try {
+        run = await updateWorkflow.createRun();
+      } catch (runErr) {
+        req.log.error(runErr, "Failed to create update workflow run; reverting dataset status");
+        await setDatasetPopulateStatus(parsed.data.datasetId, "live");
+        return reply.code(502).send({ error: "Failed to update dataset. Please try again." });
+      }
+
+      void runUpdateWorkflowInBackground({
+        input: parsed.data,
+        run,
+        authorizedUserId: auth.userId,
+        logger: req.log,
+        clerk: req.server.clerk,
+      });
+
+      return reply.code(202).send({ success: true, runId: run.runId });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes("validator") || msg.includes("Invalid")) {

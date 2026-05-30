@@ -1,4 +1,4 @@
-import { query, mutation, internalQuery } from "./_generated/server.js";
+import { query, mutation, internalQuery, internalMutation } from "./_generated/server.js";
 import type { QueryCtx } from "./_generated/server.js";
 import { v } from "convex/values";
 import type { Doc } from "./_generated/dataModel.js";
@@ -93,6 +93,98 @@ export const getInternal = internalQuery({
   },
 });
 
+export const beginPopulateInternal = internalMutation({
+  args: {
+    id: v.id("datasets"),
+    ownerId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const dataset = await ctx.db.get(args.id);
+    if (!dataset) {
+      return { outcome: "not_found" as const };
+    }
+    if (dataset.ownerId !== args.ownerId) {
+      return { outcome: "forbidden" as const };
+    }
+    if (dataset.status === "building") {
+      return { outcome: "already_building" as const };
+    }
+    if (dataset.status === "updating") {
+      return { outcome: "already_updating" as const };
+    }
+    await ctx.db.patch(dataset._id, {
+      status: "building",
+      lastStatusError: undefined,
+    });
+    return { outcome: "started" as const };
+  },
+});
+
+export const beginUpdateInternal = internalMutation({
+  args: {
+    id: v.id("datasets"),
+    ownerId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const dataset = await ctx.db.get(args.id);
+    if (!dataset) {
+      return { outcome: "not_found" as const };
+    }
+    if (dataset.ownerId !== args.ownerId) {
+      return { outcome: "forbidden" as const };
+    }
+    if (dataset.status === "building") {
+      return { outcome: "already_building" as const };
+    }
+    if (dataset.status === "updating") {
+      return { outcome: "already_updating" as const };
+    }
+    await ctx.db.patch(dataset._id, {
+      status: "updating",
+      lastStatusError: undefined,
+    });
+    return { outcome: "started" as const };
+  },
+});
+
+/**
+ * Admin-only status transition. Used by the backend orchestration layer
+ * to move a dataset between lifecycle states after a workflow completes.
+ *
+ * No authz check — the backend has already verified ownership before
+ * reaching here (or is acting as the system on behalf of a scheduled
+ * run). This mutation is purely a controlled patch on the `status` field.
+ *
+ * Lifecycle today:
+ *   - "paused"   : default for newly created datasets before first run
+ *   - "building" : set by beginPopulateInternal after ownership passes
+ *   - "live"     : set by background populate after rows exist
+ *   - "failed"   : set by background populate on workflow failure
+ *
+ * NOTE: the public `datasets.updateStatus` mutation still exists for
+ * user-initiated transitions (Pause/Resume) — that one goes through
+ * ownership authz. Use this internal version for system writes.
+ */
+export const setStatusInternal = internalMutation({
+  args: {
+    id: v.id("datasets"),
+    status: v.union(
+      v.literal("live"),
+      v.literal("paused"),
+      v.literal("building"),
+      v.literal("updating"),
+      v.literal("failed"),
+    ),
+    lastStatusError: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.id, {
+      status: args.status,
+      lastStatusError: args.status === "failed" ? args.lastStatusError : undefined,
+    });
+  },
+});
+
 export const create = mutation({
   args: {
     name: v.string(),
@@ -111,9 +203,6 @@ export const create = mutation({
   handler: async (ctx, args) => {
     const identity = await requireIdentity(ctx);
     assertNotReservedOwner(identity.subject);
-    // Block dataset creation at full exhaustion — a dataset you can't
-    // populate is just clutter. Row generation later will re-check, so
-    // this is a UX safeguard, not the only line of defense.
     await requireQuotaRemaining(ctx, identity.subject, 1);
 
     return await ctx.db.insert("datasets", {

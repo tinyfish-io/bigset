@@ -3,39 +3,47 @@
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useQuery, useConvexAuth } from "convex/react";
-import { useAuth, useUser, useClerk } from "@clerk/nextjs";
-import type { UserResource } from "@clerk/types";
+import { useQuery, useMutation, useConvexAuth } from "convex/react";
+import { useAuth } from "@clerk/nextjs";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { DatasetTable } from "@/components/table";
 import type { DatasetColumn } from "@/components/table/types";
 import { useSelection } from "@/components/table/use-selection";
-import { useTheme } from "@/components/ThemeToggle";
+import { ThemeToggle } from "@/components/ThemeToggle";
 import { StatusBadge } from "@/components/dataset/StatusBadge";
+import { SideSheet, CellDetail } from "@/components/SideSheet";
 import { FilterPopover, ActiveFilter } from "@/components/dataset/FilterPopover";
 import { downloadCSV, downloadXLSX } from "@/lib/export";
 import { populate, update } from "@/lib/backend";
 import { EVENTS, captureException, track } from "@/lib/analytics";
-import type { MatchType } from "@/components/dataset/FilterPopover";
+import { toast } from "@/components/Toaster";
 
 export default function DatasetPage() {
   const params = useParams();
   const { isLoading: authLoading } = useConvexAuth();
   const { userId, getToken } = useAuth();
-  const { user } = useUser();
-  const { signOut } = useClerk();
   const [exporting, setExporting] = useState<"csv" | "xlsx" | null>(null);
   const [populating, setPopulating] = useState(false);
+  const [editingName, setEditingName] = useState(false);
+  const [nameValue, setNameValue] = useState("");
+  const nameInputRef = useRef<HTMLInputElement>(null);
+  const [sideSheet, setSideSheet] = useState<{
+    column: DatasetColumn;
+    value: unknown;
+    rowId: string;
+  } | null>(null);
   const [updating, setUpdating] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [confirmPopulate, setConfirmPopulate] = useState(false);
 
+  const updateDetails = useMutation(api.datasets.updateDetails);
+
   const [filter, setFilter] = useState<{
     column: string;
     value: string;
-    matchType: MatchType;
+    matchType: "contains" | "exact";
   } | null>(null);
 
   const datasetId = params.id as Id<"datasets">;
@@ -55,6 +63,8 @@ export default function DatasetPage() {
   );
 
   const rows = filter === null ? allRows : filteredRows;
+
+const isOwner = userId != null && dataset?.ownerId != null && userId === dataset.ownerId;
 
   const rowIds = useMemo(() => (rows ?? []).map((r) => r._id), [rows]);
   const selection = useSelection(rowIds);
@@ -151,10 +161,17 @@ export default function DatasetPage() {
     }
   }
 
+  const handleCellExpand = useCallback((columnName: string, value: unknown, rowId: string) => {
+    if (!dataset) return;
+    const column = dataset.columns.find((c) => c.name === columnName);
+    if (!column) return;
+    setSideSheet({ column, value, rowId });
+  }, [dataset]);
+
   function handleAddFilter(
     column: string,
     value: string,
-    matchType: MatchType,
+    matchType: "contains" | "exact",
   ) {
     setFilter({ column, value, matchType });
   }
@@ -163,24 +180,61 @@ export default function DatasetPage() {
     setFilter(null);
   }
 
-  const handleCellExpand = useCallback((columnName: string, value: unknown, rowId: string) => {
-    // Cell expansion not yet implemented in this UI
-  }, []);
+  function startEditingName() {
+    if (!dataset || !isOwner) return;
+    setNameValue(dataset.name);
+    setEditingName(true);
+    setTimeout(() => nameInputRef.current?.select(), 0);
+  }
+
+  async function saveName() {
+    if (!dataset) return;
+    const trimmed = nameValue.trim();
+    if (!trimmed || trimmed === dataset.name) {
+      setEditingName(false);
+      return;
+    }
+    try {
+      await updateDetails({
+        id: dataset._id,
+        name: trimmed,
+      });
+      toast.success("Dataset name updated");
+    } catch {
+      toast.error("Failed to update dataset name");
+    } finally {
+      setEditingName(false);
+    }
+  }
+
+  function cancelNameEdit() {
+    setEditingName(false);
+  }
 
   async function handleUpdate() {
-    if (!dataset || updating || dataset.status === "building") return;
+    if (!dataset || updating || dataset.status === "building" || dataset.status === "updating") return;
     setUpdating(true);
     try {
       const token = await getToken();
       if (!token) throw new Error("Not authenticated");
 
-      await update(
+      const selectedRowIds = selectedCount > 0 ? Array.from(selection.selected) : undefined;
+      const result = await update(
         dataset._id,
         dataset.name,
         dataset.description,
         dataset.columns,
         token,
+        selectedRowIds,
       );
+      if (selectedCount > 0) selection.clear();
+      track(EVENTS.DATASET_UPDATE_STARTED, {
+        datasetId: dataset._id,
+        column_count: dataset.columns.length,
+        row_count: selectedRowIds?.length ?? rows.length,
+        selective: selectedCount > 0,
+        runId: result.runId,
+      });
     } catch (err) {
       console.error("[update] failed", err);
       captureException(err, {
@@ -205,78 +259,132 @@ export default function DatasetPage() {
   // the "Dataset not found" UI.
 
   const exportDisabled = exporting !== null || rows.length === 0;
-  const isDatasetBuilding = dataset.status === "building";
-  const updateDisabled = updating || isDatasetBuilding;
-  const populateDisabled = populating || isDatasetBuilding;
-  const updateLabel = isDatasetBuilding
-    ? "Building…"
-    : updating
-      ? "Updating…"
-      : "Update Dataset";
-  const populateLabel = isDatasetBuilding
-    ? "Building…"
+  const isDatasetBusy = dataset.status === "building" || dataset.status === "updating";
+  const updateDisabled = updating || isDatasetBusy;
+  const populateDisabled = populating || isDatasetBusy;
+  const updateLabel = dataset.status === "updating"
+    ? "Updating…"
+    : dataset.status === "building"
+      ? "Building…"
+      : updating
+        ? "Starting…"
+        : selectedCount > 0
+          ? `Update (${selectedCount})`
+          : "Update Dataset";
+  const populateLabel = isDatasetBusy
+    ? (dataset.status === "updating" ? "Updating…" : "Building…")
     : populating
       ? "Starting…"
       : dataset.status === "failed"
         ? "Retry Populate"
         : "Clear & Populate";
-  const exportLabel = exporting
-    ? "Exporting…"
-    : selectedCount > 0
-      ? `Export (${selectedCount})`
-      : "Export";
+  const csvLabel =
+    exporting === "csv"
+      ? "Exporting…"
+      : selectedCount > 0
+        ? `Export CSV (${selectedCount})`
+        : "Export CSV";
+  const xlsxLabel =
+    exporting === "xlsx"
+      ? "Exporting…"
+      : selectedCount > 0
+        ? `Export XLSX (${selectedCount})`
+        : "Export XLSX";
 
   return (
     <div className="flex flex-1 flex-col h-screen">
-      <header className="border-b border-border px-5 py-2.5 flex items-center justify-between bg-surface shrink-0">
-        <div className="flex items-center gap-3 min-w-0">
-          <Link href="/dashboard" className="hover:opacity-80 transition-opacity shrink-0">
-            <img src="/BigSetLogo.png" alt="BigSet" className="h-[24px] dark:hidden" />
-            <img src="/BigSetLogoDarkBG.png" alt="BigSet" className="h-[24px] hidden dark:block" />
+      <header className="border-b border-border px-5 py-3 flex items-center justify-between bg-surface shrink-0">
+        <div className="flex items-center gap-3">
+          <Link href="/dashboard" className="hover:opacity-80 transition-opacity">
+            <img src="/BigSetLogo.png" alt="BigSet" className="h-[26px] dark:hidden" />
+            <img src="/BigSetLogoDarkBG.png" alt="BigSet" className="h-[26px] hidden dark:block" />
           </Link>
-          <svg width="8" height="20" viewBox="0 0 8 20" className="text-border shrink-0" aria-hidden="true">
-            <line x1="7" y1="0" x2="1" y2="20" stroke="currentColor" strokeWidth="1.2" />
-          </svg>
-          <h1 className="text-sm font-semibold tracking-tight truncate max-w-md">
-            {dataset.name}
-          </h1>
+          <span className="text-foreground/15">/</span>
+          {editingName ? (
+            <input
+              ref={nameInputRef}
+              type="text"
+              value={nameValue}
+              onChange={(e) => setNameValue(e.target.value)}
+              onBlur={saveName}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  nameInputRef.current?.blur();
+                }
+                if (e.key === "Escape") cancelNameEdit();
+              }}
+              className="text-sm font-semibold tracking-tight truncate max-w-md rounded border border-border bg-background px-2 py-0.5 outline-none focus:border-foreground/30"
+            />
+          ) : isOwner ? (
+            <button
+              onClick={startEditingName}
+              className="flex items-center gap-1.5 group"
+              title="Edit dataset name"
+            >
+              <h1 className="text-sm font-semibold tracking-tight truncate max-w-md">
+                {dataset.name}
+              </h1>
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 16 16"
+                fill="currentColor"
+                className="w-3 h-3 text-foreground/30 group-hover:text-foreground/60 transition-colors"
+              >
+                <path d="M11.013 1.427a1.75 1.75 0 0 1 2.474 0l1.086 1.086a1.75 1.75 0 0 1 0 2.474l-8.61 8.61c-.21.21-.47.364-.756.445l-3.251.93a.75.75 0 0 1-.927-.928l.929-3.25c.081-.286.235-.547.445-.758l8.61-8.61Zm1.414 1.06a.25.25 0 0 0-.354 0L10.811 3.75l1.439 1.44 1.263-1.263a.25.25 0 0 1 .354 0Z" />
+              </svg>
+            </button>
+          ) : (
+            <h1 className="text-sm font-semibold tracking-tight truncate max-w-md">
+              {dataset.name}
+            </h1>
+          )}
           <StatusBadge status={dataset.status} />
         </div>
-        <div className="flex items-center gap-1.5">
-          <ExportDropdown
-            open={exportOpen}
-            onToggle={() => setExportOpen((o) => !o)}
-            onClose={() => setExportOpen(false)}
-            label={exportLabel}
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] text-muted mr-2">
+            {dataset.cadence}
+          </span>
+          <button
+            onClick={() => handleExport("csv")}
             disabled={exportDisabled}
-            exporting={exporting}
-            selectedCount={selectedCount}
-            onExport={(fmt) => { setExportOpen(false); handleExport(fmt); }}
-          />
-
-          <SettingsDropdown
-            open={settingsOpen}
-            onToggle={() => setSettingsOpen((o) => !o)}
-            onClose={() => setSettingsOpen(false)}
-            cadence={dataset.cadence}
-            updateLabel={updateLabel}
-            updateDisabled={updateDisabled}
-            populateLabel={populateLabel}
-            populateDisabled={populateDisabled}
-            onUpdate={() => { setSettingsOpen(false); handleUpdate(); }}
-            onPopulate={() => {
-              setSettingsOpen(false);
-              if (rows.length > 0) {
-                setConfirmPopulate(true);
-              } else {
-                handlePopulate();
-              }
-            }}
-          />
-
-          <div className="w-px h-4 bg-border mx-0.5" />
-
-          <DatasetProfileMenu user={user} onSignOut={() => signOut()} />
+            title={
+              selectedCount > 0
+                ? `Export ${selectedCount} selected row${selectedCount === 1 ? "" : "s"} to CSV`
+                : "Export all rows to CSV"
+            }
+            className="border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-foreground/[0.03] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {csvLabel}
+          </button>
+          <button
+            onClick={() => handleExport("xlsx")}
+            disabled={exportDisabled}
+            title={
+              selectedCount > 0
+                ? `Export ${selectedCount} selected row${selectedCount === 1 ? "" : "s"} to XLSX`
+                : "Export all rows to XLSX"
+            }
+            className="border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-foreground/[0.03] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {xlsxLabel}
+          </button>
+          <button
+            onClick={handleUpdate}
+            disabled={updateDisabled}
+            className="border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-foreground/[0.03] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {updateLabel}
+          </button>
+          <button
+            onClick={handlePopulate}
+            disabled={populateDisabled}
+            className="border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-foreground/[0.03] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {populateLabel}
+          </button>
+          <div className="w-px h-4 bg-border mx-1" />
+          <ThemeToggle />
         </div>
       </header>
 
@@ -324,7 +432,7 @@ export default function DatasetPage() {
         </div>
       </div>
 
-      <DatasetTable
+<DatasetTable
         dataset={dataset}
         rows={rows}
         datasetId={datasetId}
@@ -342,13 +450,23 @@ export default function DatasetPage() {
           onCancel={() => setConfirmPopulate(false)}
         />
       )}
+
+      <SideSheet
+        open={sideSheet !== null}
+        onClose={() => setSideSheet(null)}
+      >
+        {sideSheet && (
+          <CellDetail
+            columnName={sideSheet.column.name}
+            columnType={sideSheet.column.type}
+            description={sideSheet.column.description}
+            value={sideSheet.value}
+          />
+        )}
+      </SideSheet>
     </div>
   );
 }
-
-/* ------------------------------------------------------------------ */
-/*  Export dropdown                                                     */
-/* ------------------------------------------------------------------ */
 
 function ExportDropdown({
   open,

@@ -15,6 +15,9 @@ export interface DataRowData {
   isSelected: (id: string) => boolean;
   toggleRow: (id: string, shiftKey: boolean) => void;
   onCellExpand: (columnName: string, value: unknown, rowId: string) => void;
+  isBuilding: boolean;
+  pendingRowIds: Set<string>;
+  flashingCells: Set<string>;
 }
 
 function DataRowImpl({
@@ -26,7 +29,17 @@ function DataRowImpl({
   index: number;
   style: CSSProperties;
 }) {
-  const { rows, columns, columnWidths, isSelected, toggleRow, onCellExpand } = data;
+  const {
+    rows,
+    columns,
+    columnWidths,
+    isSelected,
+    toggleRow,
+    onCellExpand,
+    isBuilding,
+    pendingRowIds,
+    flashingCells,
+  } = data;
   const row = rows[index];
 
   if (!row) {
@@ -64,13 +77,15 @@ function DataRowImpl({
       {columns.map((col, cellIdx) => {
         const width = floorWidth(columnWidths[cellIdx + 1] ?? 150);
         const value = row.original.data[col.name];
+        const isPending = pendingRowIds.has(row.original._id);
+        const isFlashing = flashingCells.has(`${row.original._id}:${col.name}`);
         return (
           <div
             key={col.name}
             data-ph-mask-text="true"
             className={`group relative shrink-0 overflow-hidden text-ellipsis whitespace-nowrap border-r border-border/30 last:border-r-0 ${
               cellIdx === 0 ? "font-medium text-foreground" : "text-foreground/70"
-            }`}
+            }${isFlashing ? " cell-flash" : ""}`}
             style={{
               width,
               padding: "var(--table-cell-py) var(--table-cell-px)",
@@ -88,6 +103,7 @@ function DataRowImpl({
             >
               <Maximize2 className="size-3" />
             </button>
+            {isPending && <div className="shimmer-overlay absolute inset-0" />}
           </div>
         );
       })}
