@@ -93,10 +93,21 @@ export default defineSchema({
   usage: defineTable({
     userId: v.string(),
     rowsConsumed: v.number(),
-    // ms epoch of the start of the period this counter belongs to (first
-    // ms of the current UTC calendar month). Optional for forward-compat
-    // with rows written before this field existed — missing = treated as
-    // "before current period", which forces a reset on next write.
     periodStart: v.optional(v.number()),
+  }).index("by_user", ["userId"]),
+
+  openRouterModels: defineTable({
+    modelName: v.string(),
+    canonicalSlug: v.string(),
+    contextLength: v.number(),
+    completionCost: v.number(),
+    promptCost: v.number(),
+  }).index("by_slug", ["canonicalSlug"]),
+
+  modelConfig: defineTable({
+    userId: v.string(),
+    schemaInference: v.optional(v.string()),
+    populateOrchestrator: v.optional(v.string()),
+    investigateSubagent: v.optional(v.string()),
   }).index("by_user", ["userId"]),
 });
