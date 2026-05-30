@@ -126,7 +126,9 @@ Respond with EXACTLY one word: scraper or search`;
         console.warn(`[enumerate] Unexpected classification "${answer}", defaulting to "search"`);
       }
     } catch (err) {
-      if (err instanceof Error && err.name === "AbortError") throw err;
+      // Only re-throw if OUR signal was actually fired. A spurious network
+      // AbortError should fall through and default to "search" as before.
+      if (err instanceof Error && err.name === "AbortError" && getSignal(inputData.datasetId)?.aborted) throw err;
       const msg = err instanceof Error ? err.message : String(err);
       console.error(`[enumerate] Classification failed: ${msg}, defaulting to "search"`);
     }
@@ -252,9 +254,10 @@ const agentStep = createStep({
       return { text: result.text };
     } catch (err) {
       status = "error";
-      // Distinguish a user-initiated stop from genuine failures so runStats
-      // records a clear reason rather than a cryptic "AbortError".
-      if (err instanceof Error && err.name === "AbortError") {
+      // Label user-initiated stops clearly in runStats; treat spurious network
+      // AbortErrors (signal not fired) as regular failures so the error message
+      // doesn't mislead operators into thinking the user pressed Stop.
+      if (err instanceof Error && err.name === "AbortError" && getSignal(inputData.authorizedDatasetId)?.aborted) {
         errorMsg = "Stopped by user";
       } else {
         errorMsg = err instanceof Error ? err.message : String(err);

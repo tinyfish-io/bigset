@@ -158,10 +158,10 @@ ${row.howFound ? `\nPreviously found via: ${row.howFound}` : ""}`;
           `[refresh-rows] Row ${row._id}: updated=${updated} steps=${result.steps?.length ?? "?"} toolCalls=${(result.toolCalls as any[])?.length ?? "?"}`,
         );
       } catch (err) {
-        // Re-throw AbortError so the worker exits and processWithConcurrency
-        // winds down. The finally block still runs (clearing updateStatus for
-        // this specific row) before the error propagates.
-        if (err instanceof Error && err.name === "AbortError") throw err;
+        // Only re-throw if OUR signal was actually fired. Spurious network
+        // AbortErrors must not terminate a worker — they should be counted as
+        // row errors so the rest of the dataset continues refreshing.
+        if (err instanceof Error && err.name === "AbortError" && getSignal(datasetId)?.aborted) throw err;
         const msg = err instanceof Error ? err.message : String(err);
         console.error(
           `[refresh-rows] Row ${row._id} failed: ${msg}`,
