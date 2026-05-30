@@ -312,25 +312,23 @@ export const clearUpdateStatus = internalMutation({
  * "pending"`. This clears them so the UI doesn't show stale shimmer
  * indicators after the run is marked live.
  *
- * Scale note: Convex mutations have a per-transaction document-read limit
- * (~16 k docs). Datasets are currently capped at 100 rows so this is safe,
- * but if that limit ever rises a paginated approach will be needed here.
+ * Uses the `by_dataset_update_status` compound index so only the pending
+ * rows are scanned — the query never touches rows that have already been
+ * processed (updateStatus === undefined).
  */
 export const clearAllPendingUpdateStatus = internalMutation({
   args: { datasetId: v.id("datasets") },
   handler: async (ctx, args) => {
-    const rows = await ctx.db
+    const pendingRows = await ctx.db
       .query("datasetRows")
-      .withIndex("by_dataset", (q) => q.eq("datasetId", args.datasetId))
+      .withIndex("by_dataset_update_status", (q) =>
+        q.eq("datasetId", args.datasetId).eq("updateStatus", "pending"),
+      )
       .collect();
-    let cleared = 0;
-    for (const row of rows) {
-      if (row.updateStatus === "pending") {
-        await ctx.db.patch(row._id, { updateStatus: undefined });
-        cleared++;
-      }
+    for (const row of pendingRows) {
+      await ctx.db.patch(row._id, { updateStatus: undefined });
     }
-    return cleared;
+    return pendingRows.length;
   },
 });
 
