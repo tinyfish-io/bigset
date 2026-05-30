@@ -3,6 +3,7 @@ import { z } from "zod";
 import { buildInvestigateAgent } from "../agents/investigate.js";
 import type { AuthContext } from "../workflows/populate.js";
 import type { PopulateColumn } from "../../pipeline/populate.js";
+import type { RunMetrics } from "../run-metrics.js";
 
 const investigateInputSchema = z.object({
   entity_hint: z
@@ -72,6 +73,7 @@ export function buildSubagentTool(
   authorizedDatasetId: string,
   authContext: AuthContext,
   columns: PopulateColumn[],
+  metrics?: RunMetrics,
 ) {
   return createTool({
     id: "run_subagent",
@@ -80,6 +82,7 @@ export function buildSubagentTool(
     inputSchema: investigateInputSchema,
     outputSchema: investigateOutputSchema,
     execute: async ({ entity_hint, primary_keys, context, urls, notes }) => {
+      if (metrics) metrics.investigateCalls++;
       console.log(
         `[run_subagent] spawning subagent user=${authContext.authorizedUserId} run=${authContext.workflowRunId} dataset=${authorizedDatasetId} entity="${entity_hint}" pk=${JSON.stringify(primary_keys)}`,
       );
@@ -110,9 +113,22 @@ Context (partial data already found):
 ${context}${urlsBlock}${notesBlock}`;
 
         const result = await agent.generate(prompt, { maxSteps: 10 });
+        if (metrics) {
+          // Use result.toolCalls (the flat accumulated list across all steps) rather
+          // than iterating result.steps[n].toolCalls. The per-step arrays are snapshots
+          // captured at step-finish time; tool-call chunks that arrive after their
+          // step-finish event end up attributed to the wrong step, causing systematic
+          // miscounts. result.toolCalls is the authoritative list maintained by Mastra's
+          // stream processor as chunks arrive.
+          metrics.countToolCalls(result.toolCalls ?? []);
+          metrics.addInvestigateResult(result);
+        }
+
         const parsed = parseInvestigateResult(result.text);
+        if (metrics && parsed.inserted) metrics.rowsInserted++;
+
         console.log(
-          `[run_subagent] done entity="${entity_hint}" inserted=${parsed.inserted} steps=${result.steps?.length ?? "?"}` +
+          `[run_subagent] done entity="${entity_hint}" inserted=${parsed.inserted} steps=${result.steps?.length ?? "?"} toolCalls=${result.toolCalls?.length ?? "?"}` +
             (parsed.row_summary ? `\n  summary: ${parsed.row_summary}` : "") +
             (parsed.reason ? `\n  reason:  ${parsed.reason}` : "") +
             (parsed.clues ? `\n  clues:   ${parsed.clues}` : ""),

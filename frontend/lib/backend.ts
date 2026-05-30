@@ -225,14 +225,17 @@ export async function update(
   description: string,
   columns: PopulateColumn[],
   token: string,
-): Promise<WorkflowResult> {
+  rowIds?: string[],
+): Promise<PopulateStartResult> {
+  const body: Record<string, unknown> = { datasetId, datasetName, description, columns };
+  if (rowIds && rowIds.length > 0) body.rowIds = rowIds;
   const res = await fetch(`${BACKEND_URL}/update`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${token}`,
     },
-    body: JSON.stringify({ datasetId, datasetName, description, columns }),
+    body: JSON.stringify(body),
   });
 
   if (!res.ok) {

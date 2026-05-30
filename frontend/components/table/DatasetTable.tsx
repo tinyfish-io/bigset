@@ -13,6 +13,7 @@ import type { useSelection } from "./use-selection";
 import { usePersistedColumnWidths } from "./use-persisted-widths";
 import { TableHeader } from "./TableHeader";
 import { DataRow, type DataRowData } from "./DataRow";
+import { useRowChangeDetection } from "./use-row-change-detection";
 
 type Selection = ReturnType<typeof useSelection>;
 
@@ -112,6 +113,7 @@ export function DatasetTable({
   const tableRows = table.getRowModel().rows;
   const columnWidths = useMemo(() => headers.map((h) => h.getSize()), [headers]);
   const isBuilding = dataset.status === "building";
+  const { flashingCells, pendingRowIds } = useRowChangeDetection(rows);
   const displayCount = isBuilding ? Math.max(tableRows.length, GHOST_ROW_COUNT) : tableRows.length;
   const totalWidth = columnWidths.reduce((sum, w) => sum + w, 0);
   const tableContentWidth = totalWidth + LAST_COLUMN_RESIZE_GUTTER;
@@ -140,8 +142,10 @@ export function DatasetTable({
       isSelected: selection.has,
       toggleRow,
       isBuilding,
+      pendingRowIds,
+      flashingCells,
     }),
-    [tableRows, dataset.columns, columnWidths, selection.has, toggleRow, isBuilding],
+    [tableRows, dataset.columns, columnWidths, selection.has, toggleRow, isBuilding, pendingRowIds, flashingCells],
   );
 
   return (

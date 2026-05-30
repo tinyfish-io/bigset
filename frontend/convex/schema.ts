@@ -10,6 +10,7 @@ export default defineSchema({
       v.literal("live"),
       v.literal("paused"),
       v.literal("building"),
+      v.literal("updating"),
       v.literal("failed")
     ),
     lastStatusError: v.optional(v.string()),
@@ -63,6 +64,9 @@ export default defineSchema({
     datasetId: v.id("datasets"),
     data: v.record(v.string(), v.any()),
     sources: v.optional(v.array(v.string())),
+    rowSummary: v.optional(v.string()),
+    howFound: v.optional(v.string()),
+    updateStatus: v.optional(v.literal("pending")),
     scrapeScript: v.optional(v.string()),
   }).index("by_dataset", ["datasetId"]),
 
@@ -110,4 +114,40 @@ export default defineSchema({
     populateOrchestrator: v.optional(v.string()),
     investigateSubagent: v.optional(v.string()),
   }).index("by_user", ["userId"]),
+
+  // One row per populate workflow run. Written once at the end of each run
+  // (success or error) by the backend agent runner — never by the frontend.
+  // Tracks tool-call counts, token usage, and timing so runs can be
+  // compared across datasets, users, and benchmark sessions.
+  runStats: defineTable({
+    workflowRunId: v.string(),
+    datasetId: v.string(),
+    userId: v.string(),
+    startedAt: v.number(),
+    finishedAt: v.number(),
+    durationMs: v.number(),
+    searchCalls: v.number(),
+    fetchCalls: v.number(),
+    investigateCalls: v.number(),
+    rowsInserted: v.number(),
+    tokensInput: v.number(),
+    tokensOutput: v.number(),
+    orchestratorTokensInput: v.number(),
+    orchestratorTokensOutput: v.number(),
+    orchestratorSteps: v.number(),
+    investigateTokensInput: v.number(),
+    investigateTokensOutput: v.number(),
+    investigateSteps: v.number(),
+    investigateRuns: v.number(),
+    status: v.union(v.literal("success"), v.literal("error")),
+    error: v.optional(v.string()),
+    isBenchmark: v.optional(v.boolean()),
+    workflowType: v.optional(
+      v.union(v.literal("populate"), v.literal("update"))
+    ),
+    rowsUpdated: v.optional(v.number()),
+  })
+    .index("by_dataset", ["datasetId"])
+    .index("by_user", ["userId"])
+    .index("by_workflow_run", ["workflowRunId"]),
 });
