@@ -13,7 +13,7 @@ import { useSelection } from "@/components/table/use-selection";
 import { useTheme } from "@/components/ThemeToggle";
 import { StatusBadge } from "@/components/dataset/StatusBadge";
 import { downloadCSV, downloadXLSX } from "@/lib/export";
-import { populate, update } from "@/lib/backend";
+import { populate, appendPopulate, update } from "@/lib/backend";
 import { EVENTS, captureException, track } from "@/lib/analytics";
 
 export default function DatasetPage() {
@@ -24,6 +24,7 @@ export default function DatasetPage() {
   const { signOut } = useClerk();
   const [exporting, setExporting] = useState<"csv" | "xlsx" | null>(null);
   const [populating, setPopulating] = useState(false);
+  const [appending, setAppending] = useState(false);
   const [updating, setUpdating] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -72,6 +73,37 @@ export default function DatasetPage() {
       setPopulating(false);
     }
   }, [dataset, populating, getToken]);
+
+  const handleAppend = useCallback(async () => {
+    if (!dataset || appending || dataset.status === "building") return;
+    setAppending(true);
+    try {
+      const token = await getToken();
+      if (!token) throw new Error("Not authenticated");
+
+      const startedRun = await appendPopulate(
+        dataset._id,
+        dataset.name,
+        dataset.description,
+        dataset.columns,
+        token,
+      );
+      track(EVENTS.DATASET_APPEND_STARTED, {
+        datasetId: dataset._id,
+        column_count: dataset.columns.length,
+        prior_row_count: rows?.length ?? 0,
+        runId: startedRun.runId,
+      });
+    } catch (err) {
+      console.error("[append] failed", err);
+      captureException(err, {
+        operation: "dataset_append",
+        datasetId: dataset._id,
+      });
+    } finally {
+      setAppending(false);
+    }
+  }, [dataset, appending, getToken, rows]);
 
   const openedFired = useRef<string | null>(null);
   const autoPopulateFired = useRef<string | null>(null);
@@ -184,6 +216,7 @@ export default function DatasetPage() {
   const exportDisabled = exporting !== null || rows.length === 0;
   const isDatasetBusy = dataset.status === "building" || dataset.status === "updating";
   const updateDisabled = updating || isDatasetBusy;
+  const appendDisabled = appending || isDatasetBusy;
   const populateDisabled = populating || isDatasetBusy;
   const updateLabel = dataset.status === "updating"
     ? "Updating…"
@@ -194,6 +227,11 @@ export default function DatasetPage() {
         : selectedCount > 0
           ? `Update (${selectedCount})`
           : "Update Dataset";
+  const appendLabel = isDatasetBusy
+    ? (dataset.status === "updating" ? "Updating…" : "Building…")
+    : appending
+      ? "Starting…"
+      : "Populate";
   const populateLabel = isDatasetBusy
     ? (dataset.status === "updating" ? "Updating…" : "Building…")
     : populating
@@ -242,9 +280,12 @@ export default function DatasetPage() {
             cadence={dataset.cadence}
             updateLabel={updateLabel}
             updateDisabled={updateDisabled}
+            appendLabel={appendLabel}
+            appendDisabled={appendDisabled}
             populateLabel={populateLabel}
             populateDisabled={populateDisabled}
             onUpdate={() => { setSettingsOpen(false); handleUpdate(); }}
+            onAppend={() => { setSettingsOpen(false); handleAppend(); }}
             onPopulate={() => {
               setSettingsOpen(false);
               if (rows.length > 0) {
@@ -398,9 +439,12 @@ function SettingsDropdown({
   cadence,
   updateLabel,
   updateDisabled,
+  appendLabel,
+  appendDisabled,
   populateLabel,
   populateDisabled,
   onUpdate,
+  onAppend,
   onPopulate,
 }: {
   open: boolean;
@@ -409,9 +453,12 @@ function SettingsDropdown({
   cadence: string;
   updateLabel: string;
   updateDisabled: boolean;
+  appendLabel: string;
+  appendDisabled: boolean;
   populateLabel: string;
   populateDisabled: boolean;
   onUpdate: () => void;
+  onAppend: () => void;
   onPopulate: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -446,6 +493,14 @@ function SettingsDropdown({
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>
               {updateLabel}
+            </button>
+            <button
+              onClick={onAppend}
+              disabled={appendDisabled}
+              className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs text-foreground hover:bg-foreground/[0.05] transition-colors disabled:opacity-40"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              {appendLabel}
             </button>
             <button
               onClick={onPopulate}

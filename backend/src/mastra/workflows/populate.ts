@@ -137,7 +137,8 @@ Respond with EXACTLY one word: scraper or search`;
   },
 });
 
-const buildPromptOutputSchema = z.object({
+// Exported so the append workflow can reuse the agent step without duplicating it.
+export const buildPromptOutputSchema = z.object({
   prompt: z.string(),
   // Threaded through so the agent step can build a dataset-scoped agent.
   // The LLM never sees these fields — they stay in the workflow envelope.
@@ -216,7 +217,8 @@ For each lead you find, call run_subagent with the primary key values and any co
  * and agent builder, and saved to Convex in the finally block. The save is
  * fire-and-forget — errors are logged but never propagate to the workflow.
  */
-const agentStep = createStep({
+// Exported so the append workflow can run the same orchestrator step.
+export const agentStep = createStep({
   id: "populate-agent",
   inputSchema: buildPromptOutputSchema,
   outputSchema: z.object({ text: z.string() }),

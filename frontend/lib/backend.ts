@@ -84,6 +84,35 @@ export async function populate(
   return res.json();
 }
 
+/**
+ * Append new rows to an existing dataset without clearing it first.
+ * Uses existing rows' howFound patterns to guide discovery of new entities.
+ */
+export async function appendPopulate(
+  datasetId: string,
+  datasetName: string,
+  description: string,
+  columns: PopulateColumn[],
+  token: string,
+): Promise<PopulateStartResult> {
+  const res = await fetch(`${BACKEND_URL}/append`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ datasetId, datasetName, description, columns }),
+  });
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    const message = body?.error || `Backend error (${res.status})`;
+    throw new Error(message);
+  }
+
+  return res.json();
+}
+
 export async function update(
   datasetId: string,
   datasetName: string,
