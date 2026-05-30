@@ -30,6 +30,15 @@ export const env = {
 
   OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY,
 
+  // Default models — used when a user has not saved a preference.
+  // Each must be a valid OpenRouter model slug.
+  SCHEMA_INFERENCE_MODEL:
+    process.env.SCHEMA_INFERENCE_MODEL ?? "anthropic/claude-sonnet-4-6",
+  POPULATE_ORCHESTRATOR_MODEL:
+    process.env.POPULATE_ORCHESTRATOR_MODEL ?? "qwen/qwen3.7-max",
+  INVESTIGATE_SUBAGENT_MODEL:
+    process.env.INVESTIGATE_SUBAGENT_MODEL ?? "qwen/qwen3.7-max",
+
   // Resend (transactional email). Optional — when RESEND_API_KEY is unset
   // the email module no-ops with a log line, so local dev works without
   // a Resend account. EMAIL_FROM must be a domain that's verified in the

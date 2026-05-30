@@ -4,6 +4,7 @@ import { generateText } from "ai";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { datasetContextSchema, populateColumnSchema } from "../../pipeline/populate.js";
 import { convex, internal } from "../../convex.js";
+import { DEFAULT_MODEL_IDS } from "../../config/models.js";
 import { buildPopulateAgent } from "../agents/populate.js";
 
 /**
@@ -28,6 +29,11 @@ import { buildPopulateAgent } from "../agents/populate.js";
 export const authContextSchema = z.object({
   authorizedUserId: z.string().min(1),
   workflowRunId: z.string().min(1),
+  modelConfig: z.object({
+    schemaInference: z.string(),
+    populateOrchestrator: z.string(),
+    investigateSubagent: z.string(),
+  }),
 });
 export type AuthContext = z.infer<typeof authContextSchema>;
 
@@ -101,8 +107,10 @@ Respond with EXACTLY one word: scraper or search`;
       const openrouter = createOpenRouter({
         apiKey: process.env.OPENROUTER_API_KEY!,
       });
+      const modelSlug =
+        inputData.authContext?.modelConfig?.schemaInference ?? DEFAULT_MODEL_IDS.SCHEMA_INFERENCE;
       const result = await generateText({
-        model: openrouter("anthropic/claude-sonnet-4-6"),
+        model: openrouter(modelSlug),
         prompt: classificationPrompt,
         maxOutputTokens: 10,
       });
