@@ -12,6 +12,7 @@
     "@clerk/nextjs": "^7.3.7",
     "@tanstack/react-table": "^8.21.3",
     "convex": "^1.39.1",
+    "lucide-react": "^1.17.0",
     "next": "16.2.6",
     "posthog-js": "^1.374.2",
     "react": "19.2.4",

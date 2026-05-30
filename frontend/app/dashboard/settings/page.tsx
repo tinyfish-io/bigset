@@ -1,6 +1,5 @@
 "use client";
 
-import { SettingsSidebar } from "@/components/settings/SettingsSidebar";
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
 

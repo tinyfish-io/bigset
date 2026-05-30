@@ -1,29 +1,74 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useQuery } from "convex/react";
+import { api } from "@/convex/_generated/api";
+import { getModelConfig, saveModelConfig, getOpenRouterModels, refreshOpenRouterModels, type EffectiveModelConfig, type OpenRouterModel } from "@/lib/backend";
 import { SettingsPageLayout } from "@/components/settings/SettingsPageLayout";
 import { SettingsHeader } from "@/components/settings/SettingsHeader";
 import { SettingsTile } from "@/components/settings/SettingsTile";
 import { ModelSideSheet } from "@/components/settings/ModelSideSheet";
-import { MODEL_ROLES, MOCK_MODELS, type ModelRole } from "@/components/settings/types";
+import { MODEL_ROLES, type ModelRole } from "@/components/settings/types";
 import { SkeletonList } from "@/components/settings/Skeleton";
 
 export default function ModelSettingsPage() {
-  const [selectedModels, setSelectedModels] = useState<Record<string, string>>({
-    schemaInference: "anthropic/claude-sonnet-4-6",
-    populateOrchestrator: "qwen/qwen3.7-max",
-    investigateSubagent: "qwen/qwen3.7-max",
-  });
+  const convexModels = useQuery(api.openRouterModels.list, {});
+
+  const [effectiveConfig, setEffectiveConfig] = useState<EffectiveModelConfig | null>(null);
+  const [isLoadingConfig, setIsLoadingConfig] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
-  const [activeSheet, setActiveSheet] = useState<{
-    role: ModelRole;
-  } | null>(null);
+  const [sheetModels, setSheetModels] = useState<OpenRouterModel[]>([]);
+  const [activeSheet, setActiveSheet] = useState<{ role: ModelRole } | null>(null);
+  const [isSavingModel, setIsSavingModel] = useState(false);
+
+  const isLoading = convexModels === undefined || isLoadingConfig;
 
   useEffect(() => {
-    const timer = setTimeout(() => setIsLoading(false), 1000);
-    return () => clearTimeout(timer);
+    getModelConfig()
+      .then((config) => setEffectiveConfig(config))
+      .catch(() => setEffectiveConfig(null))
+      .finally(() => setIsLoadingConfig(false));
   }, []);
+
+  const models: OpenRouterModel[] = convexModels
+    ? convexModels.map((m) => ({
+        modelName: m.modelName,
+        canonicalSlug: m.canonicalSlug,
+        contextLength: m.contextLength,
+        completionCost: m.completionCost,
+        promptCost: m.promptCost,
+      }))
+    : [];
+
+  function getSelectedModel(role: ModelRole): string {
+    return effectiveConfig?.[role.key as keyof typeof effectiveConfig] ?? "";
+  }
+
+  async function handleModelSelect(role: ModelRole, model: OpenRouterModel) {
+    setIsSavingModel(true);
+    try {
+      await saveModelConfig({ [role.key]: model.canonicalSlug });
+      setEffectiveConfig((prev: EffectiveModelConfig | null) =>
+        prev ? { ...prev, [role.key]: model.canonicalSlug } : null
+      );
+      setActiveSheet(null);
+    } catch {
+      // we will add toast later
+    } finally {
+      setIsSavingModel(false);
+    }
+  }
+
+  function openSideSheet(role: ModelRole) {
+    if (sheetModels.length === 0) {
+      getOpenRouterModels()
+        .then((models) => setSheetModels(models))
+        .catch(() => {
+          // we will add toast later
+        });
+    }
+    setActiveSheet({ role });
+  }
 
   const navItems = [
     {
@@ -60,16 +105,6 @@ export default function ModelSettingsPage() {
     },
   ];
 
-  async function handleRefresh() {
-    setRefreshing(true);
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    setRefreshing(false);
-  }
-
-  function handleModelSelect(role: ModelRole, modelSlug: string) {
-    setSelectedModels((prev) => ({ ...prev, [role.key]: modelSlug }));
-  }
-
   return (
     <SettingsPageLayout navItems={navItems}>
       <SettingsHeader
@@ -86,8 +121,8 @@ export default function ModelSettingsPage() {
               key={role.key}
               label={role.label}
               description={role.description}
-              value={selectedModels[role.key]}
-              onClick={() => setActiveSheet({ role })}
+              value={getSelectedModel(role)}
+              onClick={() => openSideSheet(role)}
             />
           ))
         )}
@@ -96,13 +131,28 @@ export default function ModelSettingsPage() {
       {activeSheet && (
         <ModelSideSheet
           open={true}
-          onClose={() => setActiveSheet(null)}
+          onClose={() => !isSavingModel && setActiveSheet(null)}
           title={`Select ${activeSheet.role.label} Model`}
-          selectedModel={selectedModels[activeSheet.role.key]}
-          models={MOCK_MODELS}
-          onSelect={(slug) => handleModelSelect(activeSheet.role, slug)}
-          onRefresh={handleRefresh}
+          selectedModel={getSelectedModel(activeSheet.role)}
+          models={sheetModels.length > 0 ? sheetModels : models}
+          onSelect={(slug) => {
+            const sourceModels = sheetModels.length > 0 ? sheetModels : models;
+            const model = sourceModels.find((m) => m.canonicalSlug === slug);
+            if (model) handleModelSelect(activeSheet.role, model);
+          }}
+          onRefresh={async () => {
+            setRefreshing(true);
+            try {
+              const models = await refreshOpenRouterModels();
+              setSheetModels(models);
+            } catch {
+              // we will add toast later
+            } finally {
+              setRefreshing(false);
+            }
+          }}
           isRefreshing={refreshing}
+          isSaving={isSavingModel}
         />
       )}
     </SettingsPageLayout>

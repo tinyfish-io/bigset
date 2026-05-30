@@ -1,16 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { X, Search, RefreshCw } from "lucide-react";
-
-export interface OpenRouterModel {
-  canonicalSlug: string;
-  name: string;
-  contextLength: number;
-  completionCost: number;
-  promptCost: number;
-  provider?: string;
-}
+import type { OpenRouterModel } from "./types";
 
 interface ModelSideSheetProps {
   open: boolean;
@@ -21,12 +14,13 @@ interface ModelSideSheetProps {
   onSelect: (modelSlug: string) => void;
   onRefresh?: () => Promise<void>;
   isRefreshing?: boolean;
+  isSaving?: boolean;
 }
 
 function groupModelsByProvider(models: OpenRouterModel[]): Record<string, OpenRouterModel[]> {
   const groups: Record<string, OpenRouterModel[]> = {};
   for (const model of models) {
-    const provider = model.provider || model.canonicalSlug.split("/")[0] || "Other";
+    const provider = model.canonicalSlug.split("/")[0] || "Other";
     if (!groups[provider]) groups[provider] = [];
     groups[provider].push(model);
   }
@@ -74,6 +68,7 @@ export function ModelSideSheet({
   onSelect,
   onRefresh,
   isRefreshing,
+  isSaving,
 }: ModelSideSheetProps) {
   const [search, setSearch] = useState("");
   const panelRef = useRef<HTMLDivElement>(null);
@@ -82,7 +77,7 @@ export function ModelSideSheet({
   const filteredModels = search.trim()
     ? models.filter(
         (m) =>
-          m.name.toLowerCase().includes(search.toLowerCase()) ||
+          m.modelName.toLowerCase().includes(search.toLowerCase()) ||
           m.canonicalSlug.toLowerCase().includes(search.toLowerCase()),
       )
     : models;
@@ -92,7 +87,7 @@ export function ModelSideSheet({
 
   useEffect(() => {
     if (open) {
-      setSearch("");
+      flushSync(() => setSearch(""));
       setTimeout(() => inputRef.current?.focus(), 100);
     }
   }, [open]);
@@ -119,7 +114,7 @@ export function ModelSideSheet({
       />
       <div
         ref={panelRef}
-        className="relative w-full max-w-sm sm:max-w-md h-full bg-surface border-l border-border shadow-2xl flex flex-col animate-slide-in"
+        className="relative w-full lg:w-[40%] h-full bg-surface border-l border-border shadow-2xl flex flex-col animate-slide-in"
       >
         <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
           <h2 className="text-sm font-semibold text-foreground">{title}</h2>
@@ -127,8 +122,8 @@ export function ModelSideSheet({
             {onRefresh && (
               <button
                 onClick={onRefresh}
-                disabled={isRefreshing}
-                className="inline-flex items-center justify-center h-8 w-8 rounded-lg text-muted hover:text-foreground hover:bg-foreground/[0.05] transition-colors disabled:opacity-50"
+                disabled={isRefreshing || isSaving}
+                className="inline-flex items-center justify-center h-8 w-8 rounded-lg text-muted hover:text-foreground hover:bg-foreground/5 transition-colors disabled:opacity-50"
                 aria-label="Refresh models"
               >
                 <RefreshCw className={`size-4 ${isRefreshing ? "animate-spin" : ""}`} />
@@ -136,7 +131,8 @@ export function ModelSideSheet({
             )}
             <button
               onClick={onClose}
-              className="inline-flex items-center justify-center h-8 w-8 rounded-lg text-muted hover:text-foreground hover:bg-foreground/[0.05] transition-colors"
+              disabled={isSaving}
+              className="inline-flex items-center justify-center h-8 w-8 rounded-lg text-muted hover:text-foreground hover:bg-foreground/5 transition-colors disabled:opacity-50"
               aria-label="Close"
             >
               <X className="size-4" />
@@ -168,6 +164,20 @@ export function ModelSideSheet({
             </div>
           ) : (
             <div className="py-2">
+              <div className="flex items-center gap-3 px-5 py-1.5 border-b border-border mb-2">
+                <div className="min-w-0 flex-1">
+                  <span className="text-[10px] font-semibold text-muted uppercase tracking-wider">Model</span>
+                </div>
+                <div className="shrink-0 text-right w-16">
+                  <span className="text-[10px] font-semibold text-muted uppercase tracking-wider">Context</span>
+                </div>
+                <div className="shrink-0 text-right w-14">
+                  <span className="text-[10px] font-semibold text-muted uppercase tracking-wider">Input</span>
+                </div>
+                <div className="shrink-0 text-right w-14">
+                  <span className="text-[10px] font-semibold text-muted uppercase tracking-wider">Output</span>
+                </div>
+              </div>
               {providers.map((provider) => (
                 <div key={provider} className="mb-4">
                   <div className="px-4 py-2">
@@ -181,14 +191,12 @@ export function ModelSideSheet({
                       return (
                         <button
                           key={model.canonicalSlug}
-                          onClick={() => {
-                            onSelect(model.canonicalSlug);
-                            onClose();
-                          }}
-                          className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left transition-colors ${
+                          onClick={() => onSelect(model.canonicalSlug)}
+                          disabled={isSaving}
+                          className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left transition-colors disabled:opacity-50 ${
                             isSelected
                               ? "bg-foreground/5"
-                              : "hover:bg-foreground/[0.02]"
+                              : "hover:bg-foreground/2"
                           }`}
                         >
                           <div
@@ -204,15 +212,27 @@ export function ModelSideSheet({
                           </div>
                           <div className="min-w-0 flex-1">
                             <p className="text-sm font-medium text-foreground truncate">
-                              {model.name}
+                              {model.modelName}
                             </p>
                             <p className="text-[11px] text-muted font-mono truncate">
                               {model.canonicalSlug}
                             </p>
                           </div>
-                          <div className="text-right shrink-0 hidden sm:block">
+                          <div className="text-right shrink-0 w-16">
                             <p className="text-[11px] text-muted">
-                              ${model.completionCost.toFixed(6)}
+                              {model.contextLength >= 1000
+                                ? `${(model.contextLength / 1000).toLocaleString()}K`
+                                : model.contextLength.toLocaleString()}
+                            </p>
+                          </div>
+                          <div className="text-right shrink-0 w-14">
+                            <p className="text-[11px] text-muted">
+                              ${model.promptCost.toFixed(2)}
+                            </p>
+                          </div>
+                          <div className="text-right shrink-0 w-14">
+                            <p className="text-[11px] text-muted">
+                              ${model.completionCost.toFixed(2)}
                             </p>
                           </div>
                         </button>
@@ -227,7 +247,7 @@ export function ModelSideSheet({
 
         <div className="px-4 py-3 border-t border-border shrink-0">
           <p className="text-[11px] text-muted text-center">
-            {isRefreshing ? "Refreshing..." : `${filteredModels.length} models available`}
+            {isSaving ? "Saving..." : isRefreshing ? "Refreshing..." : `${filteredModels.length} models available`}
           </p>
         </div>
       </div>

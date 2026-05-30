@@ -50,7 +50,7 @@ export function SettingsSidebar({ items }: SettingsSidebarProps) {
                 className={`flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors ${
                   isActive
                     ? "bg-foreground/5 text-foreground font-medium"
-                    : "text-muted hover:bg-foreground/[0.03] hover:text-foreground"
+                    : "text-muted hover:bg-foreground/3 hover:text-foreground"
                 }`}
               >
                 <span className="text-muted">{item.icon}</span>
