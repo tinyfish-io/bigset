@@ -123,30 +123,9 @@ TinyFish powers all web search and page fetching. Search and Fetch have generous
 make dev
 ```
 
-This builds and starts all Docker services (Postgres, Convex, frontend, backend, Mastra). It waits for Convex to be healthy and deploys the schema automatically.
+This installs dependencies, builds and starts all Docker services (Postgres, Convex, frontend, backend, Mastra), and deploys the Convex schema. On first run, it automatically generates the Convex admin key — no manual steps needed. See [How `make dev` Works](#how-make-dev-works) for the full breakdown.
 
-**First run only, you need to generate a Convex admin key:**
-
-```bash
-docker compose -f docker-compose.dev.yml exec convex ./generate_admin_key.sh
-```
-
-This outputs a key that looks like `convex-self-hosted|0113....`. **Copy the entire string including the `convex-self-hosted|` prefix**, and paste the whole thing as `CONVEX_SELF_HOSTED_ADMIN_KEY` in your `.env`:
-
-```
-CONVEX_SELF_HOSTED_ADMIN_KEY=convex-self-hosted|0113.....
-```
-
-Then restart:
-
-```bash
-make down
-make dev
-```
-
-### Step 6: Open BigSet
-
-Once everything is running:
+Once everything is ready, you'll see:
 
 | Service | URL |
 |---------|-----|
@@ -160,7 +139,7 @@ Open [localhost:3500](http://localhost:3500) and click **Get started** to sign i
 
 > **Free tier:** each signed-in account gets **2,500 row operations per calendar month** (resets on the 1st, UTC). The header shows a live usage badge; system-owned curated datasets bypass the quota.
 
-### Step 7 (optional): Load curated datasets
+### Step 6 (optional): Load curated datasets
 
 BigSet includes 9 curated public datasets (AI companies hiring, GPU prices, model pricing, etc.) that show on the landing page:
 
@@ -169,6 +148,53 @@ make seed-public-datasets
 ```
 
 This is idempotent; safe to run multiple times.
+
+---
+
+## How `make dev` Works
+
+`make dev` is designed to handle everything — first run, subsequent runs, and recovery from bad state. You should never need to run any other setup command. Here's what it does, in order:
+
+1. **Validates your `.env`** — checks that all required API keys are set (Clerk, OpenRouter, TinyFish). Stops with a clear error if anything is missing.
+2. **Installs dependencies** — runs `npm install` in both `frontend/` and `backend/`. Silent if already up to date.
+3. **Starts the database layer** — brings up Postgres and Convex (self-hosted) first, since other services depend on them.
+4. **Waits for Convex** — polls the Convex health endpoint until it's ready (up to 120s).
+5. **Ensures the admin key** — if `CONVEX_SELF_HOSTED_ADMIN_KEY` is empty in `.env`, generates one automatically and writes it. If a key exists, validates it against the running Convex instance. If the key is stale (e.g. you ran `make clean` and wiped the database), it detects the mismatch and regenerates.
+6. **Pushes Convex config** — sets the Clerk JWT issuer URL in Convex so auth tokens are validated correctly.
+7. **Deploys Convex schema** — pushes the table schema and functions from `frontend/convex/` to the running instance.
+8. **Starts remaining services** — brings up the frontend, backend, and Mastra. These read the now-populated `.env` including the admin key.
+9. **Streams logs** — tails all container logs so you can see what's happening. `Ctrl+C` to stop watching (containers keep running).
+
+### Commands
+
+You only need three commands:
+
+| Command | What it does |
+|---------|-------------|
+| `make dev` | Start everything (or recover from any broken state) |
+| `make down` | Stop all containers (data is preserved) |
+| `make clean` | Stop containers, delete all data, and clear the admin key |
+
+Other commands you might use during development:
+
+| Command | What it does |
+|---------|-------------|
+| `make convex-push` | Deploy Convex schema changes (run after editing `frontend/convex/`) |
+| `make seed-public-datasets` | Load 9 curated public datasets for the landing page |
+
+### What if something goes wrong?
+
+`make dev` is self-healing. If you hit a problem, the fix is almost always just running `make dev` again.
+
+| Problem | What happens |
+|---------|-------------|
+| Missing `.env` | Error: "Run: cp .env.example .env" |
+| Missing API key | Error tells you exactly which key to set |
+| Stale admin key (after `make clean`) | Detected automatically, regenerated |
+| Containers already running | No-op for running services, starts any that are missing |
+| Convex won't start | Error after 120s timeout — check Docker is running |
+
+If you want a completely fresh start: `make clean` then `make dev`.
 
 ---
 
@@ -181,7 +207,7 @@ This is idempotent; safe to run multiple times.
 | `CLERK_JWT_ISSUER_DOMAIN` | ✅ | Clerk dashboard → Settings/Domains |
 | `OPENROUTER_API_KEY` | ✅ | openrouter.ai → Settings → Keys |
 | `TINYFISH_API_KEY` | ✅ | agent.tinyfish.ai → API Keys |
-| `CONVEX_SELF_HOSTED_ADMIN_KEY` | ✅ | Generated after first `make dev` (Step 5) |
+| `CONVEX_SELF_HOSTED_ADMIN_KEY` | Auto | Auto-generated by `make dev` on first run |
 | `RESEND_API_KEY` | Optional | For "dataset ready" emails. Leave blank to skip. |
 | `NEXT_PUBLIC_POSTHOG_KEY` | Optional | For product analytics. Leave blank to disable. |
 
