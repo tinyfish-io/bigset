@@ -114,7 +114,7 @@ Context (partial data already found):
 ${context}${urlsBlock}${notesBlock}`;
 
         const abortSignal = getSignal(authorizedDatasetId);
-        const result = await agent.generate(prompt, { abortSignal, maxSteps: 25 });
+        const result = await agent.generate(prompt, { abortSignal, maxSteps: 10 });
         if (metrics) {
           // Use result.toolCalls (the flat accumulated list across all steps) rather
           // than iterating result.steps[n].toolCalls. The per-step arrays are snapshots

@@ -185,35 +185,26 @@ export async function refreshOpenRouterModels(token: string): Promise<OpenRouter
   return data.models ?? [];
 }
 
-/** Shared POST helper — handles auth header, JSON serialisation, and error parsing. */
-async function backendPost<T>(
-  path: string,
+export async function inferSchema(
+  prompt: string,
   token: string,
-  body: unknown,
-): Promise<T> {
-  const res = await fetch(`${BACKEND_URL}${path}`, {
+): Promise<InferredSchema> {
+  const res = await fetch(`${BACKEND_URL}/infer-schema`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${token}`,
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ prompt }),
   });
 
   if (!res.ok) {
-    const json = await res.json().catch(() => null);
-    const message = json?.error || `Backend error (${res.status})`;
+    const body = await res.json().catch(() => null);
+    const message = body?.error || `Backend error (${res.status})`;
     throw new Error(message);
   }
 
-  return res.json() as Promise<T>;
-}
-
-export async function inferSchema(
-  prompt: string,
-  token: string,
-): Promise<InferredSchema> {
-  return backendPost<InferredSchema>("/infer-schema", token, { prompt });
+  return res.json();
 }
 
 export async function populate(
@@ -223,12 +214,22 @@ export async function populate(
   columns: PopulateColumn[],
   token: string,
 ): Promise<PopulateStartResult> {
-  return backendPost<PopulateStartResult>("/populate", token, {
-    datasetId,
-    datasetName,
-    description,
-    columns,
+  const res = await fetch(`${BACKEND_URL}/populate`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ datasetId, datasetName: datasetName, description, columns }),
   });
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    const message = body?.error || `Backend error (${res.status})`;
+    throw new Error(message);
+  }
+
+  return res.json();
 }
 
 export async function update(
@@ -241,12 +242,42 @@ export async function update(
 ): Promise<PopulateStartResult> {
   const body: Record<string, unknown> = { datasetId, datasetName, description, columns };
   if (rowIds && rowIds.length > 0) body.rowIds = rowIds;
-  return backendPost<PopulateStartResult>("/update", token, body);
+  const res = await fetch(`${BACKEND_URL}/update`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    const message = body?.error || `Backend error (${res.status})`;
+    throw new Error(message);
+  }
+
+  return res.json();
 }
 
 export async function stopPopulation(
   datasetId: string,
   token: string,
 ): Promise<{ success: boolean }> {
-  return backendPost<{ success: boolean }>("/stop", token, { datasetId });
+  const res = await fetch(`${BACKEND_URL}/stop`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ datasetId }),
+  });
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    const message = body?.error || `Backend error (${res.status})`;
+    throw new Error(message);
+  }
+
+  return res.json();
 }
