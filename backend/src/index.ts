@@ -13,6 +13,15 @@ import { sendTransactionalEmail } from "./email/send.js";
 import { datasetReadyTemplate } from "./email/templates/dataset-ready.js";
 import { capture, shutdown as shutdownAnalytics } from "./analytics/posthog.js";
 import { EVENTS } from "./analytics/events.js";
+import { registerRun, deregisterRun, abortRun } from "./abort-registry.js";
+
+/**
+ * Maps datasetId → workflowRunId for every currently active populate or
+ * update run. Used by the /stop route to look up which run to abort.
+ * Entries are added at run start and removed in the background runner's
+ * finally block, so the map always reflects what is actually in-flight.
+ */
+const activeDatasets = new Map<string, string>();
 
 /** Domain part of an email, for analytics (we never log full addresses). */
 function emailDomain(email: string): string {
@@ -172,6 +181,8 @@ async function runUpdateWorkflowInBackground({
   };
 }): Promise<void> {
   const datasetId = input.datasetId;
+  const controller = registerRun(run.runId);
+  activeDatasets.set(datasetId, run.runId);
 
   try {
     const result = await run.start({
@@ -224,6 +235,30 @@ async function runUpdateWorkflowInBackground({
       workflowType: "update",
     });
   } catch (err) {
+    if (controller.signal.aborted) {
+      // User pressed Stop — the refreshRowsStep already cleared pending row
+      // statuses (in its own abort-detection block). Just mark live.
+      logger.info({ datasetId }, "Update workflow stopped by user; transitioning to live");
+      try {
+        const currentDataset = await convex.query(internal.datasets.getInternal, { id: datasetId });
+        if (!currentDataset) return;
+        await setDatasetPopulateStatus(datasetId, "live");
+        const rowCount = await convex.query(internal.datasetRows.countByDataset, { datasetId });
+        await sendDatasetReadyNotification({
+          logger,
+          clerk,
+          userId: authorizedUserId,
+          datasetId,
+          datasetName: currentDataset.name,
+          rowCount,
+          workflowType: "update",
+        });
+      } catch (stopErr) {
+        logger.error({ err: stopErr, datasetId }, "Failed to finalise stopped update run");
+      }
+      return;
+    }
+
     const lastStatusError = statusErrorMessage(err);
     logger.error({ err, datasetId }, "Update background workflow failed");
 
@@ -245,6 +280,9 @@ async function runUpdateWorkflowInBackground({
         "Failed to transition dataset status to 'failed' after update",
       );
     }
+  } finally {
+    deregisterRun(run.runId);
+    activeDatasets.delete(datasetId);
   }
 }
 
@@ -266,6 +304,8 @@ async function runScheduledUpdateWorkflowInBackground({
   };
 }): Promise<void> {
   const datasetId = input.datasetId;
+  const controller = registerRun(run.runId);
+  activeDatasets.set(datasetId, run.runId);
 
   try {
     const result = await run.start({
@@ -389,6 +429,30 @@ async function runPopulateWorkflowInBackground({
       rowCount,
     });
   } catch (err) {
+    if (controller.signal.aborted) {
+      // User pressed Stop — treat whatever was collected as the final dataset.
+      logger.info({ datasetId }, "Populate workflow stopped by user; transitioning to live");
+      try {
+        const currentDataset = await convex.query(internal.datasets.getInternal, { id: datasetId });
+        if (!currentDataset) return;
+        await setDatasetPopulateStatus(datasetId, "live");
+        const rowCount = await convex.query(internal.datasetRows.countByDataset, { datasetId });
+        if (rowCount > 0) {
+          await sendDatasetReadyNotification({
+            logger,
+            clerk,
+            userId: authorizedUserId,
+            datasetId,
+            datasetName: currentDataset.name,
+            rowCount,
+          });
+        }
+      } catch (stopErr) {
+        logger.error({ err: stopErr, datasetId }, "Failed to finalise stopped populate run");
+      }
+      return;
+    }
+
     const lastStatusError = statusErrorMessage(err);
     logger.error(
       { err, datasetId },
@@ -414,6 +478,9 @@ async function runPopulateWorkflowInBackground({
         "Failed to transition dataset status to 'failed'",
       );
     }
+  } finally {
+    deregisterRun(run.runId);
+    activeDatasets.delete(datasetId);
   }
 }
 
@@ -789,6 +856,51 @@ await fastify.register(async (instance) => {
       }
       req.log.error(err, "Update failed");
       return reply.code(502).send({ error: "Failed to update dataset. Please try again." });
+    }
+  });
+
+  instance.post("/stop", async (req, reply) => {
+    const body = req.body as { datasetId?: string };
+    if (!body?.datasetId || typeof body.datasetId !== "string") {
+      return reply.code(400).send({ error: "datasetId is required" });
+    }
+
+    const auth = req.auth;
+    if (!auth) {
+      return reply.code(401).send({ error: "Authentication required" });
+    }
+
+    try {
+      const dataset = await convex.query(internal.datasets.getInternal, {
+        id: body.datasetId,
+      });
+      if (!dataset) {
+        return reply.code(404).send({ error: "Dataset not found" });
+      }
+      if (dataset.ownerId !== auth.userId) {
+        return reply.code(403).send({ error: "Not authorized to stop this dataset" });
+      }
+      if (dataset.status !== "building" && dataset.status !== "updating") {
+        return reply.code(409).send({ error: "Dataset is not currently running" });
+      }
+
+      const runId = activeDatasets.get(body.datasetId);
+      if (!runId) {
+        // Run just finished between the status check and here — not an error.
+        return reply.code(200).send({ success: true, message: "Run already completed" });
+      }
+
+      const aborted = abortRun(runId);
+      req.log.info({ datasetId: body.datasetId, runId, aborted }, "Stop requested");
+
+      return reply.code(202).send({ success: true });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("validator") || msg.includes("Invalid")) {
+        return reply.code(400).send({ error: "Invalid datasetId" });
+      }
+      req.log.error(err, "Stop failed");
+      return reply.code(502).send({ error: "Failed to stop dataset run. Please try again." });
     }
   });
 });

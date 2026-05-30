@@ -12,7 +12,7 @@ import { useSelection } from "@/components/table/use-selection";
 import { useTheme } from "@/components/ThemeToggle";
 import { StatusBadge } from "@/components/dataset/StatusBadge";
 import { downloadCSV, downloadXLSX } from "@/lib/export";
-import { populate, update } from "@/lib/backend";
+import { populate, update, stopPopulation } from "@/lib/backend";
 import { EVENTS, captureException, track } from "@/lib/analytics";
 import {
   REFRESH_CADENCE_OPTIONS,
@@ -30,6 +30,7 @@ export default function DatasetPage() {
   const [exporting, setExporting] = useState<"csv" | "xlsx" | null>(null);
   const [populating, setPopulating] = useState(false);
   const [updating, setUpdating] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [confirmPopulate, setConfirmPopulate] = useState(false);
@@ -195,6 +196,29 @@ export default function DatasetPage() {
     }
   }
 
+  async function handleStop() {
+    if (!dataset || stopping) return;
+    if (dataset.status !== "building" && dataset.status !== "updating") return;
+    setStopping(true);
+    try {
+      const token = await getToken();
+      if (!token) throw new Error("Not authenticated");
+      await stopPopulation(dataset._id, token);
+      track(EVENTS.DATASET_STOP_REQUESTED, {
+        datasetId: dataset._id,
+        status: dataset.status,
+      });
+    } catch (err) {
+      console.error("[stop] failed", err);
+      captureException(err, {
+        operation: "dataset_stop",
+        datasetId: dataset._id,
+      });
+    } finally {
+      setStopping(false);
+    }
+  }
+
   if (authLoading || dataset === undefined || rows === undefined) {
     return (
       <div className="flex flex-1 items-center justify-center">
@@ -217,6 +241,8 @@ export default function DatasetPage() {
   };
   const updateDisabled = updating || isDatasetBusy;
   const populateDisabled = populating || isDatasetBusy;
+  const stopDisabled = stopping || !isDatasetBusy;
+  const stopLabel = stopping ? "Stopping…" : "Stop";
   const updateLabel = dataset.status === "updating"
     ? "Updating…"
     : dataset.status === "building"
@@ -278,6 +304,9 @@ export default function DatasetPage() {
             populateLabel={populateLabel}
             populateDisabled={populateDisabled}
             onRefreshCadenceChange={handleRefreshCadenceChange}
+            stopLabel={stopLabel}
+            stopDisabled={stopDisabled}
+            isDatasetBusy={isDatasetBusy}
             onUpdate={() => { setSettingsOpen(false); handleUpdate(); }}
             onPopulate={() => {
               setSettingsOpen(false);
@@ -287,6 +316,7 @@ export default function DatasetPage() {
                 handlePopulate();
               }
             }}
+            onStop={() => { setSettingsOpen(false); handleStop(); }}
           />
 
           <div className="w-px h-4 bg-border mx-0.5" />
@@ -436,8 +466,12 @@ function SettingsDropdown({
   populateLabel,
   populateDisabled,
   onRefreshCadenceChange,
+  stopLabel,
+  stopDisabled,
+  isDatasetBusy,
   onUpdate,
   onPopulate,
+  onStop,
 }: {
   open: boolean;
   onToggle: () => void;
@@ -449,8 +483,12 @@ function SettingsDropdown({
   populateLabel: string;
   populateDisabled: boolean;
   onRefreshCadenceChange: (refreshCadence: RefreshCadence) => void;
+  stopLabel: string;
+  stopDisabled: boolean;
+  isDatasetBusy: boolean;
   onUpdate: () => void;
   onPopulate: () => void;
+  onStop: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
 
@@ -477,22 +515,35 @@ function SettingsDropdown({
       {open && (
         <div className="absolute right-0 top-full mt-1.5 w-56 rounded-xl border border-border bg-surface shadow-xl ring-1 ring-black/[0.04] z-50 overflow-hidden">
           <div className="p-1">
-            <button
-              onClick={onUpdate}
-              disabled={updateDisabled}
-              className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs text-foreground hover:bg-foreground/[0.05] transition-colors disabled:opacity-40"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>
-              {updateLabel}
-            </button>
-            <button
-              onClick={onPopulate}
-              disabled={populateDisabled}
-              className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs text-red-500 bg-red-500/[0.04] hover:bg-red-500/[0.1] transition-colors disabled:opacity-40"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-              {populateLabel}
-            </button>
+            {isDatasetBusy ? (
+              <button
+                onClick={onStop}
+                disabled={stopDisabled}
+                className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs text-amber-600 dark:text-amber-400 bg-amber-500/[0.06] hover:bg-amber-500/[0.12] transition-colors disabled:opacity-40"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>
+                {stopLabel}
+              </button>
+            ) : (
+              <>
+                <button
+                  onClick={onUpdate}
+                  disabled={updateDisabled}
+                  className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs text-foreground hover:bg-foreground/[0.05] transition-colors disabled:opacity-40"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>
+                  {updateLabel}
+                </button>
+                <button
+                  onClick={onPopulate}
+                  disabled={populateDisabled}
+                  className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs text-red-500 bg-red-500/[0.04] hover:bg-red-500/[0.1] transition-colors disabled:opacity-40"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                  {populateLabel}
+                </button>
+              </>
+            )}
           </div>
           <div className="border-t border-border p-1">
             <div className="px-2 py-1 text-[11px] font-medium text-muted">

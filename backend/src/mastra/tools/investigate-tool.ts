@@ -4,6 +4,7 @@ import { buildInvestigateAgent } from "../agents/investigate.js";
 import type { AuthContext } from "../workflows/populate.js";
 import type { PopulateColumn } from "../../pipeline/populate.js";
 import type { RunMetrics } from "../run-metrics.js";
+import { getSignal } from "../../abort-registry.js";
 
 const investigateInputSchema = z.object({
   entity_hint: z
@@ -112,7 +113,8 @@ ${pkBlock}
 Context (partial data already found):
 ${context}${urlsBlock}${notesBlock}`;
 
-        const result = await agent.generate(prompt, { maxSteps: 10 });
+        const abortSignal = getSignal(authContext.workflowRunId);
+        const result = await agent.generate(prompt, { abortSignal, maxSteps: 10 });
         if (metrics) {
           // Use result.toolCalls (the flat accumulated list across all steps) rather
           // than iterating result.steps[n].toolCalls. The per-step arrays are snapshots
@@ -135,6 +137,10 @@ ${context}${urlsBlock}${notesBlock}`;
         );
         return parsed;
       } catch (err) {
+        // Propagate AbortError so the orchestrator's agent.generate() also
+        // terminates. Swallowing it would leave the orchestrator running even
+        // after the user pressed Stop.
+        if (err instanceof Error && err.name === "AbortError") throw err;
         const msg = err instanceof Error ? err.message : String(err);
         console.error(`[run_subagent] subagent error entity="${entity_hint}" err=${msg}`);
         return {

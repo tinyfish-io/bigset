@@ -8,6 +8,7 @@ import { DEFAULT_MODEL_IDS } from "../../config/models.js";
 import { buildPopulateAgent } from "../agents/populate.js";
 import { RunMetrics } from "../run-metrics.js";
 import { saveRunMetrics } from "../save-run-metrics.js";
+import { getSignal } from "../../abort-registry.js";
 
 /**
  * Server-set auth/run context threaded through every step.
@@ -241,14 +242,21 @@ const agentStep = createStep({
         inputData.columns,
         metrics,
       );
-      const result = await agent.generate(inputData.prompt, { maxSteps: 80 });
+      const abortSignal = getSignal(inputData.authContext.workflowRunId);
+      const result = await agent.generate(inputData.prompt, { abortSignal, maxSteps: 80 });
       metrics.addOrchestratorResult(result);
       // Use result.toolCalls (flat accumulated list) — same reasoning as investigate-tool.ts.
       metrics.countToolCalls(result.toolCalls ?? []);
       return { text: result.text };
     } catch (err) {
       status = "error";
-      errorMsg = err instanceof Error ? err.message : String(err);
+      // Distinguish a user-initiated stop from genuine failures so runStats
+      // records a clear reason rather than a cryptic "AbortError".
+      if (err instanceof Error && err.name === "AbortError") {
+        errorMsg = "Stopped by user";
+      } else {
+        errorMsg = err instanceof Error ? err.message : String(err);
+      }
       console.error(`[populate-agent] agent.generate failed: ${errorMsg}`);
       throw err;
     } finally {
