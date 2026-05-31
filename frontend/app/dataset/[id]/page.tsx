@@ -53,6 +53,8 @@ export default function DatasetPage() {
 
   const handlePopulate = useCallback(async () => {
     if (!dataset || populating || dataset.status === "building") return;
+    // A new run is starting — discard any lingering stop-latch from the previous run.
+    setStopping(false);
     setPopulating(true);
     try {
       const token = await getToken();
@@ -80,20 +82,6 @@ export default function DatasetPage() {
       setPopulating(false);
     }
   }, [dataset, populating, getToken]);
-
-  // Once a stop request has been sent, keep the button latched in "Stopping…"
-  // until Convex confirms the dataset has actually left the busy state. Without
-  // this, the button re-enables the moment POST /stop returns (which is before
-  // the background cleanup finishes), allowing duplicate stop requests.
-  useEffect(() => {
-    if (
-      stopping &&
-      dataset?.status !== "building" &&
-      dataset?.status !== "updating"
-    ) {
-      setStopping(false);
-    }
-  }, [dataset?.status, stopping]);
 
   const openedFired = useRef<string | null>(null);
   const autoPopulateFired = useRef<string | null>(null);
@@ -158,6 +146,8 @@ export default function DatasetPage() {
 
   async function handleUpdate() {
     if (!dataset || updating || dataset.status === "building" || dataset.status === "updating") return;
+    // A new run is starting — discard any lingering stop-latch from the previous run.
+    setStopping(false);
     setUpdating(true);
     try {
       const token = await getToken();
