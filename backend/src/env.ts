@@ -33,7 +33,7 @@ export const env = {
   // Default models — used when a user has not saved a preference.
   // Each must be a valid OpenRouter model slug.
   SCHEMA_INFERENCE_MODEL:
-    process.env.SCHEMA_INFERENCE_MODEL ?? "anthropic/claude-sonnet-4-6",
+    process.env.SCHEMA_INFERENCE_MODEL ?? "anthropic/claude-sonnet-4.6",
   POPULATE_ORCHESTRATOR_MODEL:
     process.env.POPULATE_ORCHESTRATOR_MODEL ?? "qwen/qwen3.7-max",
   INVESTIGATE_SUBAGENT_MODEL:

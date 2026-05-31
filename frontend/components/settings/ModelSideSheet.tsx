@@ -86,7 +86,6 @@ export function ModelSideSheet({
 
   useEffect(() => {
     if (open) {
-      setSearch("");
       setTimeout(() => inputRef.current?.focus(), 100);
     }
   }, [open]);

@@ -46,7 +46,7 @@ export interface EffectiveModelConfig {
 }
 
 /**
- * User's saved model preferences — stores the canonical slug (e.g. "anthropic/claude-sonnet-4-6")
+ * User's saved model preferences — stores the canonical slug (e.g. "anthropic/claude-sonnet-4.6")
  * for each agent role. Null means no preference saved — backend will use the env default.
  */
 export interface SavedModelConfig {
