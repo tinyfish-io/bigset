@@ -112,7 +112,7 @@ Open [localhost:3500](http://localhost:3500) and click **Get started** to sign i
 | Data Collection | [TinyFish](https://tinyfish.ai) APIs (Search, Fetch, Browser) |
 | AI orchestration | [Mastra](https://mastra.ai) workflows + [Vercel AI SDK](https://sdk.vercel.ai) + [OpenRouter](https://openrouter.ai) → Claude Sonnet (schema inference + populate agent) |
 | Table view | [TanStack Table](https://tanstack.com/table) + [react-window](https://github.com/bvaughn/react-window) virtualization |
-| Exports | CSV (built-in) + XLSX ([SheetJS](https://sheetjs.com), dynamic-imported) |
+| Exports | CSV (built-in) + XLSX ([write-excel-file](https://www.npmjs.com/package/write-excel-file), dynamic-imported) |
 | Analytics | [PostHog](https://posthog.com) — events, session replay, error tracking (optional) |
 
 ## 📁 Project Structure

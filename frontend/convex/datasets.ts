@@ -28,7 +28,63 @@ const columnValidator = v.object({
   isPrimaryKey: v.optional(v.boolean()),
 });
 
+type DatasetColumnInput = {
+  name: string;
+  type: "text" | "number" | "boolean" | "url" | "date";
+  description?: string;
+  isPrimaryKey?: boolean;
+};
+
+type CreateDatasetInput = {
+  name: string;
+  description: string;
+  cadence: string;
+  columns: DatasetColumnInput[];
+  retrievalStrategy?: "search_fetch" | "browser" | "hybrid";
+  sourceHint?: string;
+};
+
 const PREVIEW_ROW_COUNT = 5;
+
+function normalizeCreateDatasetInput(args: CreateDatasetInput) {
+  const name = args.name.trim();
+  if (!name) {
+    throw new Error("Dataset name is required.");
+  }
+  if (args.columns.length === 0) {
+    throw new Error("Add at least one column.");
+  }
+
+  const seenColumnNames = new Set<string>();
+  const columns = args.columns.map((column) => {
+    const columnName = column.name.trim();
+    if (!columnName) {
+      throw new Error("Every column needs a name.");
+    }
+
+    const normalizedColumnName = columnName.toLowerCase();
+    if (seenColumnNames.has(normalizedColumnName)) {
+      throw new Error(`Column names must be unique. "${columnName}" is duplicated.`);
+    }
+    seenColumnNames.add(normalizedColumnName);
+
+    return {
+      name: columnName,
+      type: column.type,
+      description: column.description?.trim() || undefined,
+      isPrimaryKey: column.isPrimaryKey || undefined,
+    };
+  });
+
+  return {
+    name,
+    description: args.description.trim(),
+    cadence: args.cadence,
+    columns,
+    retrievalStrategy: args.retrievalStrategy,
+    sourceHint: args.sourceHint?.trim() || undefined,
+  };
+}
 
 async function attachPreview(ctx: QueryCtx, dataset: Doc<"datasets">) {
   // Mini-table preview: just the first N rows. `.take` keeps the
@@ -234,13 +290,14 @@ export const create = mutation({
   handler: async (ctx, args) => {
     const identity = await requireIdentity(ctx);
     assertNotReservedOwner(identity.subject);
+    const normalizedDatasetInput = normalizeCreateDatasetInput(args);
     // Block dataset creation at full exhaustion — a dataset you can't
     // populate is just clutter. Row generation later will re-check, so
     // this is a UX safeguard, not the only line of defense.
     await requireQuotaRemaining(ctx, identity.subject, 1);
 
     return await ctx.db.insert("datasets", {
-      ...args,
+      ...normalizedDatasetInput,
       ownerId: identity.subject,
       status: "paused",
       visibility: "private",
