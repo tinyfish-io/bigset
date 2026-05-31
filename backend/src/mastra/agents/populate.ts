@@ -44,11 +44,13 @@ export function buildPopulateAgent(
   columns: PopulateColumn[],
   metrics?: RunMetrics,
 ): Agent {
+  const modelSlug = authContext.modelConfig!.populateOrchestrator;
+
   return new Agent({
     id: "populate-agent",
     name: "Dataset Populate Orchestrator",
     instructions: INSTRUCTIONS,
-    model: openrouter("qwen/qwen3.7-max"),
+    model: openrouter(modelSlug),
     tools: {
       search_web: searchWebTool,
       fetch_page: fetchPageTool,

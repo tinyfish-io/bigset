@@ -1,6 +1,7 @@
 import { generateText, Output, NoObjectGeneratedError } from "ai";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 
+import { DEFAULT_MODEL_IDS } from "../config/models.js";
 import { datasetSchemaSchema, type DatasetSchema } from "./types.js";
 
 const SYSTEM_PROMPT = `You are a data engineering assistant that converts natural-language prompts into structured dataset schemas. Given a user prompt describing a dataset they want to build, you produce a precise schema definition.
@@ -24,17 +25,18 @@ Rules:
 - All column \`name\` values must be snake_case and unique.
 - Prefer concrete column choices over speculative ones — better to omit a column than guess wildly.`;
 
-function getModel() {
+function getModel(modelSlug?: string) {
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) {
     throw new Error("Missing required environment variable: OPENROUTER_API_KEY");
   }
   const openrouter = createOpenRouter({ apiKey });
-  return openrouter("anthropic/claude-sonnet-4-6");
+  const resolvedSlug = modelSlug ?? DEFAULT_MODEL_IDS.SCHEMA_INFERENCE;
+  return openrouter(resolvedSlug);
 }
 
-export async function inferSchema(prompt: string): Promise<DatasetSchema> {
-  const model = getModel();
+export async function inferSchema(prompt: string, modelSlug?: string): Promise<DatasetSchema> {
+  const model = getModel(modelSlug);
   try {
     return await callOnce(model, prompt);
   } catch (error) {

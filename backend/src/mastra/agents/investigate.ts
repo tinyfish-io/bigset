@@ -60,6 +60,8 @@ export function buildInvestigateAgent(
   authContext: AuthContext,
   columns: PopulateColumn[],
 ): Agent {
+  const modelSlug = authContext.modelConfig!.investigateSubagent;
+
   const { insert_row } = buildPopulateTools(
     authorizedDatasetId,
     authContext,
@@ -68,7 +70,7 @@ export function buildInvestigateAgent(
     id: "investigate-agent",
     name: "Dataset Investigate Agent",
     instructions: buildInvestigateInstructions(columns),
-    model: openrouter("qwen/qwen3.7-max"),
+    model: openrouter(modelSlug),
 
     tools: {
       insert_row,

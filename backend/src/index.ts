@@ -158,12 +158,18 @@ async function runUpdateWorkflowInBackground({
   authorizedUserId,
   logger,
   clerk,
+  modelConfig,
 }: {
   input: DatasetContext;
   run: UpdateWorkflowRun;
   authorizedUserId: string;
   logger: FastifyBaseLogger;
   clerk: ClerkClient;
+  modelConfig: {
+    schemaInference: string;
+    populateOrchestrator: string;
+    investigateSubagent: string;
+  };
 }): Promise<void> {
   const datasetId = input.datasetId;
 
@@ -174,6 +180,7 @@ async function runUpdateWorkflowInBackground({
         authContext: {
           authorizedUserId,
           workflowRunId: run.runId,
+          modelConfig,
         },
       },
     });
@@ -247,12 +254,18 @@ async function runPopulateWorkflowInBackground({
   authorizedUserId,
   logger,
   clerk,
+  modelConfig,
 }: {
   input: DatasetContext;
   run: PopulateWorkflowRun;
   authorizedUserId: string;
   logger: FastifyBaseLogger;
   clerk: ClerkClient;
+  modelConfig: {
+    schemaInference: string;
+    populateOrchestrator: string;
+    investigateSubagent: string;
+  };
 }): Promise<void> {
   const datasetId = input.datasetId;
 
@@ -263,6 +276,7 @@ async function runPopulateWorkflowInBackground({
         authContext: {
           authorizedUserId,
           workflowRunId: run.runId,
+          modelConfig,
         },
       },
     });
@@ -363,6 +377,31 @@ fastify.addHook("onClose", async () => {
 
 fastify.get("/health", async () => ({ status: "ok" }));
 
+
+fastify.post("/openrouter/refresh", { preHandler: requireAuth }, async (req, reply) => {
+  const { fetchModelsFromOpenRouter, upsertModelBatch } = await import("./config/models.js");
+  try {
+    const models = await fetchModelsFromOpenRouter();
+    await upsertModelBatch(models);
+    return { success: true, models };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Failed to refresh models";
+    req.log.error(err, "OpenRouter refresh failed");
+    return reply.code(500).send({ error: message });
+  }
+});
+
+fastify.get("/openrouter/models", async (req, reply) => {
+  const { getCachedModels } = await import("./config/models.js");
+  try {
+    const models = await getCachedModels();
+    return { models };
+  } catch (err) {
+    req.log.error(err, "Failed to load cached models");
+    return reply.code(500).send({ error: "Failed to load models" });
+  }
+});
+
 // ────────────────────────────────────────────────────────────────────────
 //  Protected routes — gated by Clerk JWT verification
 // ────────────────────────────────────────────────────────────────────────
@@ -370,14 +409,73 @@ fastify.get("/health", async () => ({ status: "ok" }));
 await fastify.register(async (instance) => {
   instance.addHook("preHandler", requireAuth);
 
+  instance.get("/settings/models", async (req) => {
+    const { getModelConfig } = await import("./config/models.js");
+    const config = await getModelConfig(req.auth!.userId);
+    return { config };
+  });
+
+  instance.post("/settings/models", async (req, reply) => {
+    const { upsertModelConfig, validateModelSlug, getCachedModels } = await import("./config/models.js");
+    const body = req.body as {
+      schemaInference?: string | null;
+      populateOrchestrator?: string | null;
+      investigateSubagent?: string | null;
+    };
+
+    const toValidate: Array<{ role: "schemaInference" | "populateOrchestrator" | "investigateSubagent"; slug: string }> = [];
+    if (body.schemaInference) toValidate.push({ role: "schemaInference", slug: body.schemaInference });
+    if (body.populateOrchestrator) toValidate.push({ role: "populateOrchestrator", slug: body.populateOrchestrator });
+    if (body.investigateSubagent) toValidate.push({ role: "investigateSubagent", slug: body.investigateSubagent });
+
+    if (toValidate.length > 0) {
+      try {
+        const models = await getCachedModels();
+        for (const { role, slug } of toValidate) {
+          const found = models.some((m) => m.canonicalSlug === slug);
+          if (!found) {
+            return reply.code(400).send({
+              error: `Invalid model slug "${slug}" for ${role}. Refresh the model list first or choose a different model.`,
+            });
+          }
+        }
+      } catch (err) {
+        req.log.error(err, "Failed to validate model slugs — allowing save");
+      }
+    }
+
+    try {
+      await upsertModelConfig(req.auth!.userId, {
+        schemaInference: body.schemaInference ?? undefined,
+        populateOrchestrator: body.populateOrchestrator ?? undefined,
+        investigateSubagent: body.investigateSubagent ?? undefined,
+      });
+      return { success: true };
+    } catch (err) {
+      req.log.error(err, "Failed to save model config");
+      return reply.code(500).send({ error: "Failed to save model preferences" });
+    }
+  });
+
   instance.post("/infer-schema", async (req, reply) => {
-    const body = req.body as { prompt?: string };
+    const body = req.body as { prompt?: string; modelSlug?: string };
     if (!body?.prompt || typeof body.prompt !== "string" || !body.prompt.trim()) {
       return reply.code(400).send({ error: "prompt is required" });
     }
 
     try {
-      const schema = await inferSchema(body.prompt.trim());
+      const auth = req.auth;
+      let modelSlug = body.modelSlug;
+
+      if (!modelSlug && auth) {
+        const { getModelConfig } = await import("./config/models.js");
+        const config = await getModelConfig(auth.userId);
+        if (config?.schemaInference) {
+          modelSlug = config.schemaInference;
+        }
+      }
+
+      const schema = await inferSchema(body.prompt.trim(), modelSlug);
       return schema;
     } catch (err) {
       req.log.error(err, "Schema inference failed");
@@ -418,6 +516,9 @@ await fastify.register(async (instance) => {
         throw new Error(`Unexpected populate claim outcome: ${populateOutcome}`);
       }
 
+      const { getModelConfig } = await import("./config/models.js");
+      const modelConfig = await getModelConfig(auth.userId);
+
       let run: Awaited<ReturnType<typeof populateWorkflow.createRun>>;
       try {
         run = await populateWorkflow.createRun();
@@ -433,6 +534,7 @@ await fastify.register(async (instance) => {
         authorizedUserId: auth.userId,
         logger: req.log,
         clerk: req.server.clerk,
+        modelConfig,
       });
 
       return reply.code(202).send({ success: true, runId: run.runId });
@@ -491,12 +593,16 @@ await fastify.register(async (instance) => {
         return reply.code(502).send({ error: "Failed to update dataset. Please try again." });
       }
 
+      const { getModelConfig } = await import("./config/models.js");
+      const modelConfig = await getModelConfig(auth.userId);
+
       void runUpdateWorkflowInBackground({
         input: parsed.data,
         run,
         authorizedUserId: auth.userId,
         logger: req.log,
         clerk: req.server.clerk,
+        modelConfig,
       });
 
       return reply.code(202).send({ success: true, runId: run.runId });

@@ -49,6 +49,7 @@ export const listMine = query({
     const datasets = await ctx.db
       .query("datasets")
       .withIndex("by_owner", (q) => q.eq("ownerId", identity.subject))
+      .order("desc")
       .collect();
 
     return Promise.all(datasets.map((ds) => attachPreview(ctx, ds)));
