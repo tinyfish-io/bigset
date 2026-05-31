@@ -32,6 +32,7 @@ type AnyCtx =
   | GenericMutationCtx<DataModel>;
 
 const DATASET_NOT_FOUND = "Dataset not found";
+const ROW_NOT_FOUND = "Row not found";
 const UNAUTHENTICATED = "Not authenticated";
 
 /**
@@ -221,4 +222,45 @@ export async function loadReadableRow(
   }
   const dataset = await loadReadableDataset(ctx, row.datasetId);
   return { row, dataset };
+}
+
+/**
+ * Capability-scoping check for admin-key row writes.
+ *
+ * Asserts that `rowId` exists AND belongs to `expectedDatasetId`. This is
+ * the Convex-layer defense for system writes (e.g. the populate agent's
+ * tools) where:
+ *   - the caller has admin auth (so user-identity checks don't apply), AND
+ *   - the caller's authority is scoped to ONE dataset only, AND
+ *   - we must not allow a row in some OTHER dataset to be touched even
+ *     if the caller (or an LLM driving it) supplies its id
+ *
+ * Behavior:
+ *   - row missing OR row.datasetId !== expectedDatasetId → throws
+ *     `"Row not found"`. Uniform error: never reveal cross-dataset
+ *     existence (no existence oracle for prompt-injected models).
+ *   - row matches → returns the row doc for the caller to use
+ *
+ * Used by `internal.datasetRows.update` and `internal.datasetRows.remove`
+ * so the dataset scope is enforced atomically in the same transaction
+ * as the write.
+ */
+export async function assertRowInDataset(
+  ctx: AnyCtx,
+  rowId: Id<"datasetRows">,
+  expectedDatasetId: Id<"datasets">,
+): Promise<Doc<"datasetRows">> {
+  const row = await ctx.db.get(rowId);
+  if (!row || row.datasetId !== expectedDatasetId) {
+    // Pass both the rowId AND the dataset it was scoped to. The
+    // existing `datasetId` slot in logDeny is the right home for
+    // expectedDatasetId — it is a datasetId, not an ownerId.
+    logDeny("missing_row", {
+      rowId,
+      datasetId: expectedDatasetId,
+      op: "write",
+    });
+    throw new Error(ROW_NOT_FOUND);
+  }
+  return row;
 }

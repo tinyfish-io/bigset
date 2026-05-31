@@ -1,6 +1,7 @@
 import { generateText, Output, NoObjectGeneratedError } from "ai";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 
+import { DEFAULT_MODEL_IDS } from "../config/models.js";
 import { datasetSchemaSchema, type DatasetSchema } from "./types.js";
 
 const SYSTEM_PROMPT = `You are a data engineering assistant that converts natural-language prompts into structured dataset schemas. Given a user prompt describing a dataset they want to build, you produce a precise schema definition.
@@ -8,7 +9,7 @@ const SYSTEM_PROMPT = `You are a data engineering assistant that converts natura
 Your job is to:
 
 1. Identify the universe of entities the user wants to collect. Each entity becomes one row in the dataset.
-2. Pick a clear primary key — the column whose values uniquely identify each row. This is usually a name, ID, or canonical URL. Exactly one column must have \`is_primary_key: true\`, and its \`name\` must equal \`primary_key\`. The primary key column must have \`nullable: false\` and \`is_enumerable: true\`.
+2. Pick primary key column(s) — one or more columns whose combined values uniquely identify each row (no two legitimate rows should share the same values across all primary key columns in any case). Refrain from names unless necessary, as they may not always be unqiue (unless this is guarenteed). Otherwise use thigns like URLs or IDs that have a 100% guarentee of being unique. Set \`is_primary_key: true\` on each primary key column. Set \`primary_key\` to the column name if there is one, or an array of column names if there are multiple. Every primary key column must have \`nullable: false\` and \`is_enumerable: true\`. Prefer a single column when one naturally uniquely identifies each row.
 3. Choose useful columns. Each column captures one fact about the entity. Use snake_case names. Mark \`is_enumerable: true\` only on columns whose values can be used to list all rows (typically just the primary key, and occasionally one or two others when a source page lists them alongside the primary key).
 4. Set \`retrieval_strategy\`:
    - \`search_fetch\` — the data lives on a static page or sitemap that can be fetched as HTML.
@@ -19,21 +20,23 @@ Your job is to:
 
 Rules:
 
+- Keep it simple. Include only 4-6 columns — the essentials someone would put in a quick spreadsheet for this topic. Do not add niche, speculative, or hard-to-find columns.
 - \`dataset_name\` must be snake_case.
 - All column \`name\` values must be snake_case and unique.
 - Prefer concrete column choices over speculative ones — better to omit a column than guess wildly.`;
 
-function getModel() {
+function getModel(modelSlug?: string) {
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) {
     throw new Error("Missing required environment variable: OPENROUTER_API_KEY");
   }
   const openrouter = createOpenRouter({ apiKey });
-  return openrouter("anthropic/claude-sonnet-4-6");
+  const resolvedSlug = modelSlug ?? DEFAULT_MODEL_IDS.SCHEMA_INFERENCE;
+  return openrouter(resolvedSlug);
 }
 
-export async function inferSchema(prompt: string): Promise<DatasetSchema> {
-  const model = getModel();
+export async function inferSchema(prompt: string, modelSlug?: string): Promise<DatasetSchema> {
+  const model = getModel(modelSlug);
   try {
     return await callOnce(model, prompt);
   } catch (error) {
@@ -54,7 +57,7 @@ async function callOnce(
     model,
     output: Output.object({ schema: datasetSchemaSchema }),
     system: SYSTEM_PROMPT,
-    maxTokens: 4096,
+    maxOutputTokens: 4096,
     prompt,
   });
   if (!output) throw new Error("Model did not generate a valid schema object");

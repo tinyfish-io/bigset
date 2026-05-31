@@ -3,15 +3,16 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
-    "lint": "eslint"
+    "dev": "node ../scripts/with-root-env.mjs next dev",
+    "build": "node ../scripts/with-root-env.mjs next build",
+    "start": "node ../scripts/with-root-env.mjs next start",
+    "lint": "node ../scripts/with-root-env.mjs eslint"
   },
   "dependencies": {
     "@clerk/nextjs": "^7.3.7",
     "@tanstack/react-table": "^8.21.3",
     "convex": "^1.39.1",
+    "lucide-react": "^1.17.0",
     "next": "16.2.6",
     "posthog-js": "^1.374.2",
     "react": "19.2.4",

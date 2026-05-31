@@ -9,15 +9,17 @@ bun install
 bun dev --port 3500
 ```
 
-Opens on [localhost:3500](http://localhost:3500). Expects the backend running on 3501 (auth requests are proxied via Next.js rewrites).
+Opens on [localhost:3500](http://localhost:3500). Package scripts load root
+`.env` before starting Next.js. The supported full-stack dev path is still
+`make dev` from the repo root.
 
 ## Key Paths
 
 - `app/page.tsx` — Landing page
-- `app/auth/` — Sign in + sign up
+- `app/sign-in/` and `app/sign-up/` — Clerk sign in + sign up
 - `app/dashboard/` — Main dashboard (protected)
-- `lib/auth-client.ts` — Better Auth React client
-- `next.config.ts` — Rewrites `/api/auth/*` to the backend
+- `lib/backend.ts` — Backend API client
+- `proxy.ts` — Clerk route protection
 
 ## Scripts
 

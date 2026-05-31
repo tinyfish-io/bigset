@@ -17,6 +17,7 @@ interface ProposedColumn {
   name: string;
   type: ColumnType;
   description: string;
+  isPrimaryKey: boolean;
 }
 
 type Cadence = "30m" | "6h" | "12h" | "daily" | "weekly";
@@ -61,6 +62,7 @@ function mapBackendColumn(col: InferredColumn, index: number): ProposedColumn {
     name: col.display_name,
     type: BACKEND_TYPE_MAP[col.type],
     description: col.retrieval_hint,
+    isPrimaryKey: col.is_primary_key,
   };
 }
 
@@ -96,6 +98,10 @@ export default function NewDatasetPage() {
   const [datasetName, setDatasetName] = useState("");
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [retrievalStrategy, setRetrievalStrategy] = useState<
+    "search_fetch" | "browser" | "hybrid" | null
+  >(null);
+  const [sourceHint, setSourceHint] = useState("");
   const { getToken } = useAuth();
 
   const createDataset = useMutation(api.datasets.create);
@@ -139,6 +145,8 @@ export default function NewDatasetPage() {
           .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
           .join(" ")
       );
+      setRetrievalStrategy(schema.retrieval_strategy);
+      setSourceHint(schema.source_hint);
       track(EVENTS.DATASET_SCHEMA_GENERATED, {
         column_count: schema.columns.length,
       });
@@ -162,7 +170,7 @@ export default function NewDatasetPage() {
   function handleAddColumn() {
     setColumns((prev) => [
       ...prev,
-      { id: String(Date.now()), name: "New Column", type: "text", description: "" },
+      { id: String(Date.now()), name: "New Column", type: "text", description: "", isPrimaryKey: false },
     ]);
   }
 
@@ -180,7 +188,10 @@ export default function NewDatasetPage() {
           name: c.name,
           type: c.type,
           description: c.description || undefined,
+          isPrimaryKey: c.isPrimaryKey || undefined,
         })),
+        retrievalStrategy: retrievalStrategy ?? undefined,
+        sourceHint: sourceHint || undefined,
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to create dataset";
@@ -218,7 +229,7 @@ export default function NewDatasetPage() {
                   Create a new dataset
                 </h2>
                 <p className="mt-2 text-sm text-muted">
-                  Describe what data you want to collect. Our agents will figure out the schema and start populating it.
+                  Describe what data you want to collect. Our agents will figure out the schema; you can start populating it from the dataset page.
                 </p>
               </div>
 
@@ -332,12 +343,22 @@ export default function NewDatasetPage() {
                   {columns.map((col) => (
                     <div key={col.id} className="grid grid-cols-[100px_1fr_1.5fr_32px] gap-3 px-4 py-2.5 items-start">
                       <TypeSelector value={col.type} onChange={(v) => handleUpdateColumn(col.id, "type", v)} />
-                      <input
-                        type="text"
-                        value={col.name}
-                        onChange={(e) => handleUpdateColumn(col.id, "name", e.target.value)}
-                        className="rounded border border-border bg-background px-2 py-1 text-sm outline-none focus:border-foreground/30"
-                      />
+                      <div className="flex items-center gap-1.5">
+                        <input
+                          type="text"
+                          value={col.name}
+                          onChange={(e) => handleUpdateColumn(col.id, "name", e.target.value)}
+                          className="min-w-0 flex-1 rounded border border-border bg-background px-2 py-1 text-sm outline-none focus:border-foreground/30"
+                        />
+                        {col.isPrimaryKey && (
+                          <span
+                            className="shrink-0 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 dark:bg-amber-900/30 dark:text-amber-300"
+                            title="Primary key — uniquely identifies each row"
+                          >
+                            PK
+                          </span>
+                        )}
+                      </div>
                       <textarea
                         ref={(el) => {
                           if (el) {

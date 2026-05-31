@@ -376,7 +376,10 @@ export const seedPublicDatasets = internalMutation({
           continue;
         }
 
-        // Force-update: patch metadata + replace rows.
+        // Force-update: patch metadata + replace rows. Reset rowCount
+        // alongside the row replacement so the dashboard reflects the
+        // curated content immediately. We know the exact post-state
+        // (`ds.rows.length`), so no recount needed.
         await ctx.db.patch(tracked._id, {
           name: ds.name,
           description: ds.description,
@@ -384,6 +387,7 @@ export const seedPublicDatasets = internalMutation({
           columns: ds.columns,
           status: "live",
           visibility: "public",
+          rowCount: ds.rows.length,
         });
 
         const oldRows = await ctx.db
@@ -424,6 +428,7 @@ export const seedPublicDatasets = internalMutation({
         cadence: ds.cadence,
         visibility: "public",
         columns: ds.columns,
+        rowCount: ds.rows.length,
       });
 
       for (const row of ds.rows) {

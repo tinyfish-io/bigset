@@ -72,7 +72,7 @@ run_test "anon datasets.remove -> Not authenticated" \
   "$(mutation "{\"path\":\"datasets:remove\",\"args\":{\"id\":\"$PUB_ID\"},\"format\":\"json\"}" | assert_error_contains 'Not authenticated')"
 
 section "Internal mutations — must not be HTTP-callable"
-for fn in insert update insertBatch; do
+for fn in insert update remove; do
   run_test "datasetRows.$fn is internal" \
     "$(mutation "{\"path\":\"datasetRows:$fn\",\"args\":{},\"format\":\"json\"}" | assert_error_contains 'Could not find public function')"
 done

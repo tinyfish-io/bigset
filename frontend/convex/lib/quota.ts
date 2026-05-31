@@ -34,9 +34,10 @@ import { isReservedOwnerId } from "./authz.js";
  *   - The quota layer's job is HARD ENFORCEMENT — yes/no, atomic, simple.
  *   - The agent layer's job is BATCH SIZING — call `getUsageFor` first,
  *     split work to fit `remaining`, drive the retry/backoff strategy.
- *   - `insertBatch` is intentionally all-or-nothing: a partial accept
- *     would leak quota-aware policy ("which rows survived?") into the
- *     quota layer, which has no business making that decision.
+ *     Today the populate agent inserts one row at a time via `insert`;
+ *     a future bulk path should re-introduce a batch mutation with
+ *     all-or-nothing semantics rather than leak quota-aware policy
+ *     ("which rows survived?") into this layer.
  */
 
 type AnyCtx =
@@ -191,7 +192,12 @@ export async function consumeQuota(
 
 /**
  * Resolve a row's parent dataset and consume `n` against its owner.
- * Used by `datasetRows.update`, which only knows the rowId up front.
+ *
+ * Reserved for future user-facing row-edit mutations that take only a
+ * rowId. The current admin-key paths (populate agent's update/delete)
+ * always pass an `expectedDatasetId` for capability scoping and use
+ * `consumeQuotaForDataset` instead — see datasetRows.ts and the security
+ * note in backend/src/mastra/tools/dataset-tools.ts.
  */
 export async function consumeQuotaForRow(
   ctx: WriteCtx,

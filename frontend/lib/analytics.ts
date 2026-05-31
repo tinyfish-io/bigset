@@ -32,7 +32,8 @@ export const EVENTS = {
   // Dataset interaction
   DATASET_OPENED: "dataset_opened",
   DATASET_EXPORTED: "dataset_exported",
-  DATASET_POPULATED: "dataset_populated",
+  DATASET_POPULATE_STARTED: "dataset_populate_started",
+  DATASET_UPDATE_STARTED: "dataset_update_started",
 
   // Creation flow
   DATASET_CREATION_STARTED: "dataset_creation_started",
@@ -84,8 +85,8 @@ export function initAnalytics(): boolean {
     //   - maskInputOptions: every form input/textarea value is masked
     //     unconditionally. Catches the search box, the wizard prompt,
     //     Clerk's email + password fields.
-    //   - recordConsole: console.error/warn shows up alongside the
-    //     replay timeline — invaluable for "user says it broke".
+    //   - logs.captureConsoleLogs: console.error/warn is captured for
+    //     "user says it broke" debugging.
     //   - recordCrossOriginIframes: false → Clerk's hosted iframes
     //     (if any) are not pierced into.
     session_recording: {
@@ -97,7 +98,10 @@ export function initAnalytics(): boolean {
         email: true,
       },
       recordCrossOriginIframes: false,
-      recordConsole: true,
+    },
+
+    logs: {
+      captureConsoleLogs: true,
     },
 
     loaded: () => {
