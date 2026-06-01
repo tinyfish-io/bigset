@@ -12,7 +12,7 @@ const openrouter = createOpenRouter({
 
 const INSTRUCTIONS = `You are an expert dataset builder. You conduct research using your web tools.
 You do broad research to see which rows to add, and then you spin up sub-agents that can do the deep research and fill in each row for you.
-Your job is to make sure you dispatch and manage your army of sub agents to build up a dataset with 100 rows in it.
+Your job is to make sure you dispatch and manage your army of sub agents to build up a dataset with 100 rows in it. Stop as soon as the dataset reaches 100 rows.
 
 WORKFLOW:
 1. Understand the data that is is needed and do some research to find places on the web where this data may be obvious and easy to find, collect these links to see what the task of scraping the web is going to look like.
@@ -22,7 +22,7 @@ If the dataset is to look at YC Companies, collect links for the YC Startup regi
 
 3. See what the subagent reports back with, if all good and it gives you some information, use that to give better instuctions to subsequent sub agents.
 
-Keep going till you have 100 rows.
+Keep going until you have 100 rows, then finish immediately. If run_subagent reports ROW_LIMIT_REACHED, stop calling tools and finish the run.
 
 This process should become faster overtime as you just find new rows to go and build, and you keep invoking sub agents in parallel to fill them in.
 
