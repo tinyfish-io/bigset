@@ -1,9 +1,12 @@
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
+import { convex, internal } from "../../convex.js";
 import { buildInvestigateAgent } from "../agents/investigate.js";
 import type { AuthContext } from "../workflows/populate.js";
 import type { PopulateColumn } from "../../pipeline/populate.js";
 import type { RunMetrics } from "../run-metrics.js";
+
+const MAX_DATASET_ROWS = 100;
 
 const investigateInputSchema = z.object({
   entity_hint: z
@@ -82,6 +85,18 @@ export function buildSubagentTool(
     inputSchema: investigateInputSchema,
     outputSchema: investigateOutputSchema,
     execute: async ({ entity_hint, primary_keys, context, urls, notes }) => {
+      const rowCount = await convex.query(internal.datasetRows.countByDataset, {
+        datasetId: authorizedDatasetId,
+      });
+      if (rowCount >= MAX_DATASET_ROWS) {
+        return {
+          inserted: false,
+          reason: `ROW_LIMIT_REACHED: BigSet datasets are capped at ${MAX_DATASET_ROWS} rows. Stop calling run_subagent and finish the run.`,
+          row_summary: undefined,
+          clues: undefined,
+        };
+      }
+
       if (metrics) metrics.investigateCalls++;
       console.log(
         `[run_subagent] spawning subagent user=${authContext.authorizedUserId} run=${authContext.workflowRunId} dataset=${authorizedDatasetId} entity="${entity_hint}" pk=${JSON.stringify(primary_keys)}`,
