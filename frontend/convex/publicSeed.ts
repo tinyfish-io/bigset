@@ -1,5 +1,9 @@
 import { internalMutation } from "./_generated/server.js";
 import { v } from "convex/values";
+import {
+  nextRefreshAtFor,
+  type RefreshCadence,
+} from "./lib/refreshScheduling.js";
 
 /**
  * Idempotent loader for the curated public datasets that appear on the
@@ -43,20 +47,6 @@ import { v } from "convex/values";
 export const SYSTEM_OWNER_ID = "system";
 
 type ColType = "text" | "number" | "boolean" | "url" | "date";
-type RefreshCadence = "manual" | "30m" | "6h" | "12h" | "daily" | "weekly";
-
-const REFRESH_INTERVAL_MS: Record<Exclude<RefreshCadence, "manual">, number> = {
-  "30m": 30 * 60 * 1000,
-  "6h": 6 * 60 * 60 * 1000,
-  "12h": 12 * 60 * 60 * 1000,
-  daily: 24 * 60 * 60 * 1000,
-  weekly: 7 * 24 * 60 * 60 * 1000,
-};
-
-function nextRefreshAtFor(cadence: RefreshCadence, from: number): number | undefined {
-  if (cadence === "manual") return undefined;
-  return from + REFRESH_INTERVAL_MS[cadence];
-}
 
 interface PublicDatasetDef {
   /**

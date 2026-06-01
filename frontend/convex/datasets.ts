@@ -14,6 +14,11 @@ import {
   requireIdentity,
 } from "./lib/authz.js";
 import { requireQuotaRemaining } from "./lib/quota.js";
+import {
+  nextRefreshAtFor,
+  refreshCadenceValidator,
+  type RefreshCadence,
+} from "./lib/refreshScheduling.js";
 
 const columnValidator = v.object({
   name: v.string(),
@@ -27,30 +32,6 @@ const columnValidator = v.object({
   description: v.optional(v.string()),
   isPrimaryKey: v.optional(v.boolean()),
 });
-
-const refreshCadenceValidator = v.union(
-  v.literal("manual"),
-  v.literal("30m"),
-  v.literal("6h"),
-  v.literal("12h"),
-  v.literal("daily"),
-  v.literal("weekly"),
-);
-
-type RefreshCadence = "manual" | "30m" | "6h" | "12h" | "daily" | "weekly";
-
-const REFRESH_INTERVAL_MS: Record<Exclude<RefreshCadence, "manual">, number> = {
-  "30m": 30 * 60 * 1000,
-  "6h": 6 * 60 * 60 * 1000,
-  "12h": 12 * 60 * 60 * 1000,
-  daily: 24 * 60 * 60 * 1000,
-  weekly: 7 * 24 * 60 * 60 * 1000,
-};
-
-function nextRefreshAtFor(cadence: RefreshCadence, from: number): number | undefined {
-  if (cadence === "manual") return undefined;
-  return from + REFRESH_INTERVAL_MS[cadence];
-}
 
 function refreshCadenceFromLegacyLabel(
   legacyCadence: string | undefined,

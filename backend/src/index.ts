@@ -428,6 +428,7 @@ async function backfillDatasetRefreshSettings(
     logger.info(result, "Dataset refresh settings backfill complete");
   } catch (err) {
     logger.error({ err }, "Dataset refresh settings backfill failed");
+    throw err;
   }
 }
 
@@ -536,7 +537,7 @@ await fastify.register(fastifyCors, {
 // protected routes — see the example block below.
 await fastify.register(clerkAuthPlugin);
 
-void backfillDatasetRefreshSettings(fastify.log);
+await backfillDatasetRefreshSettings(fastify.log);
 const refreshScheduler = startLocalRefreshScheduler(fastify.log);
 
 // Flush queued PostHog events on graceful shutdown so a SIGTERM mid-flight

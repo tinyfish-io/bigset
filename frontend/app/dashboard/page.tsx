@@ -13,13 +13,7 @@ import {
 import { useTheme } from "@/components/ThemeToggle";
 import { QuotaBadge } from "@/components/QuotaBadge";
 import { EVENTS, track } from "@/lib/analytics";
-
-type ProfileUser = {
-  fullName?: string | null;
-  firstName?: string | null;
-  primaryEmailAddress?: { emailAddress?: string | null } | null;
-  imageUrl?: string | null;
-};
+import type { ProfileUser } from "@/lib/profile-user";
 
 export default function DashboardPage() {
   const { isAuthenticated, isLoading } = useConvexAuth();

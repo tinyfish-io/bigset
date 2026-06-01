@@ -11,10 +11,17 @@ function required(name: string): string {
   return value;
 }
 
+function numberFromEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 export const env = {
   CLIENT_ORIGIN: process.env.CLIENT_ORIGIN || "http://localhost:3500",
   CONVEX_URL: required("CONVEX_URL"),
-  PORT: Number(process.env.PORT || "3501"),
+  PORT: numberFromEnv("PORT", 3501),
 
   // Used by ./convex.ts to call internal Convex functions (e.g. agent-driven
   // row inserts). Optional today because no scheduled jobs run yet; required
@@ -59,13 +66,16 @@ export const env = {
 
   REFRESH_SCHEDULER_ENABLED:
     process.env.REFRESH_SCHEDULER_ENABLED !== "false",
-  REFRESH_SCHEDULER_POLL_MS: Number(
-    process.env.REFRESH_SCHEDULER_POLL_MS || 60_000,
+  REFRESH_SCHEDULER_POLL_MS: numberFromEnv(
+    "REFRESH_SCHEDULER_POLL_MS",
+    60_000,
   ),
-  REFRESH_SCHEDULER_BATCH_SIZE: Number(
-    process.env.REFRESH_SCHEDULER_BATCH_SIZE || 5,
+  REFRESH_SCHEDULER_BATCH_SIZE: numberFromEnv(
+    "REFRESH_SCHEDULER_BATCH_SIZE",
+    5,
   ),
-  REFRESH_SCHEDULER_STALE_AFTER_MS: Number(
-    process.env.REFRESH_SCHEDULER_STALE_AFTER_MS || 6 * 60 * 60 * 1000,
+  REFRESH_SCHEDULER_STALE_AFTER_MS: numberFromEnv(
+    "REFRESH_SCHEDULER_STALE_AFTER_MS",
+    6 * 60 * 60 * 1000,
   ),
 };

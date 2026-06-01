@@ -9,14 +9,9 @@ export const REFRESH_CADENCE_OPTIONS: { value: RefreshCadence; label: string }[]
   { value: "weekly", label: "Weekly" },
 ];
 
-export const REFRESH_CADENCE_LABELS: Record<RefreshCadence, string> = {
-  manual: "Manual",
-  "30m": "Every 30 min",
-  "6h": "Every 6 hours",
-  "12h": "Every 12 hours",
-  daily: "Daily",
-  weekly: "Weekly",
-};
+export const REFRESH_CADENCE_LABELS = Object.fromEntries(
+  REFRESH_CADENCE_OPTIONS.map((option) => [option.value, option.label]),
+) as Record<RefreshCadence, string>;
 
 export function refreshCadenceLabel(cadence: RefreshCadence): string {
   return REFRESH_CADENCE_LABELS[cadence];

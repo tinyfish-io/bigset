@@ -19,13 +19,7 @@ import {
   refreshCadenceLabel,
   type RefreshCadence,
 } from "@/lib/refresh-cadence";
-
-type ProfileUser = {
-  fullName?: string | null;
-  firstName?: string | null;
-  primaryEmailAddress?: { emailAddress?: string | null } | null;
-  imageUrl?: string | null;
-};
+import type { ProfileUser } from "@/lib/profile-user";
 
 export default function DatasetPage() {
   const params = useParams();
