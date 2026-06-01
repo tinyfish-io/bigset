@@ -85,23 +85,24 @@ export function buildSubagentTool(
     inputSchema: investigateInputSchema,
     outputSchema: investigateOutputSchema,
     execute: async ({ entity_hint, primary_keys, context, urls, notes }) => {
-      const rowCount = await convex.query(internal.datasetRows.countByDataset, {
-        datasetId: authorizedDatasetId,
-      });
-      if (rowCount >= MAX_DATASET_ROWS) {
-        return {
-          inserted: false,
-          reason: `ROW_LIMIT_REACHED: BigSet datasets are capped at ${MAX_DATASET_ROWS} rows. Stop calling run_subagent and finish the run.`,
-          row_summary: undefined,
-          clues: undefined,
-        };
-      }
-
-      if (metrics) metrics.investigateCalls++;
-      console.log(
-        `[run_subagent] spawning subagent user=${authContext.authorizedUserId} run=${authContext.workflowRunId} dataset=${authorizedDatasetId} entity="${entity_hint}" pk=${JSON.stringify(primary_keys)}`,
-      );
       try {
+        const rowCount = await convex.query(internal.datasetRows.countByDataset, {
+          datasetId: authorizedDatasetId,
+        });
+        if (rowCount >= MAX_DATASET_ROWS) {
+          return {
+            inserted: false,
+            reason: `ROW_LIMIT_REACHED: BigSet datasets are capped at ${MAX_DATASET_ROWS} rows. Stop calling run_subagent and finish the run.`,
+            row_summary: undefined,
+            clues: undefined,
+          };
+        }
+
+        if (metrics) metrics.investigateCalls++;
+        console.log(
+          `[run_subagent] spawning subagent user=${authContext.authorizedUserId} run=${authContext.workflowRunId} dataset=${authorizedDatasetId} entity="${entity_hint}" pk=${JSON.stringify(primary_keys)}`,
+        );
+
         const agent = buildInvestigateAgent(
           authorizedDatasetId,
           authContext,
