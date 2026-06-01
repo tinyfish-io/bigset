@@ -5,7 +5,7 @@ import {
   internalQuery,
 } from "./_generated/server.js";
 import type { QueryCtx } from "./_generated/server.js";
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import type { Doc } from "./_generated/dataModel.js";
 import {
   assertNotReservedOwner,
@@ -49,22 +49,27 @@ const PREVIEW_ROW_COUNT = 5;
 function normalizeCreateDatasetInput(args: CreateDatasetInput) {
   const name = args.name.trim();
   if (!name) {
-    throw new Error("Dataset name is required.");
+    throw new ConvexError("Dataset name is required.");
   }
   if (args.columns.length === 0) {
-    throw new Error("Add at least one column.");
+    throw new ConvexError("Add at least one column.");
+  }
+
+  const trimmedDescription = args.description.trim();
+  if (args.description && !trimmedDescription) {
+    throw new ConvexError("Dataset description is required.");
   }
 
   const seenColumnNames = new Set<string>();
   const columns = args.columns.map((column) => {
     const columnName = column.name.trim();
     if (!columnName) {
-      throw new Error("Every column needs a name.");
+      throw new ConvexError("Every column needs a name.");
     }
 
     const normalizedColumnName = columnName.toLowerCase();
     if (seenColumnNames.has(normalizedColumnName)) {
-      throw new Error(`Column names must be unique. "${columnName}" is duplicated.`);
+      throw new ConvexError(`Column names must be unique. "${columnName}" is duplicated.`);
     }
     seenColumnNames.add(normalizedColumnName);
 
@@ -78,7 +83,7 @@ function normalizeCreateDatasetInput(args: CreateDatasetInput) {
 
   return {
     name,
-    description: args.description.trim(),
+    description: trimmedDescription,
     cadence: args.cadence,
     columns,
     retrievalStrategy: args.retrievalStrategy,
