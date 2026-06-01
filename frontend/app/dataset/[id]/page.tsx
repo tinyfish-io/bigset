@@ -213,19 +213,33 @@ export default function DatasetPage() {
         status: dataset.status,
       });
       // Do NOT clear stopping here. Keep it true until Convex confirms the
-      // dataset has left the busy state (via the useEffect above). This
-      // prevents the button from briefly re-enabling during the cleanup window.
+      // dataset has left the busy state (via the isDatasetBusy effect below).
+      // This prevents the button from briefly re-enabling during the cleanup window.
     } catch (err) {
       console.error("[stop] failed", err);
       captureException(err, {
         operation: "dataset_stop",
         datasetId: dataset._id,
       });
-      // Request didn't reach the server — clear immediately so the user can
-      // retry rather than being stuck with a permanently disabled button.
+      // Request failed — clear immediately so the user can retry.
       setStopping(false);
     }
   }
+
+  // Computed before the loading guard so the useEffect below can depend on it
+  // without hitting the TDZ. Optional chaining handles the pre-load undefined state.
+  const isDatasetBusy = dataset?.status === "building" || dataset?.status === "updating";
+
+  // Clear the stop latch once the dataset is confirmed not-busy by Convex.
+  // Using setTimeout defers the setState out of the synchronous effect body,
+  // satisfying the react-hooks/set-state-in-effect lint rule while preserving
+  // the same semantic: latch clears on the next tick after the status transition.
+  useEffect(() => {
+    if (!isDatasetBusy) {
+      const id = setTimeout(() => setStopping(false), 0);
+      return () => clearTimeout(id);
+    }
+  }, [isDatasetBusy]);
 
   if (authLoading || dataset === undefined || rows === undefined) {
     return (
@@ -240,7 +254,6 @@ export default function DatasetPage() {
   // the "Dataset not found" UI.
 
   const exportDisabled = exporting !== null || rows.length === 0;
-  const isDatasetBusy = dataset.status === "building" || dataset.status === "updating";
   const isOwner = userId === dataset.ownerId;
   const displayDataset = {
     ...dataset,

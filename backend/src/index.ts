@@ -212,7 +212,9 @@ async function runUpdateWorkflowInBackground({
   };
 }): Promise<void> {
   const datasetId = input.datasetId;
-  registerDataset(datasetId);
+  // registerDataset is called by the route handler before void-ing this
+  // function, so the registry entry is guaranteed visible the moment the
+  // 202 response is sent. No call needed here.
 
   try {
     const result = await run.start({
@@ -367,6 +369,7 @@ async function runScheduledUpdateWorkflowInBackground({
 async function runPopulateWorkflowInBackground({
   input,
   run,
+  controller,
   authorizedUserId,
   logger,
   clerk,
@@ -374,6 +377,7 @@ async function runPopulateWorkflowInBackground({
 }: {
   input: DatasetContext;
   run: PopulateWorkflowRun;
+  controller: AbortController;
   authorizedUserId: string;
   logger: FastifyBaseLogger;
   clerk: ClerkClient;
@@ -774,9 +778,16 @@ await fastify.register(async (instance) => {
         return reply.code(502).send({ error: "Failed to populate dataset. Please try again." });
       }
 
+      // Register before void-ing so the abort-registry entry is visible the
+      // instant the 202 is sent, closing the TOCTOU window where a /stop
+      // arriving before registerDataset runs inside the background function
+      // would incorrectly force-transition an active run to "failed".
+      const controller = registerDataset(parsed.data.datasetId);
+
       void runPopulateWorkflowInBackground({
         input: parsed.data,
         run,
+        controller,
         authorizedUserId: auth.userId,
         logger: req.log,
         clerk: req.server.clerk,
@@ -842,6 +853,12 @@ await fastify.register(async (instance) => {
       const { getModelConfig } = await import("./config/models.js");
       const modelConfig = await getModelConfig(auth.userId);
 
+      // Register before void-ing so the abort-registry entry is visible the
+      // instant the 202 is sent, closing the TOCTOU window where a /stop
+      // arriving before registerDataset runs inside the background function
+      // would incorrectly force-transition an active run to "failed".
+      registerDataset(parsed.data.datasetId);
+
       void runUpdateWorkflowInBackground({
         input: parsed.data,
         run,
@@ -889,8 +906,29 @@ await fastify.register(async (instance) => {
 
       const aborted = abortDataset(body.datasetId);
       if (!aborted) {
-        // Run just finished between the status check and here — not an error.
-        return reply.code(200).send({ success: true, message: "Run already completed" });
+        // No registered signal despite the dataset being "building"/"updating".
+        // The normal finish path always sets a terminal status in Convex
+        // *before* calling deregisterDataset(), so if the status is still
+        // busy here, no running process owns this dataset — it was orphaned
+        // by a server restart. Force-transition to "failed" so the dataset
+        // is no longer stuck.
+        req.log.warn(
+          { datasetId: body.datasetId },
+          "Stop requested for orphaned dataset (no active run registered); forcing to failed",
+        );
+        try {
+          await setDatasetPopulateStatus(
+            body.datasetId,
+            "failed",
+            "Run interrupted: server restarted while building",
+          );
+        } catch (statusErr) {
+          req.log.error(
+            { err: statusErr, datasetId: body.datasetId },
+            "Failed to force-transition orphaned dataset to failed",
+          );
+        }
+        return reply.code(200).send({ success: true });
       }
       req.log.info({ datasetId: body.datasetId }, "Stop requested");
 
