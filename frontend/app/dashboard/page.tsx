@@ -6,7 +6,6 @@ import { useRouter } from "next/navigation";
 import { useQuery, useConvexAuth } from "convex/react";
 import { useUser, useClerk } from "@clerk/nextjs";
 import { api } from "@/convex/_generated/api";
-import type { UserResource } from "@clerk/types";
 import {
   DatasetCard,
   type DatasetCardData,
@@ -14,6 +13,13 @@ import {
 import { useTheme } from "@/components/ThemeToggle";
 import { QuotaBadge } from "@/components/QuotaBadge";
 import { EVENTS, track } from "@/lib/analytics";
+
+type ProfileUser = {
+  fullName?: string | null;
+  firstName?: string | null;
+  primaryEmailAddress?: { emailAddress?: string | null } | null;
+  imageUrl?: string | null;
+};
 
 export default function DashboardPage() {
   const { isAuthenticated, isLoading } = useConvexAuth();
@@ -252,7 +258,7 @@ function ProfileMenu({
   user,
   onSignOut,
 }: {
-  user: UserResource | null | undefined;
+  user: ProfileUser | null | undefined;
   onSignOut: () => void;
 }) {
   const [open, setOpen] = useState(false);

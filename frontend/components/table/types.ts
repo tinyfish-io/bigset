@@ -1,3 +1,5 @@
+import type { RefreshCadence } from "@/lib/refresh-cadence";
+
 export type ColumnType = "text" | "number" | "boolean" | "url" | "date";
 
 export interface DatasetColumn {
@@ -13,7 +15,12 @@ export interface DatasetMeta {
   description: string;
   status: "live" | "paused" | "building" | "updating" | "failed";
   lastStatusError?: string;
-  cadence: string;
+  refreshCadence: RefreshCadence;
+  refreshEnabled: boolean;
+  nextRefreshAt?: number;
+  lastRefreshAt?: number;
+  lastRefreshStartedAt?: number;
+  lastRefreshRunId?: string;
   columns: DatasetColumn[];
 }
 

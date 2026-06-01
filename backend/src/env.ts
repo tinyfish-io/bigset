@@ -56,4 +56,16 @@ export const env = {
     process.env.POSTHOG_HOST ||
     process.env.NEXT_PUBLIC_POSTHOG_HOST ||
     "https://us.i.posthog.com",
+
+  REFRESH_SCHEDULER_ENABLED:
+    process.env.REFRESH_SCHEDULER_ENABLED !== "false",
+  REFRESH_SCHEDULER_POLL_MS: Number(
+    process.env.REFRESH_SCHEDULER_POLL_MS || 60_000,
+  ),
+  REFRESH_SCHEDULER_BATCH_SIZE: Number(
+    process.env.REFRESH_SCHEDULER_BATCH_SIZE || 5,
+  ),
+  REFRESH_SCHEDULER_STALE_AFTER_MS: Number(
+    process.env.REFRESH_SCHEDULER_STALE_AFTER_MS || 6 * 60 * 60 * 1000,
+  ),
 };

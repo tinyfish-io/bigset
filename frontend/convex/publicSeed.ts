@@ -17,7 +17,7 @@ import { v } from "convex/values";
  *   - Existing datasets are matched by `seedKey` (a stable, immutable
  *     identifier carried on each entry). If a dataset with the same
  *     seedKey already exists under `ownerId: system`, it is skipped.
- *   - `name`, `description`, `cadence`, and other fields can change
+ *   - `name`, `description`, `refreshCadence`, and other fields can change
  *     freely on subsequent runs without creating duplicates. They are
  *     NOT re-synced to the live row — patches in place are a deliberate
  *     future enhancement (see `backfilled` path below for the pattern).
@@ -43,6 +43,20 @@ import { v } from "convex/values";
 export const SYSTEM_OWNER_ID = "system";
 
 type ColType = "text" | "number" | "boolean" | "url" | "date";
+type RefreshCadence = "manual" | "30m" | "6h" | "12h" | "daily" | "weekly";
+
+const REFRESH_INTERVAL_MS: Record<Exclude<RefreshCadence, "manual">, number> = {
+  "30m": 30 * 60 * 1000,
+  "6h": 6 * 60 * 60 * 1000,
+  "12h": 12 * 60 * 60 * 1000,
+  daily: 24 * 60 * 60 * 1000,
+  weekly: 7 * 24 * 60 * 60 * 1000,
+};
+
+function nextRefreshAtFor(cadence: RefreshCadence, from: number): number | undefined {
+  if (cadence === "manual") return undefined;
+  return from + REFRESH_INTERVAL_MS[cadence];
+}
 
 interface PublicDatasetDef {
   /**
@@ -54,7 +68,7 @@ interface PublicDatasetDef {
   seedKey: string;
   name: string;
   description: string;
-  cadence: string;
+  refreshCadence: RefreshCadence;
   columns: { name: string; type: ColType; description?: string }[];
   rows: Record<string, string>[];
 }
@@ -70,7 +84,7 @@ const PUBLIC_DATASETS: PublicDatasetDef[] = [
     name: "AI-Native Companies Hiring Engineers",
     description:
       "Engineering hiring across the AI tooling, dev-tools, and agent ecosystem. Companies and stages reflect publicly known facts; role counts are approximate.",
-    cadence: "Daily",
+    refreshCadence: "daily",
     columns: [
       { name: "Company", type: "text" },
       { name: "Product", type: "text" },
@@ -99,7 +113,7 @@ const PUBLIC_DATASETS: PublicDatasetDef[] = [
     name: "NVIDIA Consumer GPU Retail Prices",
     description:
       "Retail prices for current-generation NVIDIA Founders Edition cards across major US retailers, reflecting public MSRPs and observed street prices.",
-    cadence: "Every 30 minutes",
+    refreshCadence: "30m",
     columns: [
       { name: "Model", type: "text" },
       { name: "MSRP", type: "number" },
@@ -125,7 +139,7 @@ const PUBLIC_DATASETS: PublicDatasetDef[] = [
     name: "Top Open-Source AI Repositories",
     description:
       "Most-starred AI/ML repositories on GitHub. Star counts are rounded approximations sourced from public GitHub metadata at curation time.",
-    cadence: "Daily",
+    refreshCadence: "daily",
     columns: [
       { name: "Repo", type: "text" },
       { name: "Stars", type: "number" },
@@ -153,7 +167,7 @@ const PUBLIC_DATASETS: PublicDatasetDef[] = [
     name: "Frontier AI Model Pricing",
     description:
       "Per-million-token API pricing and context windows for production AI models. Values reflect published rates on each provider's pricing page.",
-    cadence: "Weekly",
+    refreshCadence: "weekly",
     columns: [
       { name: "Provider", type: "text" },
       { name: "Model", type: "text" },
@@ -180,7 +194,7 @@ const PUBLIC_DATASETS: PublicDatasetDef[] = [
     name: "Browser Automation & Web Agent Companies",
     description:
       "Companies building browser-control APIs, headless browser infrastructure, and agentic web scraping. Funding totals are public disclosures.",
-    cadence: "Weekly",
+    refreshCadence: "weekly",
     columns: [
       { name: "Company", type: "text" },
       { name: "Product", type: "text" },
@@ -206,7 +220,7 @@ const PUBLIC_DATASETS: PublicDatasetDef[] = [
     name: "H100 Cloud GPU Pricing",
     description:
       "Per-GPU per-hour pricing for NVIDIA H100 80GB across hyperscalers and specialty cloud providers. AWS/GCP/Azure prices are full-node rates normalized to 1× H100.",
-    cadence: "Daily",
+    refreshCadence: "daily",
     columns: [
       { name: "Provider", type: "text" },
       { name: "Per-GPU $ / hr", type: "number" },
@@ -231,7 +245,7 @@ const PUBLIC_DATASETS: PublicDatasetDef[] = [
     name: "Notable AI Company Funding Rounds",
     description:
       "Significant venture rounds raised by AI companies. Round names, amounts, and lead investors are drawn from public funding announcements.",
-    cadence: "Daily",
+    refreshCadence: "daily",
     columns: [
       { name: "Company", type: "text" },
       { name: "Round", type: "text" },
@@ -260,7 +274,7 @@ const PUBLIC_DATASETS: PublicDatasetDef[] = [
     name: "AI Coding Tools Landscape",
     description:
       "Editors, CLIs, and extensions that ship with AI-powered coding. Pricing and underlying-model fields reflect each tool's public docs.",
-    cadence: "Weekly",
+    refreshCadence: "weekly",
     columns: [
       { name: "Product", type: "text" },
       { name: "Type", type: "text" },
@@ -288,7 +302,7 @@ const PUBLIC_DATASETS: PublicDatasetDef[] = [
     name: "Observability SaaS Pricing Comparison",
     description:
       "Starting price, log-ingest rate, and free-tier limits for the leading observability platforms. Values reflect each vendor's published pricing page.",
-    cadence: "Weekly",
+    refreshCadence: "weekly",
     columns: [
       { name: "Vendor", type: "text" },
       { name: "Starter $ / mo", type: "number" },
@@ -337,7 +351,7 @@ function assertUniqueSeedKeys(defs: PublicDatasetDef[]): void {
  *
  *   npx convex run publicSeed:seedPublicDatasets '{"force":true}'
  *     → ALSO updates existing curated datasets in place: patches metadata
- *       (name, description, cadence, columns) and replaces all their rows
+ *       (name, description, refreshCadence, columns) and replaces all their rows
  *       with the current PUBLIC_DATASETS content. Use this when you've
  *       edited curated content and want it reflected live.
  *
@@ -349,6 +363,7 @@ export const seedPublicDatasets = internalMutation({
   args: { force: v.optional(v.boolean()) },
   handler: async (ctx, { force }) => {
     assertUniqueSeedKeys(PUBLIC_DATASETS);
+    const now = Date.now();
 
     const existing = await ctx.db
       .query("datasets")
@@ -383,7 +398,9 @@ export const seedPublicDatasets = internalMutation({
         await ctx.db.patch(tracked._id, {
           name: ds.name,
           description: ds.description,
-          cadence: ds.cadence,
+          refreshCadence: ds.refreshCadence,
+          refreshEnabled: ds.refreshCadence !== "manual",
+          nextRefreshAt: nextRefreshAtFor(ds.refreshCadence, now),
           columns: ds.columns,
           status: "live",
           visibility: "public",
@@ -413,6 +430,9 @@ export const seedPublicDatasets = internalMutation({
       if (legacy) {
         await ctx.db.patch(legacy._id, {
           seedKey: ds.seedKey,
+          refreshCadence: ds.refreshCadence,
+          refreshEnabled: ds.refreshCadence !== "manual",
+          nextRefreshAt: nextRefreshAtFor(ds.refreshCadence, now),
           visibility: "public",
         });
         backfilled++;
@@ -425,7 +445,9 @@ export const seedPublicDatasets = internalMutation({
         description: ds.description,
         ownerId: SYSTEM_OWNER_ID,
         status: "live",
-        cadence: ds.cadence,
+        refreshCadence: ds.refreshCadence,
+        refreshEnabled: ds.refreshCadence !== "manual",
+        nextRefreshAt: nextRefreshAtFor(ds.refreshCadence, now),
         visibility: "public",
         columns: ds.columns,
         rowCount: ds.rows.length,

@@ -3,9 +3,8 @@
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useQuery, useConvexAuth } from "convex/react";
+import { useMutation, useQuery, useConvexAuth } from "convex/react";
 import { useAuth, useUser, useClerk } from "@clerk/nextjs";
-import type { UserResource } from "@clerk/types";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { DatasetTable } from "@/components/table";
@@ -15,6 +14,18 @@ import { StatusBadge } from "@/components/dataset/StatusBadge";
 import { downloadCSV, downloadXLSX } from "@/lib/export";
 import { populate, update } from "@/lib/backend";
 import { EVENTS, captureException, track } from "@/lib/analytics";
+import {
+  REFRESH_CADENCE_OPTIONS,
+  refreshCadenceLabel,
+  type RefreshCadence,
+} from "@/lib/refresh-cadence";
+
+type ProfileUser = {
+  fullName?: string | null;
+  firstName?: string | null;
+  primaryEmailAddress?: { emailAddress?: string | null } | null;
+  imageUrl?: string | null;
+};
 
 export default function DatasetPage() {
   const params = useParams();
@@ -28,6 +39,7 @@ export default function DatasetPage() {
   const [exportOpen, setExportOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [confirmPopulate, setConfirmPopulate] = useState(false);
+  const [savingRefreshCadence, setSavingRefreshCadence] = useState(false);
 
   const datasetId = params.id as Id<"datasets">;
   const dataset = useQuery(
@@ -38,6 +50,7 @@ export default function DatasetPage() {
     api.datasetRows.listByDataset,
     authLoading ? "skip" : { datasetId },
   );
+  const updateRefreshSettings = useMutation(api.datasets.updateRefreshSettings);
 
   const rowIds = useMemo(() => (rows ?? []).map((r) => r._id), [rows]);
   const selection = useSelection(rowIds);
@@ -154,7 +167,7 @@ export default function DatasetPage() {
       track(EVENTS.DATASET_UPDATE_STARTED, {
         datasetId: dataset._id,
         column_count: dataset.columns.length,
-        row_count: selectedRowIds?.length ?? rows.length,
+        row_count: selectedRowIds?.length ?? rows?.length ?? 0,
         selective: selectedCount > 0,
         runId: result.runId,
       });
@@ -166,6 +179,25 @@ export default function DatasetPage() {
       });
     } finally {
       setUpdating(false);
+    }
+  }
+
+  async function handleRefreshCadenceChange(refreshCadence: RefreshCadence) {
+    if (!dataset || savingRefreshCadence || userId !== dataset.ownerId) return;
+    setSavingRefreshCadence(true);
+    try {
+      await updateRefreshSettings({
+        id: dataset._id,
+        refreshCadence,
+      });
+    } catch (err) {
+      console.error("[refresh cadence] failed", err);
+      captureException(err, {
+        operation: "dataset_refresh_cadence_update",
+        datasetId: dataset._id,
+      });
+    } finally {
+      setSavingRefreshCadence(false);
     }
   }
 
@@ -183,6 +215,12 @@ export default function DatasetPage() {
 
   const exportDisabled = exporting !== null || rows.length === 0;
   const isDatasetBusy = dataset.status === "building" || dataset.status === "updating";
+  const isOwner = userId === dataset.ownerId;
+  const displayDataset = {
+    ...dataset,
+    refreshCadence: dataset.refreshCadence ?? "daily",
+    refreshEnabled: dataset.refreshEnabled ?? true,
+  };
   const updateDisabled = updating || isDatasetBusy;
   const populateDisabled = populating || isDatasetBusy;
   const updateLabel = dataset.status === "updating"
@@ -239,11 +277,13 @@ export default function DatasetPage() {
             open={settingsOpen}
             onToggle={() => setSettingsOpen((o) => !o)}
             onClose={() => setSettingsOpen(false)}
-            cadence={dataset.cadence}
+            refreshCadence={displayDataset.refreshCadence}
+            refreshCadenceDisabled={!isOwner || savingRefreshCadence}
             updateLabel={updateLabel}
             updateDisabled={updateDisabled}
             populateLabel={populateLabel}
             populateDisabled={populateDisabled}
+            onRefreshCadenceChange={handleRefreshCadenceChange}
             onUpdate={() => { setSettingsOpen(false); handleUpdate(); }}
             onPopulate={() => {
               setSettingsOpen(false);
@@ -288,7 +328,7 @@ export default function DatasetPage() {
       </div>
 
       <DatasetTable
-        dataset={dataset}
+        dataset={displayDataset}
         rows={rows}
         datasetId={datasetId}
         selection={selection}
@@ -395,22 +435,26 @@ function SettingsDropdown({
   open,
   onToggle,
   onClose,
-  cadence,
+  refreshCadence,
+  refreshCadenceDisabled,
   updateLabel,
   updateDisabled,
   populateLabel,
   populateDisabled,
+  onRefreshCadenceChange,
   onUpdate,
   onPopulate,
 }: {
   open: boolean;
   onToggle: () => void;
   onClose: () => void;
-  cadence: string;
+  refreshCadence: RefreshCadence;
+  refreshCadenceDisabled: boolean;
   updateLabel: string;
   updateDisabled: boolean;
   populateLabel: string;
   populateDisabled: boolean;
+  onRefreshCadenceChange: (refreshCadence: RefreshCadence) => void;
   onUpdate: () => void;
   onPopulate: () => void;
 }) {
@@ -437,7 +481,7 @@ function SettingsDropdown({
       </button>
 
       {open && (
-        <div className="absolute right-0 top-full mt-1.5 w-48 rounded-xl border border-border bg-surface shadow-xl ring-1 ring-black/[0.04] z-50 overflow-hidden">
+        <div className="absolute right-0 top-full mt-1.5 w-56 rounded-xl border border-border bg-surface shadow-xl ring-1 ring-black/[0.04] z-50 overflow-hidden">
           <div className="p-1">
             <button
               onClick={onUpdate}
@@ -456,8 +500,29 @@ function SettingsDropdown({
               {populateLabel}
             </button>
           </div>
-          <div className="border-t border-border px-3 py-1.5">
-            <span className="text-[11px] italic text-muted">{cadence}</span>
+          <div className="border-t border-border p-1">
+            <div className="px-2 py-1 text-[11px] font-medium text-muted">
+              Refresh cadence
+            </div>
+            {REFRESH_CADENCE_OPTIONS.map((option) => {
+              const selected = refreshCadence === option.value;
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => onRefreshCadenceChange(option.value)}
+                  disabled={refreshCadenceDisabled || selected}
+                  className="w-full flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg text-xs text-foreground hover:bg-foreground/[0.05] transition-colors disabled:cursor-default disabled:opacity-60"
+                >
+                  <span>{refreshCadenceLabel(option.value)}</span>
+                  {selected && (
+                    <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <polyline points="20 6 9 17 4 12" />
+                    </svg>
+                  )}
+                </button>
+              );
+            })}
           </div>
         </div>
       )}
@@ -473,7 +538,7 @@ function DatasetProfileMenu({
   user,
   onSignOut,
 }: {
-  user: UserResource | null | undefined;
+  user: ProfileUser | null | undefined;
   onSignOut: () => void;
 }) {
   const [open, setOpen] = useState(false);

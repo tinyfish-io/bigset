@@ -1,13 +1,14 @@
 import Link from "next/link";
 import { StatusBadge, type DatasetStatus } from "./StatusBadge";
 import { MiniTable } from "./MiniTable";
+import { refreshCadenceLabel, type RefreshCadence } from "@/lib/refresh-cadence";
 
 export interface DatasetCardData {
   _id: string;
   name: string;
   description: string;
   status: DatasetStatus;
-  cadence: string;
+  refreshCadence: RefreshCadence;
   columns: { name: string; type: string }[];
   // Preview is capped at 5 rows for the mini-table. The total row count
   // is on `rowCount` (denormalized counter maintained by the row write
@@ -51,7 +52,9 @@ export function DatasetCard({ dataset }: { dataset: DatasetCardData }) {
           <div className="px-5 py-3 border-t border-border flex items-center justify-between">
             <div className="flex items-center gap-3">
               <StatusBadge status={dataset.status} />
-              <span className="text-[11px] text-muted">{dataset.cadence}</span>
+              <span className="text-[11px] text-muted">
+                {refreshCadenceLabel(dataset.refreshCadence)}
+              </span>
             </div>
             <span className="text-[11px] text-muted">
               {dataset.rowCount ?? 0} rows
