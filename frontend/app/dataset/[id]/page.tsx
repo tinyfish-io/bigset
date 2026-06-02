@@ -314,6 +314,18 @@ export default function DatasetPage() {
             onExport={(fmt) => { setExportOpen(false); handleExport(fmt); }}
           />
 
+          {isDatasetBusy && (
+            <button
+              type="button"
+              onClick={handleStop}
+              disabled={stopDisabled}
+              className="flex items-center gap-1.5 rounded-lg border border-amber-500/30 bg-amber-500/[0.06] px-2.5 py-1.5 text-xs font-medium text-amber-700 transition-colors hover:bg-amber-500/[0.12] disabled:opacity-40 dark:text-amber-400"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>
+              {stopLabel}
+            </button>
+          )}
+
           <SettingsDropdown
             open={settingsOpen}
             onToggle={() => setSettingsOpen((o) => !o)}
@@ -325,9 +337,6 @@ export default function DatasetPage() {
             populateLabel={populateLabel}
             populateDisabled={populateDisabled}
             onRefreshCadenceChange={handleRefreshCadenceChange}
-            stopLabel={stopLabel}
-            stopDisabled={stopDisabled}
-            isDatasetBusy={isDatasetBusy}
             onUpdate={() => { setSettingsOpen(false); handleUpdate(); }}
             onPopulate={() => {
               setSettingsOpen(false);
@@ -337,7 +346,6 @@ export default function DatasetPage() {
                 handlePopulate();
               }
             }}
-            onStop={() => { setSettingsOpen(false); handleStop(); }}
           />
 
           <div className="w-px h-4 bg-border mx-0.5" />
@@ -487,12 +495,8 @@ function SettingsDropdown({
   populateLabel,
   populateDisabled,
   onRefreshCadenceChange,
-  stopLabel,
-  stopDisabled,
-  isDatasetBusy,
   onUpdate,
   onPopulate,
-  onStop,
 }: {
   open: boolean;
   onToggle: () => void;
@@ -504,12 +508,8 @@ function SettingsDropdown({
   populateLabel: string;
   populateDisabled: boolean;
   onRefreshCadenceChange: (refreshCadence: RefreshCadence) => void;
-  stopLabel: string;
-  stopDisabled: boolean;
-  isDatasetBusy: boolean;
   onUpdate: () => void;
   onPopulate: () => void;
-  onStop: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
 
@@ -536,35 +536,22 @@ function SettingsDropdown({
       {open && (
         <div className="absolute right-0 top-full mt-1.5 w-56 rounded-xl border border-border bg-surface shadow-xl ring-1 ring-black/[0.04] z-50 overflow-hidden">
           <div className="p-1">
-            {isDatasetBusy ? (
-              <button
-                onClick={onStop}
-                disabled={stopDisabled}
-                className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs text-amber-600 dark:text-amber-400 bg-amber-500/[0.06] hover:bg-amber-500/[0.12] transition-colors disabled:opacity-40"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>
-                {stopLabel}
-              </button>
-            ) : (
-              <>
-                <button
-                  onClick={onUpdate}
-                  disabled={updateDisabled}
-                  className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs text-foreground hover:bg-foreground/[0.05] transition-colors disabled:opacity-40"
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>
-                  {updateLabel}
-                </button>
-                <button
-                  onClick={onPopulate}
-                  disabled={populateDisabled}
-                  className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs text-red-500 bg-red-500/[0.04] hover:bg-red-500/[0.1] transition-colors disabled:opacity-40"
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-                  {populateLabel}
-                </button>
-              </>
-            )}
+            <button
+              onClick={onUpdate}
+              disabled={updateDisabled}
+              className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs text-foreground hover:bg-foreground/[0.05] transition-colors disabled:opacity-40"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>
+              {updateLabel}
+            </button>
+            <button
+              onClick={onPopulate}
+              disabled={populateDisabled}
+              className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs text-red-500 bg-red-500/[0.04] hover:bg-red-500/[0.1] transition-colors disabled:opacity-40"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              {populateLabel}
+            </button>
           </div>
           <div className="border-t border-border p-1">
             <div className="px-2 py-1 text-[11px] font-medium text-muted">
