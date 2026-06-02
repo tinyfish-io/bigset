@@ -8,6 +8,7 @@ import { DEFAULT_MODEL_IDS } from "../../config/models.js";
 import { buildPopulateAgent } from "../agents/populate.js";
 import { RunMetrics } from "../run-metrics.js";
 import { saveRunMetrics } from "../save-run-metrics.js";
+import { getSignal } from "../../abort-registry.js";
 
 /**
  * Server-set auth/run context threaded through every step.
@@ -116,6 +117,7 @@ Respond with EXACTLY one word: scraper or search`;
         model: openrouter(modelSlug),
         prompt: classificationPrompt,
         maxOutputTokens: 10,
+        abortSignal: getSignal(inputData.datasetId),
       });
       const answer = result.text.trim().toLowerCase();
       if (answer === "scraper" || answer === "search") {
@@ -124,6 +126,9 @@ Respond with EXACTLY one word: scraper or search`;
         console.warn(`[enumerate] Unexpected classification "${answer}", defaulting to "search"`);
       }
     } catch (err) {
+      // Only re-throw if OUR signal was actually fired. A spurious network
+      // AbortError should fall through and default to "search" as before.
+      if (err instanceof Error && err.name === "AbortError" && getSignal(inputData.datasetId)?.aborted) throw err;
       const msg = err instanceof Error ? err.message : String(err);
       console.error(`[enumerate] Classification failed: ${msg}, defaulting to "search"`);
     }
@@ -243,14 +248,22 @@ const agentStep = createStep({
         inputData.columns,
         metrics,
       );
-      const result = await agent.generate(inputData.prompt, { maxSteps: 80 });
+      const abortSignal = getSignal(inputData.authorizedDatasetId);
+      const result = await agent.generate(inputData.prompt, { abortSignal, maxSteps: 80 });
       metrics.addOrchestratorResult(result);
       // Use result.toolCalls (flat accumulated list) — same reasoning as investigate-tool.ts.
       metrics.countToolCalls(result.toolCalls ?? []);
       return { text: result.text };
     } catch (err) {
       status = "error";
-      errorMsg = err instanceof Error ? err.message : String(err);
+      // Label user-initiated stops clearly in runStats; treat spurious network
+      // AbortErrors (signal not fired) as regular failures so the error message
+      // doesn't mislead operators into thinking the user pressed Stop.
+      if (err instanceof Error && err.name === "AbortError" && getSignal(inputData.authorizedDatasetId)?.aborted) {
+        errorMsg = "Stopped by user";
+      } else {
+        errorMsg = err instanceof Error ? err.message : String(err);
+      }
       console.error(`[populate-agent] agent.generate failed: ${errorMsg}`);
       throw err;
     } finally {

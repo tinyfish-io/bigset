@@ -86,7 +86,11 @@ export default defineSchema({
     howFound: v.optional(v.string()),
     updateStatus: v.optional(v.literal("pending")),
     scrapeScript: v.optional(v.string()),
-  }).index("by_dataset", ["datasetId"]),
+  })
+    .index("by_dataset", ["datasetId"])
+    // Compound index used by clearAllPendingUpdateStatus to scan only the rows
+    // that need clearing without a full-dataset read.
+    .index("by_dataset_update_status", ["datasetId", "updateStatus"]),
 
   datasetHistory: defineTable({
     datasetRowId: v.id("datasetRows"),

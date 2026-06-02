@@ -259,3 +259,25 @@ export async function update(
 
   return res.json();
 }
+
+export async function stopPopulation(
+  datasetId: string,
+  token: string,
+): Promise<{ success: boolean }> {
+  const res = await fetch(`${BACKEND_URL}/stop`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ datasetId }),
+  });
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    const message = body?.error || `Backend error (${res.status})`;
+    throw new Error(message);
+  }
+
+  return res.json();
+}

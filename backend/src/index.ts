@@ -13,6 +13,7 @@ import { sendTransactionalEmail } from "./email/send.js";
 import { datasetReadyTemplate } from "./email/templates/dataset-ready.js";
 import { capture, shutdown as shutdownAnalytics } from "./analytics/posthog.js";
 import { EVENTS } from "./analytics/events.js";
+import { registerDataset, deregisterDataset, abortDataset } from "./abort-registry.js";
 
 /** Domain part of an email, for analytics (we never log full addresses). */
 function emailDomain(email: string): string {
@@ -141,6 +142,45 @@ async function sendDatasetReadyNotification({
   }
 }
 
+/**
+ * Shared stop-success path: set the dataset live, send the ready email.
+ *
+ * Called by both background runners when the user presses Stop. Populate
+ * only emails when at least one row was collected (a stopped run with 0
+ * rows is live but empty). Update always emails regardless of count.
+ */
+async function finaliseRunAsLive({
+  logger,
+  clerk,
+  datasetId,
+  authorizedUserId,
+  workflowType = "populate",
+}: {
+  logger: FastifyBaseLogger;
+  clerk: ClerkClient;
+  datasetId: string;
+  authorizedUserId: string;
+  workflowType?: "populate" | "update";
+}): Promise<void> {
+  const currentDataset = await convex.query(internal.datasets.getInternal, { id: datasetId });
+  if (!currentDataset) return;
+
+  await setDatasetPopulateStatus(datasetId, "live");
+
+  const rowCount = await convex.query(internal.datasetRows.countByDataset, { datasetId });
+  if (workflowType === "update" || rowCount > 0) {
+    await sendDatasetReadyNotification({
+      logger,
+      clerk,
+      userId: authorizedUserId,
+      datasetId,
+      datasetName: currentDataset.name,
+      rowCount,
+      workflowType,
+    });
+  }
+}
+
 async function beginDatasetUpdate(
   datasetId: string,
   ownerId: string,
@@ -172,6 +212,9 @@ async function runUpdateWorkflowInBackground({
   };
 }): Promise<void> {
   const datasetId = input.datasetId;
+  // registerDataset is called by the route handler before void-ing this
+  // function, so the registry entry is guaranteed visible the moment the
+  // 202 response is sent. No call needed here.
 
   try {
     const result = await run.start({
@@ -224,6 +267,11 @@ async function runUpdateWorkflowInBackground({
       workflowType: "update",
     });
   } catch (err) {
+    // Note: a user-triggered stop is NOT handled here. The update workflow's
+    // refreshRowsStep detects the abort internally, clears pending row
+    // statuses, and returns normally — so run.start() returns { status:
+    // "success" } and the success path above handles the live transition.
+    // This catch only fires on genuine failures.
     const lastStatusError = statusErrorMessage(err);
     logger.error({ err, datasetId }, "Update background workflow failed");
 
@@ -245,6 +293,8 @@ async function runUpdateWorkflowInBackground({
         "Failed to transition dataset status to 'failed' after update",
       );
     }
+  } finally {
+    deregisterDataset(datasetId);
   }
 }
 
@@ -266,6 +316,7 @@ async function runScheduledUpdateWorkflowInBackground({
   };
 }): Promise<void> {
   const datasetId = input.datasetId;
+  registerDataset(datasetId);
 
   try {
     const result = await run.start({
@@ -312,12 +363,15 @@ async function runScheduledUpdateWorkflowInBackground({
         "Failed to record scheduled refresh failure",
       );
     }
+  } finally {
+    deregisterDataset(datasetId);
   }
 }
 
 async function runPopulateWorkflowInBackground({
   input,
   run,
+  controller,
   authorizedUserId,
   logger,
   clerk,
@@ -325,6 +379,7 @@ async function runPopulateWorkflowInBackground({
 }: {
   input: DatasetContext;
   run: PopulateWorkflowRun;
+  controller: AbortController;
   authorizedUserId: string;
   logger: FastifyBaseLogger;
   clerk: ClerkClient;
@@ -389,6 +444,25 @@ async function runPopulateWorkflowInBackground({
       rowCount,
     });
   } catch (err) {
+    if (controller.signal.aborted) {
+      // User pressed Stop — treat whatever was collected as the final dataset.
+      logger.info({ datasetId }, "Populate workflow stopped by user; transitioning to live");
+      try {
+        await finaliseRunAsLive({ logger, clerk, datasetId, authorizedUserId });
+      } catch (stopErr) {
+        logger.error({ err: stopErr, datasetId }, "Failed to finalise stopped populate run; marking as failed");
+        // Ensure the dataset always leaves "building" — without this fallback,
+        // a failed finalisation leaves the dataset with no active registry entry
+        // and no way for /stop to act on it again.
+        try {
+          await setDatasetPopulateStatus(datasetId, "failed", "Workflow stopped but could not be finalised");
+        } catch (fallbackErr) {
+          logger.error({ err: fallbackErr, datasetId }, "Could not update dataset status after stop finalisation failure");
+        }
+      }
+      return;
+    }
+
     const lastStatusError = statusErrorMessage(err);
     logger.error(
       { err, datasetId },
@@ -414,6 +488,8 @@ async function runPopulateWorkflowInBackground({
         "Failed to transition dataset status to 'failed'",
       );
     }
+  } finally {
+    deregisterDataset(datasetId);
   }
 }
 
@@ -704,9 +780,16 @@ await fastify.register(async (instance) => {
         return reply.code(502).send({ error: "Failed to populate dataset. Please try again." });
       }
 
+      // Register before void-ing so the abort-registry entry is visible the
+      // instant the 202 is sent, closing the TOCTOU window where a /stop
+      // arriving before registerDataset runs inside the background function
+      // would incorrectly force-transition an active run to "failed".
+      const controller = registerDataset(parsed.data.datasetId);
+
       void runPopulateWorkflowInBackground({
         input: parsed.data,
         run,
+        controller,
         authorizedUserId: auth.userId,
         logger: req.log,
         clerk: req.server.clerk,
@@ -772,6 +855,12 @@ await fastify.register(async (instance) => {
       const { getModelConfig } = await import("./config/models.js");
       const modelConfig = await getModelConfig(auth.userId);
 
+      // Register before void-ing so the abort-registry entry is visible the
+      // instant the 202 is sent, closing the TOCTOU window where a /stop
+      // arriving before registerDataset runs inside the background function
+      // would incorrectly force-transition an active run to "failed".
+      registerDataset(parsed.data.datasetId);
+
       void runUpdateWorkflowInBackground({
         input: parsed.data,
         run,
@@ -789,6 +878,75 @@ await fastify.register(async (instance) => {
       }
       req.log.error(err, "Update failed");
       return reply.code(502).send({ error: "Failed to update dataset. Please try again." });
+    }
+  });
+
+  instance.post("/stop", async (req, reply) => {
+    const body = req.body as { datasetId?: string };
+    if (!body?.datasetId || typeof body.datasetId !== "string") {
+      return reply.code(400).send({ error: "datasetId is required" });
+    }
+
+    const auth = req.auth;
+    if (!auth) {
+      return reply.code(401).send({ error: "Authentication required" });
+    }
+
+    try {
+      const dataset = await convex.query(internal.datasets.getInternal, {
+        id: body.datasetId,
+      });
+      if (!dataset) {
+        return reply.code(404).send({ error: "Dataset not found" });
+      }
+      if (dataset.ownerId !== auth.userId) {
+        return reply.code(403).send({ error: "Not authorized to stop this dataset" });
+      }
+      if (dataset.status !== "building" && dataset.status !== "updating") {
+        return reply.code(409).send({ error: "Dataset is not currently running" });
+      }
+
+      const aborted = abortDataset(body.datasetId);
+      if (!aborted) {
+        // No registered signal despite the dataset being "building"/"updating".
+        // The normal finish path always sets a terminal status in Convex
+        // *before* calling deregisterDataset(), so if the status is still
+        // busy here, no running process owns this dataset — it was orphaned
+        // by a server restart. Force-transition to "failed" so the dataset
+        // is no longer stuck.
+        req.log.warn(
+          { datasetId: body.datasetId },
+          "Stop requested for orphaned dataset (no active run registered); forcing to failed",
+        );
+        try {
+          if (dataset.status === "updating") {
+            await convex.mutation(internal.datasetRows.clearAllPendingUpdateStatus, {
+              datasetId: body.datasetId,
+            });
+          }
+          await setDatasetPopulateStatus(
+            body.datasetId,
+            "failed",
+            "Run interrupted: server restarted while building/updating",
+          );
+        } catch (statusErr) {
+          req.log.error(
+            { err: statusErr, datasetId: body.datasetId },
+            "Failed to force-transition orphaned dataset to failed",
+          );
+        }
+        return reply.code(200).send({ success: true });
+      }
+      req.log.info({ datasetId: body.datasetId }, "Stop requested");
+
+      return reply.code(202).send({ success: true });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("validator") || msg.includes("Invalid")) {
+        return reply.code(400).send({ error: "Invalid datasetId" });
+      }
+      req.log.error(err, "Stop failed");
+      return reply.code(502).send({ error: "Failed to stop dataset run. Please try again." });
     }
   });
 });
