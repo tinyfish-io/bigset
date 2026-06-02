@@ -36,6 +36,7 @@ services:
       CLERK_PUBLISHABLE_KEY: ${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       TINYFISH_API_KEY: ${TINYFISH_API_KEY:-}
+      MASTRA_DATABASE_URL: postgresql://bigset:bigset@db:5432/bigset_internal
       # Transactional email — when unset, the email module no-ops.
       RESEND_API_KEY: ${RESEND_API_KEY:-}
       EMAIL_FROM: ${EMAIL_FROM:-BigSet <simantak@tinyfish.ai>}
@@ -69,6 +70,7 @@ services:
       CONVEX_URL: http://convex:3210
       CONVEX_SELF_HOSTED_ADMIN_KEY: ${CONVEX_SELF_HOSTED_ADMIN_KEY:-}
       TINYFISH_API_KEY: ${TINYFISH_API_KEY:-}
+      MASTRA_DATABASE_URL: postgresql://bigset:bigset@db:5432/bigset_internal
     depends_on:
       convex:
         condition: service_healthy

@@ -2,7 +2,16 @@ import { Mastra } from "@mastra/core/mastra";
 import { inferSchemaWorkflow } from "./workflows/infer-schema.js";
 import { populateWorkflow } from "./workflows/populate.js";
 import { updateWorkflow } from "./workflows/update.js";
-
+import { PostgresStore } from '@mastra/pg'
+import {
+  Observability,
+  MastraStorageExporter,
+  SensitiveDataFilter,
+} from '@mastra/observability'
+const storage = new PostgresStore({
+  id: 'mastra-pg-storage',
+  connectionString: process.env.MASTRA_DATABASE_URL!,
+})
 /**
  * Mastra registry.
  *
@@ -16,4 +25,18 @@ import { updateWorkflow } from "./workflows/update.js";
  */
 export const mastra = new Mastra({
   workflows: { inferSchemaWorkflow, populateWorkflow, updateWorkflow },
+
+  storage,
+  observability: new Observability({
+    
+    configs: {
+      default: {
+        serviceName: 'bigset',
+        exporters: [new MastraStorageExporter({ strategy: 'auto' })],
+        spanOutputProcessors: [
+          new SensitiveDataFilter(),
+        ],
+      },
+    },
+  }),
 });

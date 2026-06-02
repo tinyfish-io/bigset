@@ -13,6 +13,7 @@ import { sendTransactionalEmail } from "./email/send.js";
 import { datasetReadyTemplate } from "./email/templates/dataset-ready.js";
 import { capture, shutdown as shutdownAnalytics } from "./analytics/posthog.js";
 import { EVENTS } from "./analytics/events.js";
+import { mastra } from "./mastra/index.js";
 
 /** Domain part of an email, for analytics (we never log full addresses). */
 function emailDomain(email: string): string {
@@ -715,6 +716,7 @@ await fastify.register(async (instance) => {
 
       return reply.code(202).send({ success: true, runId: run.runId });
     } catch (err) {
+      await mastra.observability.getDefaultInstance()?.flush();
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes("validator") || msg.includes("Invalid")) {
         return reply.code(400).send({ error: "Invalid datasetId" });
