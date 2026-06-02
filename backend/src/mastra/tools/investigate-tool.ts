@@ -5,6 +5,7 @@ import { buildInvestigateAgent } from "../agents/investigate.js";
 import type { AuthContext } from "../workflows/populate.js";
 import type { PopulateColumn } from "../../pipeline/populate.js";
 import type { RunMetrics } from "../run-metrics.js";
+import { getSignal } from "../../abort-registry.js";
 
 const MAX_DATASET_ROWS = 100;
 
@@ -128,7 +129,8 @@ ${pkBlock}
 Context (partial data already found):
 ${context}${urlsBlock}${notesBlock}`;
 
-        const result = await agent.generate(prompt, { maxSteps: 10 });
+        const abortSignal = getSignal(authorizedDatasetId);
+        const result = await agent.generate(prompt, { abortSignal, maxSteps: 10 });
         if (metrics) {
           // Use result.toolCalls (the flat accumulated list across all steps) rather
           // than iterating result.steps[n].toolCalls. The per-step arrays are snapshots
@@ -151,6 +153,12 @@ ${context}${urlsBlock}${notesBlock}`;
         );
         return parsed;
       } catch (err) {
+        // Only propagate an AbortError if OUR signal was actually fired (i.e.
+        // the user pressed Stop). Network errors in Node.js can also surface as
+        // AbortError — re-throwing those would cause the orchestrator's
+        // agent.generate() to exit early and return a graceful empty result,
+        // producing a "0 rows" run without any user action.
+        if (err instanceof Error && err.name === "AbortError" && getSignal(authorizedDatasetId)?.aborted) throw err;
         const msg = err instanceof Error ? err.message : String(err);
         console.error(`[run_subagent] subagent error entity="${entity_hint}" err=${msg}`);
         return {
