@@ -316,7 +316,7 @@ async function runScheduledUpdateWorkflowInBackground({
   };
 }): Promise<void> {
   const datasetId = input.datasetId;
-  const controller = registerDataset(datasetId);
+  registerDataset(datasetId);
 
   try {
     const result = await run.start({
@@ -363,6 +363,8 @@ async function runScheduledUpdateWorkflowInBackground({
         "Failed to record scheduled refresh failure",
       );
     }
+  } finally {
+    deregisterDataset(datasetId);
   }
 }
 
@@ -917,10 +919,15 @@ await fastify.register(async (instance) => {
           "Stop requested for orphaned dataset (no active run registered); forcing to failed",
         );
         try {
+          if (dataset.status === "updating") {
+            await convex.mutation(internal.datasetRows.clearAllPendingUpdateStatus, {
+              datasetId: body.datasetId,
+            });
+          }
           await setDatasetPopulateStatus(
             body.datasetId,
             "failed",
-            "Run interrupted: server restarted while building",
+            "Run interrupted: server restarted while building/updating",
           );
         } catch (statusErr) {
           req.log.error(
