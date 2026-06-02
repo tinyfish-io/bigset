@@ -312,6 +312,34 @@ export const clearUpdateStatus = internalMutation({
 });
 
 /**
+ * Bulk-clear all pending update statuses for a dataset.
+ *
+ * Called when a user stops an in-flight update workflow. Workers exit early
+ * via AbortError, so rows they never reached still have `updateStatus:
+ * "pending"`. This clears them so the UI doesn't show stale shimmer
+ * indicators after the run is marked live.
+ *
+ * Uses the `by_dataset_update_status` compound index so only the pending
+ * rows are scanned — the query never touches rows that have already been
+ * processed (updateStatus === undefined).
+ */
+export const clearAllPendingUpdateStatus = internalMutation({
+  args: { datasetId: v.id("datasets") },
+  handler: async (ctx, args) => {
+    const pendingRows = await ctx.db
+      .query("datasetRows")
+      .withIndex("by_dataset_update_status", (q) =>
+        q.eq("datasetId", args.datasetId).eq("updateStatus", "pending"),
+      )
+      .collect();
+    for (const row of pendingRows) {
+      await ctx.db.patch(row._id, { updateStatus: undefined });
+    }
+    return pendingRows.length;
+  },
+});
+
+/**
  * Admin-only row listing for a dataset. Used by the populate agent's
  * `list_rows` tool to see what's already been inserted in the dataset
  * it's authorized for (so the LLM can diff/append rather than dup).

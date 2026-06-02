@@ -12,7 +12,7 @@ import { useSelection } from "@/components/table/use-selection";
 import { useTheme } from "@/components/ThemeToggle";
 import { StatusBadge } from "@/components/dataset/StatusBadge";
 import { downloadCSV, downloadXLSX } from "@/lib/export";
-import { populate, update } from "@/lib/backend";
+import { populate, update, stopPopulation } from "@/lib/backend";
 import { EVENTS, captureException, track } from "@/lib/analytics";
 import {
   REFRESH_CADENCE_OPTIONS,
@@ -30,6 +30,7 @@ export default function DatasetPage() {
   const [exporting, setExporting] = useState<"csv" | "xlsx" | null>(null);
   const [populating, setPopulating] = useState(false);
   const [updating, setUpdating] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [confirmPopulate, setConfirmPopulate] = useState(false);
@@ -52,6 +53,8 @@ export default function DatasetPage() {
 
   const handlePopulate = useCallback(async () => {
     if (!dataset || populating || dataset.status === "building") return;
+    // A new run is starting — discard any lingering stop-latch from the previous run.
+    setStopping(false);
     setPopulating(true);
     try {
       const token = await getToken();
@@ -143,6 +146,8 @@ export default function DatasetPage() {
 
   async function handleUpdate() {
     if (!dataset || updating || dataset.status === "building" || dataset.status === "updating") return;
+    // A new run is starting — discard any lingering stop-latch from the previous run.
+    setStopping(false);
     setUpdating(true);
     try {
       const token = await getToken();
@@ -195,6 +200,47 @@ export default function DatasetPage() {
     }
   }
 
+  async function handleStop() {
+    if (!dataset || stopping) return;
+    if (dataset.status !== "building" && dataset.status !== "updating") return;
+    setStopping(true);
+    try {
+      const token = await getToken();
+      if (!token) throw new Error("Not authenticated");
+      await stopPopulation(dataset._id, token);
+      track(EVENTS.DATASET_STOP_REQUESTED, {
+        datasetId: dataset._id,
+        status: dataset.status,
+      });
+      // Do NOT clear stopping here. Keep it true until Convex confirms the
+      // dataset has left the busy state (via the isDatasetBusy effect below).
+      // This prevents the button from briefly re-enabling during the cleanup window.
+    } catch (err) {
+      console.error("[stop] failed", err);
+      captureException(err, {
+        operation: "dataset_stop",
+        datasetId: dataset._id,
+      });
+      // Request failed — clear immediately so the user can retry.
+      setStopping(false);
+    }
+  }
+
+  // Computed before the loading guard so the useEffect below can depend on it
+  // without hitting the TDZ. Optional chaining handles the pre-load undefined state.
+  const isDatasetBusy = dataset?.status === "building" || dataset?.status === "updating";
+
+  // Clear the stop latch once the dataset is confirmed not-busy by Convex.
+  // Using setTimeout defers the setState out of the synchronous effect body,
+  // satisfying the react-hooks/set-state-in-effect lint rule while preserving
+  // the same semantic: latch clears on the next tick after the status transition.
+  useEffect(() => {
+    if (!isDatasetBusy) {
+      const id = setTimeout(() => setStopping(false), 0);
+      return () => clearTimeout(id);
+    }
+  }, [isDatasetBusy]);
+
   if (authLoading || dataset === undefined || rows === undefined) {
     return (
       <div className="flex flex-1 items-center justify-center">
@@ -208,7 +254,6 @@ export default function DatasetPage() {
   // the "Dataset not found" UI.
 
   const exportDisabled = exporting !== null || rows.length === 0;
-  const isDatasetBusy = dataset.status === "building" || dataset.status === "updating";
   const isOwner = userId === dataset.ownerId;
   const displayDataset = {
     ...dataset,
@@ -217,6 +262,8 @@ export default function DatasetPage() {
   };
   const updateDisabled = updating || isDatasetBusy;
   const populateDisabled = populating || isDatasetBusy;
+  const stopDisabled = stopping || !isDatasetBusy;
+  const stopLabel = stopping ? "Stopping…" : "Stop";
   const updateLabel = dataset.status === "updating"
     ? "Updating…"
     : dataset.status === "building"
@@ -266,6 +313,18 @@ export default function DatasetPage() {
             selectedCount={selectedCount}
             onExport={(fmt) => { setExportOpen(false); handleExport(fmt); }}
           />
+
+          {isDatasetBusy && (
+            <button
+              type="button"
+              onClick={handleStop}
+              disabled={stopDisabled}
+              className="flex items-center gap-1.5 rounded-lg border border-amber-500/30 bg-amber-500/[0.06] px-2.5 py-1.5 text-xs font-medium text-amber-700 transition-colors hover:bg-amber-500/[0.12] disabled:opacity-40 dark:text-amber-400"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>
+              {stopLabel}
+            </button>
+          )}
 
           <SettingsDropdown
             open={settingsOpen}
