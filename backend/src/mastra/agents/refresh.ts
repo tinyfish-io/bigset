@@ -56,6 +56,7 @@ export function buildRefreshAgent(
   authContext: AuthContext,
   columns: PopulateColumn[],
 ): Agent {
+  const modelSlug = authContext.modelConfig!.investigateSubagent;
   const { update_row } = buildPopulateTools(
     authorizedDatasetId,
     authContext,
@@ -64,7 +65,7 @@ export function buildRefreshAgent(
     id: "refresh-agent",
     name: "Dataset Refresh Agent",
     instructions: buildRefreshInstructions(columns),
-    model: openrouter("qwen/qwen3.7-max"),
+    model: openrouter(modelSlug),
     tools: {
       update_row,
       search_web: searchWebTool,
