@@ -1,8 +1,36 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Copy, Check, ExternalLink, X } from "lucide-react";
 import type { DatasetColumn } from "@/components/table/types";
+
+function IconX() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M18 6 6 18"/><path d="m6 6 12 12"/>
+    </svg>
+  );
+}
+function IconCopy() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>
+    </svg>
+  );
+}
+function IconCheck() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M20 6 9 17l-5-5"/>
+    </svg>
+  );
+}
+function IconExternalLink() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+    </svg>
+  );
+}
 
 /* ------------------------------------------------------------------ */
 /*  Shell                                                               */
@@ -72,7 +100,7 @@ export function SideSheet({ open, onClose, children }: SideSheetProps) {
             className="inline-flex items-center justify-center h-7 w-7 text-muted hover:text-foreground transition-colors rounded"
             aria-label="Close"
           >
-            <X className="size-4" />
+            <IconX />
           </button>
         </div>
         <div className="flex-1 overflow-y-auto p-5">{children}</div>
@@ -137,8 +165,8 @@ export function CellDetail({ column, value, sources }: CellDetailProps) {
             aria-label="Copy value"
           >
             {copied
-              ? <><Check className="size-3 text-green-500" /><span className="text-green-500">Copied</span></>
-              : <><Copy className="size-3" /><span>Copy</span></>
+              ? <><span className="text-green-500"><IconCheck /></span><span className="text-green-500">Copied</span></>
+              : <><IconCopy /><span>Copy</span></>
             }
           </button>
         </div>
@@ -168,7 +196,7 @@ export function CellDetail({ column, value, sources }: CellDetailProps) {
                   className="flex items-start gap-1.5 text-xs text-link hover:underline break-all"
                   data-ph-mask-text="true"
                 >
-                  <ExternalLink className="size-3 mt-0.5 shrink-0" />
+                  <span className="mt-0.5 shrink-0"><IconExternalLink /></span>
                   {src}
                 </a>
               </li>

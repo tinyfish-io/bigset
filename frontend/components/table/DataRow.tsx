@@ -4,8 +4,15 @@ import { memo, type CSSProperties } from "react";
 import { areEqual } from "react-window";
 import type { Row } from "@tanstack/react-table";
 import type { DatasetRow, DatasetColumn } from "./types";
-import { Maximize2 } from "lucide-react";
 import { CellValue } from "./CellValue";
+
+function IconMaximize2() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>
+    </svg>
+  );
+}
 import { floorWidth } from "./utils";
 
 export interface DataRowData {
@@ -134,7 +141,7 @@ function DataRowImpl({
               className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 p-0.5 rounded bg-foreground/5 hover:bg-foreground/10 text-muted hover:text-foreground transition-all"
               aria-label={`Expand ${col.name}`}
             >
-              <Maximize2 className="size-3" />
+              <IconMaximize2 />
             </button>
             {isPending && <div className="shimmer-overlay absolute inset-0" />}
           </div>
