@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>Open-source multi-agent system that builds verified datasets from the live web, on the fly.</strong>
+  <strong>Build and maintain any dataset from the live web, that refreshes regularly</strong>
 </p>
 
 <p align="center">
