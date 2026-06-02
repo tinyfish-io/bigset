@@ -5,6 +5,7 @@ import { areEqual } from "react-window";
 import type { Row } from "@tanstack/react-table";
 import type { DatasetRow, DatasetColumn } from "./types";
 import { CellValue } from "./CellValue";
+import { floorWidth } from "./utils";
 
 function IconMaximize2() {
   return (
@@ -13,7 +14,6 @@ function IconMaximize2() {
     </svg>
   );
 }
-import { floorWidth } from "./utils";
 
 export interface DataRowData {
   rows: Row<DatasetRow>[];
@@ -138,7 +138,7 @@ function DataRowImpl({
                 e.stopPropagation();
                 onCellExpand(col.name, value, row.original._id);
               }}
-              className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 p-0.5 rounded bg-foreground/5 hover:bg-foreground/10 text-muted hover:text-foreground transition-all"
+              className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground p-0.5 rounded bg-foreground/5 hover:bg-foreground/10 text-muted hover:text-foreground transition-all"
               aria-label={`Expand ${col.name}`}
             >
               <IconMaximize2 />

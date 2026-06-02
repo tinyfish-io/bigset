@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import type { DatasetColumn } from "@/components/table/types";
 
 function IconX() {
@@ -91,10 +91,11 @@ export function SideSheet({ open, onClose, children }: SideSheetProps) {
       {/* Modal */}
       <div
         ref={panelRef}
+        aria-labelledby="cell-detail-title"
         className="relative w-full max-w-lg max-h-[80vh] bg-surface border border-border rounded-xl shadow-2xl flex flex-col"
       >
         <div className="flex items-center justify-between px-5 py-4 border-b border-border shrink-0">
-          <h2 className="text-sm font-semibold text-foreground">Cell Detail</h2>
+          <h2 id="cell-detail-title" className="text-sm font-semibold text-foreground">Cell Detail</h2>
           <button
             onClick={onClose}
             className="inline-flex items-center justify-center h-7 w-7 text-muted hover:text-foreground transition-colors rounded"
@@ -120,19 +121,38 @@ interface CellDetailProps {
   sources?: string[];
 }
 
+function isValidHttpUrl(src: string): boolean {
+  try {
+    const { protocol } = new URL(src);
+    return protocol === "http:" || protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 export function CellDetail({ column, value, sources }: CellDetailProps) {
   const [copied, setCopied] = useState(false);
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const displayValue = value == null || value === "" ? "—" : String(value);
 
-  async function handleCopy() {
+  // Clear any pending timer when the component unmounts to avoid calling
+  // setCopied on an already-gone component.
+  useEffect(() => {
+    return () => {
+      if (copyTimerRef.current != null) clearTimeout(copyTimerRef.current);
+    };
+  }, []);
+
+  const handleCopy = useCallback(async () => {
     try {
       await navigator.clipboard.writeText(value == null ? "" : String(value));
       setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      if (copyTimerRef.current != null) clearTimeout(copyTimerRef.current);
+      copyTimerRef.current = setTimeout(() => setCopied(false), 2000);
     } catch {
       // Clipboard API unavailable (e.g. non-HTTPS dev); silently ignore.
     }
-  }
+  }, [value]);
 
   return (
     <div className="space-y-6">
@@ -152,7 +172,7 @@ export function CellDetail({ column, value, sources }: CellDetailProps) {
           </p>
           <button
             type="button"
-            onClick={handleCopy}
+            onClick={() => { void handleCopy(); }}
             className="inline-flex items-center gap-1.5 text-[11px] font-medium text-muted hover:text-foreground transition-colors"
             aria-label="Copy value"
           >
@@ -180,17 +200,24 @@ export function CellDetail({ column, value, sources }: CellDetailProps) {
           </p>
           <ul className="space-y-1.5">
             {sources.map((src, i) => (
-              <li key={i}>
-                <a
-                  href={src}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-start gap-1.5 text-xs text-link hover:underline break-all"
-                  data-ph-mask-text="true"
-                >
-                  <span className="mt-0.5 shrink-0"><IconExternalLink /></span>
-                  {src}
-                </a>
+              <li key={src || i}>
+                {isValidHttpUrl(src) ? (
+                  <a
+                    href={src}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-start gap-1.5 text-xs text-link hover:underline break-all"
+                    data-ph-mask-text="true"
+                  >
+                    <span className="mt-0.5 shrink-0"><IconExternalLink /></span>
+                    {src}
+                  </a>
+                ) : (
+                  <span className="flex items-start gap-1.5 text-xs text-muted break-all" data-ph-mask-text="true">
+                    <span className="mt-0.5 shrink-0"><IconExternalLink /></span>
+                    {src}
+                  </span>
+                )}
               </li>
             ))}
           </ul>
