@@ -49,6 +49,6 @@ Required env vars (see `.env.example`):
 - `CONVEX_SELF_HOSTED_ADMIN_KEY` — for system-level Convex writes (internal mutations)
 - `CLERK_SECRET_KEY`, `CLERK_PUBLISHABLE_KEY` — for JWT verification
 - `OPENROUTER_API_KEY` — for AI model calls
-- `TINYFISH_API_KEY` — for web search and fetch (populate agent). Get one at https://agent.tinyfish.ai/api-keys
+- `TINYFISH_API_KEY` — for web search and fetch (populate agent). Get one at https://agent.tinyfish.ai/api-keys?utm_source=github&utm_medium=organic&utm_campaign=bigset-developer-2026q2
 
 In Docker, these are interpolated from the root `.env` file via `docker-compose.dev.yml`.

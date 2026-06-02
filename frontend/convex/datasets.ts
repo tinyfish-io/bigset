@@ -14,6 +14,11 @@ import {
   requireIdentity,
 } from "./lib/authz.js";
 import { requireQuotaRemaining } from "./lib/quota.js";
+import {
+  nextRefreshAtFor,
+  refreshCadenceValidator,
+  type RefreshCadence,
+} from "./lib/refreshScheduling.js";
 
 const columnValidator = v.object({
   name: v.string(),
@@ -27,6 +32,34 @@ const columnValidator = v.object({
   description: v.optional(v.string()),
   isPrimaryKey: v.optional(v.boolean()),
 });
+
+function refreshCadenceFromLegacyLabel(
+  legacyCadence: string | undefined,
+  fallback: RefreshCadence,
+): RefreshCadence {
+  const normalized = legacyCadence?.trim().toLowerCase();
+  switch (normalized) {
+    case "every 30 min":
+    case "every 30 mins":
+    case "every 30 minute":
+    case "every 30 minutes":
+      return "30m";
+    case "every 6 hour":
+    case "every 6 hours":
+      return "6h";
+    case "every 12 hour":
+    case "every 12 hours":
+      return "12h";
+    case "daily":
+      return "daily";
+    case "weekly":
+      return "weekly";
+    case "manual":
+      return "manual";
+    default:
+      return fallback;
+  }
+}
 
 const PREVIEW_ROW_COUNT = 5;
 
@@ -179,6 +212,111 @@ export const beginUpdateInternal = internalMutation({
   },
 });
 
+export const listDueForRefreshInternal = internalQuery({
+  args: {
+    now: v.number(),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("datasets")
+      .withIndex("by_refresh_due", (q) =>
+        q.eq("refreshEnabled", true).lte("nextRefreshAt", args.now),
+      )
+      .take(Math.min(args.limit ?? 10, 50));
+  },
+});
+
+export const claimScheduledRefreshInternal = internalMutation({
+  args: {
+    id: v.id("datasets"),
+    now: v.number(),
+    runId: v.string(),
+    staleAfterMs: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const dataset = await ctx.db.get(args.id);
+    if (!dataset) return { outcome: "not_found" as const };
+    if (!dataset.refreshEnabled || !dataset.refreshCadence || dataset.refreshCadence === "manual") {
+      return { outcome: "disabled" as const };
+    }
+    if (!dataset.nextRefreshAt || dataset.nextRefreshAt > args.now) {
+      return { outcome: "not_due" as const };
+    }
+    if (dataset.status === "building") {
+      return { outcome: "already_building" as const };
+    }
+    if (dataset.status === "updating") {
+      const staleScheduledRun =
+        dataset.lastRefreshStartedAt !== undefined &&
+        dataset.lastRefreshStartedAt + args.staleAfterMs <= args.now;
+      if (!staleScheduledRun) {
+        return { outcome: "already_updating" as const };
+      }
+    }
+
+    await ctx.db.patch(dataset._id, {
+      status: "updating",
+      lastStatusError: undefined,
+      lastRefreshStartedAt: args.now,
+      lastRefreshRunId: args.runId,
+    });
+
+    return {
+      outcome: "started" as const,
+      dataset: {
+        datasetId: dataset._id,
+        datasetName: dataset.name,
+        description: dataset.description,
+        columns: dataset.columns,
+        ownerId: dataset.ownerId,
+      },
+    };
+  },
+});
+
+export const completeScheduledRefreshInternal = internalMutation({
+  args: {
+    id: v.id("datasets"),
+    now: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const dataset = await ctx.db.get(args.id);
+    if (!dataset) return { outcome: "not_found" as const };
+
+    const refreshCadence = dataset.refreshCadence ?? "manual";
+    await ctx.db.patch(dataset._id, {
+      status: "live",
+      lastStatusError: undefined,
+      lastRefreshAt: args.now,
+      lastRefreshStartedAt: undefined,
+      nextRefreshAt: nextRefreshAtFor(refreshCadence, args.now),
+    });
+    return { outcome: "completed" as const };
+  },
+});
+
+export const failScheduledRefreshInternal = internalMutation({
+  args: {
+    id: v.id("datasets"),
+    now: v.number(),
+    lastStatusError: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const dataset = await ctx.db.get(args.id);
+    if (!dataset) return { outcome: "not_found" as const };
+
+    const refreshCadence = dataset.refreshCadence ?? "manual";
+    await ctx.db.patch(dataset._id, {
+      status: "failed",
+      lastStatusError: args.lastStatusError,
+      lastRefreshStartedAt: undefined,
+      nextRefreshAt: nextRefreshAtFor(refreshCadence, args.now),
+    });
+    return { outcome: "failed" as const };
+  },
+});
+
 /**
  * Admin-only status transition. Used by the backend orchestration layer
  * to move a dataset between lifecycle states after a workflow completes.
@@ -221,7 +359,7 @@ export const create = mutation({
   args: {
     name: v.string(),
     description: v.string(),
-    cadence: v.string(),
+    refreshCadence: refreshCadenceValidator,
     columns: v.array(columnValidator),
     retrievalStrategy: v.optional(
       v.union(
@@ -246,7 +384,60 @@ export const create = mutation({
       status: "paused",
       visibility: "private",
       rowCount: 0,
+      refreshEnabled: args.refreshCadence !== "manual",
+      nextRefreshAt: nextRefreshAtFor(args.refreshCadence, Date.now()),
     });
+  },
+});
+
+export const updateRefreshSettings = mutation({
+  args: {
+    id: v.id("datasets"),
+    refreshCadence: refreshCadenceValidator,
+  },
+  handler: async (ctx, args) => {
+    const dataset = await loadOwnedDataset(ctx, args.id);
+    const refreshEnabled = args.refreshCadence !== "manual";
+    await ctx.db.patch(dataset._id, {
+      refreshCadence: args.refreshCadence,
+      refreshEnabled,
+      nextRefreshAt: refreshEnabled
+        ? nextRefreshAtFor(args.refreshCadence, Date.now())
+        : undefined,
+    });
+  },
+});
+
+export const backfillRefreshSettings = internalMutation({
+  args: {
+    defaultCadence: v.optional(refreshCadenceValidator),
+  },
+  handler: async (ctx, args) => {
+    const defaultCadence = args.defaultCadence ?? "daily";
+    const now = Date.now();
+    const datasets = await ctx.db.query("datasets").collect();
+    let patched = 0;
+    let alreadyCurrent = 0;
+
+    for (const dataset of datasets) {
+      if (dataset.refreshCadence) {
+        alreadyCurrent++;
+        continue;
+      }
+
+      const refreshCadence = refreshCadenceFromLegacyLabel(
+        dataset.cadence,
+        defaultCadence,
+      );
+      await ctx.db.patch(dataset._id, {
+        refreshCadence,
+        refreshEnabled: refreshCadence !== "manual",
+        nextRefreshAt: nextRefreshAtFor(refreshCadence, now),
+      });
+      patched++;
+    }
+
+    return { patched, alreadyCurrent, total: datasets.length };
   },
 });
 

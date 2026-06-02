@@ -14,7 +14,24 @@ export default defineSchema({
       v.literal("failed")
     ),
     lastStatusError: v.optional(v.string()),
-    cadence: v.string(),
+    // Legacy rollout field. Existing documents may still contain this
+    // display-only label; new code reads/writes refreshCadence instead.
+    cadence: v.optional(v.string()),
+    refreshCadence: v.optional(
+      v.union(
+        v.literal("manual"),
+        v.literal("30m"),
+        v.literal("6h"),
+        v.literal("12h"),
+        v.literal("daily"),
+        v.literal("weekly")
+      )
+    ),
+    refreshEnabled: v.optional(v.boolean()),
+    nextRefreshAt: v.optional(v.number()),
+    lastRefreshAt: v.optional(v.number()),
+    lastRefreshStartedAt: v.optional(v.number()),
+    lastRefreshRunId: v.optional(v.string()),
     // Optional for backward compat with rows seeded before this field existed.
     // Treat undefined as "private" in authorization helpers.
     visibility: v.optional(
@@ -58,7 +75,8 @@ export default defineSchema({
   })
     .index("by_owner", ["ownerId"])
     .index("by_visibility", ["visibility"])
-    .index("by_seed_key", ["seedKey"]),
+    .index("by_seed_key", ["seedKey"])
+    .index("by_refresh_due", ["refreshEnabled", "nextRefreshAt"]),
 
   datasetRows: defineTable({
     datasetId: v.id("datasets"),

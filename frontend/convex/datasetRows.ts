@@ -5,6 +5,8 @@ import type { Id } from "./_generated/dataModel.js";
 import { assertRowInDataset, loadReadableDataset } from "./lib/authz.js";
 import { consumeQuotaForDataset } from "./lib/quota.js";
 
+const MAX_DATASET_ROWS = 100;
+
 /**
  * Authoritative row count for a dataset. O(N), so use only on the slow
  * paths: self-heal in `insert` / `remove` when the dataset doc predates
@@ -71,6 +73,16 @@ export const insert = internalMutation({
     const dataset = await ctx.db.get(args.datasetId);
     if (!dataset) throw new Error("Dataset not found");
 
+    const previousCount =
+      typeof dataset.rowCount === "number"
+        ? dataset.rowCount
+        : await actualRowCount(ctx, args.datasetId);
+    if (previousCount >= MAX_DATASET_ROWS) {
+      throw new Error(
+        `Row limit reached: BigSet datasets are capped at ${MAX_DATASET_ROWS} rows. Stop inserting rows and finish the run.`,
+      );
+    }
+
     // Dedup: reject inserts that collide on primary key columns.
     // Runs BEFORE quota so rejected dupes don't burn quota.
     const pkColumns = (dataset.columns ?? []).filter(
@@ -109,11 +121,6 @@ export const insert = internalMutation({
 
     // Quota consumption only happens for genuine new rows.
     await consumeQuotaForDataset(ctx, args.datasetId, 1);
-
-    const previousCount =
-      typeof dataset.rowCount === "number"
-        ? dataset.rowCount
-        : await actualRowCount(ctx, args.datasetId);
 
     const rowId = await ctx.db.insert("datasetRows", args);
 
@@ -327,4 +334,3 @@ export const listInternal = internalQuery({
       .collect();
   },
 });
-

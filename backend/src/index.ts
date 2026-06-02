@@ -248,6 +248,73 @@ async function runUpdateWorkflowInBackground({
   }
 }
 
+async function runScheduledUpdateWorkflowInBackground({
+  input,
+  run,
+  authorizedUserId,
+  logger,
+  modelConfig,
+}: {
+  input: DatasetContext;
+  run: UpdateWorkflowRun;
+  authorizedUserId: string;
+  logger: FastifyBaseLogger;
+  modelConfig: {
+    schemaInference: string;
+    populateOrchestrator: string;
+    investigateSubagent: string;
+  };
+}): Promise<void> {
+  const datasetId = input.datasetId;
+
+  try {
+    const result = await run.start({
+      inputData: {
+        ...input,
+        authContext: {
+          authorizedUserId,
+          workflowRunId: run.runId,
+          modelConfig,
+        },
+      },
+    });
+
+    logger.info(
+      {
+        datasetId,
+        workflowStatus: result.status,
+        steps: JSON.stringify(result.steps).slice(0, 2000),
+      },
+      "Scheduled update workflow completed",
+    );
+
+    if (result.status !== "success") {
+      throw new Error(`Workflow ended with status: ${result.status}`);
+    }
+
+    await convex.mutation(internal.datasets.completeScheduledRefreshInternal, {
+      id: datasetId,
+      now: Date.now(),
+    });
+  } catch (err) {
+    const lastStatusError = statusErrorMessage(err);
+    logger.error({ err, datasetId }, "Scheduled update workflow failed");
+
+    try {
+      await convex.mutation(internal.datasets.failScheduledRefreshInternal, {
+        id: datasetId,
+        now: Date.now(),
+        lastStatusError,
+      });
+    } catch (statusErr) {
+      logger.error(
+        { err: statusErr, datasetId },
+        "Failed to record scheduled refresh failure",
+      );
+    }
+  }
+}
+
 async function runPopulateWorkflowInBackground({
   input,
   run,
@@ -350,6 +417,111 @@ async function runPopulateWorkflowInBackground({
   }
 }
 
+async function backfillDatasetRefreshSettings(
+  logger: FastifyBaseLogger,
+): Promise<void> {
+  try {
+    const result = await convex.mutation(
+      internal.datasets.backfillRefreshSettings,
+      { defaultCadence: "daily" },
+    );
+    logger.info(result, "Dataset refresh settings backfill complete");
+  } catch (err) {
+    logger.error({ err }, "Dataset refresh settings backfill failed");
+    throw err;
+  }
+}
+
+function startLocalRefreshScheduler(
+  logger: FastifyBaseLogger,
+): ReturnType<typeof setInterval> | null {
+  if (!env.REFRESH_SCHEDULER_ENABLED) {
+    logger.info("Dataset refresh scheduler disabled");
+    return null;
+  }
+
+  let ticking = false;
+
+  async function tick(): Promise<void> {
+    if (ticking) return;
+    ticking = true;
+
+    try {
+      const now = Date.now();
+      const dueDatasets = await convex.query(
+        internal.datasets.listDueForRefreshInternal,
+        {
+          now,
+          limit: env.REFRESH_SCHEDULER_BATCH_SIZE,
+        },
+      );
+
+      for (const dueDataset of dueDatasets as Array<{ _id: string }>) {
+        let run: UpdateWorkflowRun;
+        try {
+          run = await updateWorkflow.createRun();
+        } catch (runErr) {
+          logger.error(runErr, "Failed to create scheduled update workflow run");
+          continue;
+        }
+
+        const claim = await convex.mutation(
+          internal.datasets.claimScheduledRefreshInternal,
+          {
+            id: dueDataset._id,
+            now: Date.now(),
+            runId: run.runId,
+            staleAfterMs: env.REFRESH_SCHEDULER_STALE_AFTER_MS,
+          },
+        );
+
+        if (claim.outcome !== "started") {
+          logger.debug(
+            { datasetId: dueDataset._id, outcome: claim.outcome },
+            "Skipped scheduled refresh claim",
+          );
+          continue;
+        }
+
+        const dataset = claim.dataset;
+        const { getModelConfig } = await import("./config/models.js");
+        const modelConfig = await getModelConfig(dataset.ownerId);
+
+        void runScheduledUpdateWorkflowInBackground({
+          input: {
+            datasetId: dataset.datasetId,
+            datasetName: dataset.datasetName,
+            description: dataset.description,
+            columns: dataset.columns,
+          },
+          run,
+          authorizedUserId: dataset.ownerId,
+          logger,
+          modelConfig,
+        });
+      }
+    } catch (err) {
+      logger.error({ err }, "Dataset refresh scheduler tick failed");
+    } finally {
+      ticking = false;
+    }
+  }
+
+  void tick();
+  const interval = setInterval(() => {
+    void tick();
+  }, env.REFRESH_SCHEDULER_POLL_MS);
+  logger.info(
+    {
+      pollMs: env.REFRESH_SCHEDULER_POLL_MS,
+      batchSize: env.REFRESH_SCHEDULER_BATCH_SIZE,
+      staleAfterMs: env.REFRESH_SCHEDULER_STALE_AFTER_MS,
+    },
+    "Dataset refresh scheduler started",
+  );
+  return interval;
+}
+
 const fastify = Fastify({ logger: true });
 
 await fastify.register(fastifyCors, {
@@ -365,9 +537,13 @@ await fastify.register(fastifyCors, {
 // protected routes — see the example block below.
 await fastify.register(clerkAuthPlugin);
 
+await backfillDatasetRefreshSettings(fastify.log);
+const refreshScheduler = startLocalRefreshScheduler(fastify.log);
+
 // Flush queued PostHog events on graceful shutdown so a SIGTERM mid-flight
 // doesn't drop the dataset_ready_email_sent capture from the last request.
 fastify.addHook("onClose", async () => {
+  if (refreshScheduler) clearInterval(refreshScheduler);
   await shutdownAnalytics();
 });
 

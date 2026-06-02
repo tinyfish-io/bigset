@@ -8,6 +8,10 @@ import { useMutation, useConvexAuth } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { EVENTS, track } from "@/lib/analytics";
 import { inferSchema, type InferredColumn } from "@/lib/backend";
+import {
+  REFRESH_CADENCE_OPTIONS,
+  type RefreshCadence,
+} from "@/lib/refresh-cadence";
 
 
 type ColumnType = "text" | "number" | "boolean" | "url" | "date";
@@ -20,24 +24,7 @@ interface ProposedColumn {
   isPrimaryKey: boolean;
 }
 
-type Cadence = "30m" | "6h" | "12h" | "daily" | "weekly";
 type Step = "describe" | "generating" | "review";
-
-const CADENCE_OPTIONS: { value: Cadence; label: string }[] = [
-  { value: "30m", label: "Every 30 min" },
-  { value: "6h", label: "Every 6 hours" },
-  { value: "12h", label: "Every 12 hours" },
-  { value: "daily", label: "Daily" },
-  { value: "weekly", label: "Weekly" },
-];
-
-const CADENCE_LABELS: Record<Cadence, string> = {
-  "30m": "Every 30 min",
-  "6h": "Every 6 hours",
-  "12h": "Every 12 hours",
-  daily: "Daily",
-  weekly: "Weekly",
-};
 
 const COLUMN_TYPES: { value: ColumnType; label: string; icon: string }[] = [
   { value: "text", label: "Text", icon: "≡" },
@@ -93,7 +80,7 @@ export default function NewDatasetPage() {
 
   const [step, setStep] = useState<Step>("describe");
   const [prompt, setPrompt] = useState("");
-  const [cadence, setCadence] = useState<Cadence>("daily");
+  const [refreshCadence, setRefreshCadence] = useState<RefreshCadence>("daily");
   const [columns, setColumns] = useState<ProposedColumn[]>([]);
   const [datasetName, setDatasetName] = useState("");
   const [isCreating, setIsCreating] = useState(false);
@@ -183,7 +170,7 @@ export default function NewDatasetPage() {
       datasetId = await createDataset({
         name: datasetName,
         description: prompt,
-        cadence: CADENCE_LABELS[cadence],
+        refreshCadence,
         columns: columns.map((c) => ({
           name: c.name,
           type: c.type,
@@ -203,7 +190,13 @@ export default function NewDatasetPage() {
       setIsCreating(false);
       return;
     }
-    try { track(EVENTS.DATASET_CREATED, { datasetId, column_count: columns.length, cadence: CADENCE_LABELS[cadence] }); } catch {}
+    try {
+      track(EVENTS.DATASET_CREATED, {
+        datasetId,
+        column_count: columns.length,
+        refreshCadence,
+      });
+    } catch {}
     router.push(`/dataset/${datasetId}`);
   }
 
@@ -312,12 +305,12 @@ export default function NewDatasetPage() {
                 <div className="space-y-2">
                   <label className="block text-sm font-medium">Update frequency</label>
                   <div className="flex flex-wrap gap-2">
-                    {CADENCE_OPTIONS.map((opt) => (
+                    {REFRESH_CADENCE_OPTIONS.map((opt) => (
                       <button
                         key={opt.value}
-                        onClick={() => setCadence(opt.value)}
+                        onClick={() => setRefreshCadence(opt.value)}
                         className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${
-                          cadence === opt.value
+                          refreshCadence === opt.value
                             ? "border-foreground bg-foreground text-accent-text"
                             : "border-border bg-surface text-foreground hover:border-foreground/30"
                         }`}

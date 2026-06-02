@@ -51,7 +51,12 @@ export const upsert = mutation({
     } else {
       // First-time save — build insert object from provided fields only.
       // userId is always required and comes from the authenticated identity.
-      const insert: Record<string, string> = { userId: identity.subject };
+      const insert: {
+        userId: string;
+        schemaInference?: string;
+        populateOrchestrator?: string;
+        investigateSubagent?: string;
+      } = { userId: identity.subject };
       if (args.schemaInference !== undefined) insert.schemaInference = args.schemaInference;
       if (args.populateOrchestrator !== undefined) insert.populateOrchestrator = args.populateOrchestrator;
       if (args.investigateSubagent !== undefined) insert.investigateSubagent = args.investigateSubagent;

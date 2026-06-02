@@ -40,17 +40,27 @@ validate-dev-env:
 			missing="$$missing $$key"; \
 		fi; \
 	}; \
+	check_env TINYFISH_API_KEY ""; \
+	check_env OPENROUTER_API_KEY sk-or-...; \
 	check_env NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY pk_test_...; \
 	check_env CLERK_SECRET_KEY sk_test_...; \
 	check_env CLERK_JWT_ISSUER_DOMAIN https://your-app.clerk.accounts.dev; \
-	check_env OPENROUTER_API_KEY sk-or-...; \
-	check_env TINYFISH_API_KEY ""; \
 	if [[ -n "$$missing" ]]; then \
 		echo ""; \
 		echo "Missing environment variables in .env:"; \
 		echo ""; \
 		for key in $$missing; do \
 			case $$key in \
+				TINYFISH_API_KEY) \
+					echo "  ✗ $$key"; \
+					echo "    → Create account → API Keys → Create Key"; \
+					echo "    https://agent.tinyfish.ai/api-keys?utm_source=github&utm_medium=organic&utm_campaign=bigset-developer-2026q2"; \
+					echo "";; \
+				OPENROUTER_API_KEY) \
+					echo "  ✗ $$key"; \
+					echo "    → Create account → Settings → Keys → Create Key"; \
+					echo "    https://openrouter.ai/settings/keys"; \
+					echo "";; \
 				NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY) \
 					echo "  ✗ $$key"; \
 					echo "    → Clerk dashboard → API Keys → Publishable Key"; \
@@ -66,16 +76,6 @@ validate-dev-env:
 					echo "    → Clerk dashboard → Configure → JWT Templates → enable Convex template"; \
 					echo "    → Then find Issuer URL under Settings (e.g. https://your-app.clerk.accounts.dev)"; \
 					echo "    https://dashboard.clerk.com"; \
-					echo "";; \
-				OPENROUTER_API_KEY) \
-					echo "  ✗ $$key"; \
-					echo "    → Create account → Settings → Keys → Create Key"; \
-					echo "    https://openrouter.ai/settings/keys"; \
-					echo "";; \
-				TINYFISH_API_KEY) \
-					echo "  ✗ $$key"; \
-					echo "    → Create account → API Keys → Create Key"; \
-					echo "    https://agent.tinyfish.ai/api-keys"; \
 					echo "";; \
 			esac; \
 		done; \

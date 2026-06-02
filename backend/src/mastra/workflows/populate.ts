@@ -196,7 +196,9 @@ Data fields to collect:
 ${columnsDesc}${pkNote}${manifestNote}${strategyNote}
 
 Search the web broadly to find real entities that fit this dataset topic.
-For each lead you find, call run_subagent with the primary key values and any context/URLs you have found.`;
+For each lead you find, call run_subagent with the primary key values and any context/URLs you have found.
+If run_subagent returns ROW_LIMIT_REACHED, stop immediately and do not make any more tool calls.
+Stop the populate run as soon as the dataset reaches 100 rows.`;
 
     console.log(
       `[build-prompt] Built prompt for ${inputData.datasetName} (${inputData.columns.length} columns, strategy=${inputData.enumerationStrategy})`,

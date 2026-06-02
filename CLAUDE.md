@@ -6,14 +6,14 @@ Frontend on :3500, backend on :3501, Mastra Studio on :4111, Convex dashboard on
 
 ## Setup
 
-1. Create a free Clerk account at https://clerk.com and create an application.
-2. In the Clerk dashboard, go to **JWT Templates** and enable the **Convex** template.
-3. Copy `.env.example` to `.env` and fill in your keys:
+1. Copy `.env.example` to `.env` and fill in your keys:
+   - `TINYFISH_API_KEY` — from https://agent.tinyfish.ai/api-keys?utm_source=github&utm_medium=organic&utm_campaign=bigset-developer-2026q2
+   - `OPENROUTER_API_KEY` — from https://openrouter.ai/settings/keys
    - `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` — from Clerk API Keys
    - `CLERK_SECRET_KEY` — from Clerk API Keys
    - `CLERK_JWT_ISSUER_DOMAIN` — your Frontend API URL (e.g. `https://your-app.clerk.accounts.dev`)
-   - `OPENROUTER_API_KEY` — from https://openrouter.ai/settings/keys
-   - `TINYFISH_API_KEY` — from https://agent.tinyfish.ai/api-keys
+2. Create a free Clerk account at https://clerk.com and create an application.
+3. In the Clerk dashboard, go to **JWT Templates** and enable the **Convex** template.
 4. Run `make dev` — starts all Docker services, auto-generates the Convex admin key on first run, and pushes Convex functions. No manual key generation needed.
 
 ## Architecture
@@ -35,10 +35,10 @@ Convex functions use `ctx.auth.getUserIdentity()` to get the authenticated user.
 ## Environment Variables
 
 Root `.env` is the only local env file. Docker Compose, package scripts, and Convex CLI helper targets all read it. Key variables:
-- `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY` — shared by frontend and backend
+- `TINYFISH_API_KEY` — used by the populate agent for web search and fetch (get one at https://agent.tinyfish.ai/api-keys?utm_source=github&utm_medium=organic&utm_campaign=bigset-developer-2026q2)
 - `OPENROUTER_API_KEY` — used by backend and Mastra for AI model calls
+- `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY` — shared by frontend and backend
 - `CONVEX_SELF_HOSTED_ADMIN_KEY` — used by backend for system-level Convex writes
-- `TINYFISH_API_KEY` — used by the populate agent for web search and fetch (get one at https://agent.tinyfish.ai/api-keys)
 
 The backend container maps `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` → `CLERK_PUBLISHABLE_KEY` (see `docker-compose.dev.yml`).
 
