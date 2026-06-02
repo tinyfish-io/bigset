@@ -103,15 +103,6 @@ body {
   100% { background-position: 200% 0; }
 }
 
-@keyframes slide-in {
-  from { transform: translateX(100%); }
-  to   { transform: translateX(0); }
-}
-
-.animate-slide-in {
-  animation: slide-in 0.2s ease-out;
-}
-
 @keyframes cell-flash {
   0% { background-color: rgba(16, 185, 129, 0.25); }
   100% { background-color: transparent; }

@@ -10,6 +10,7 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { DatasetTable } from "@/components/table";
 import { useSelection } from "@/components/table/use-selection";
 import { SideSheet, CellDetail } from "@/components/SideSheet";
+import type { DatasetColumn } from "@/components/table/types";
 import { useTheme } from "@/components/ThemeToggle";
 import { StatusBadge } from "@/components/dataset/StatusBadge";
 import { downloadCSV, downloadXLSX } from "@/lib/export";
@@ -36,7 +37,7 @@ export default function DatasetPage() {
   const [confirmPopulate, setConfirmPopulate] = useState(false);
   const [savingRefreshCadence, setSavingRefreshCadence] = useState(false);
   const [cellDetail, setCellDetail] = useState<{
-    columnName: string;
+    column: DatasetColumn;
     value: unknown;
     sources?: string[];
   } | null>(null);
@@ -85,6 +86,14 @@ export default function DatasetPage() {
       setPopulating(false);
     }
   }, [dataset, populating, getToken]);
+
+  const handleCellExpand = useCallback((columnName: string, value: unknown, rowId: string) => {
+    if (!dataset || !rows) return;
+    const col = dataset.columns.find((c) => c.name === columnName);
+    if (!col) return;
+    const row = rows.find((r) => r._id === rowId);
+    setCellDetail({ column: col, value, sources: row?.sources });
+  }, [dataset, rows]);
 
   const openedFired = useRef<string | null>(null);
   const autoPopulateFired = useRef<string | null>(null);
@@ -332,24 +341,17 @@ export default function DatasetPage() {
         rows={rows}
         datasetId={datasetId}
         selection={selection}
-        onCellExpand={(columnName, value, rowId) => {
-          const row = rows.find((r) => r._id === rowId);
-          setCellDetail({ columnName, value, sources: row?.sources });
-        }}
+        onCellExpand={handleCellExpand}
       />
 
       <SideSheet open={cellDetail !== null} onClose={() => setCellDetail(null)}>
-        {cellDetail && (() => {
-          const col = dataset.columns.find((c) => c.name === cellDetail.columnName);
-          if (!col) return null;
-          return (
-            <CellDetail
-              column={col}
-              value={cellDetail.value}
-              sources={cellDetail.sources}
-            />
-          );
-        })()}
+        {cellDetail && (
+          <CellDetail
+            column={cellDetail.column}
+            value={cellDetail.value}
+            sources={cellDetail.sources}
+          />
+        )}
       </SideSheet>
 
       {confirmPopulate && (

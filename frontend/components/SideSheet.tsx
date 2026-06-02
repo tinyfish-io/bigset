@@ -82,16 +82,16 @@ export function SideSheet({ open, onClose, children }: SideSheetProps) {
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end" role="dialog" aria-modal="true">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
       {/* Backdrop */}
       <div
-        className="absolute inset-0 bg-foreground/10 backdrop-blur-sm"
+        className="absolute inset-0 bg-foreground/20 backdrop-blur-sm"
         onClick={onClose}
       />
-      {/* Panel */}
+      {/* Modal */}
       <div
         ref={panelRef}
-        className="relative w-full max-w-md h-full bg-surface border-l border-border shadow-2xl flex flex-col animate-slide-in"
+        className="relative w-full max-w-lg max-h-[80vh] bg-surface border border-border rounded-xl shadow-2xl flex flex-col"
       >
         <div className="flex items-center justify-between px-5 py-4 border-b border-border shrink-0">
           <h2 className="text-sm font-semibold text-foreground">Cell Detail</h2>
@@ -144,19 +144,11 @@ export function CellDetail({ column, value, sources }: CellDetailProps) {
         )}
       </div>
 
-      {/* Type */}
-      <div>
-        <p className="text-[11px] font-medium text-muted uppercase tracking-wide mb-1">
-          Type
-        </p>
-        <p className="text-sm text-foreground capitalize">{column.type}</p>
-      </div>
-
       {/* Value */}
       <div>
         <div className="flex items-center justify-between mb-1.5">
           <p className="text-[11px] font-medium text-muted uppercase tracking-wide">
-            Value
+            Value <span className="normal-case">({column.type})</span>
           </p>
           <button
             type="button"
