@@ -85,11 +85,13 @@ export function DatasetTable({
   rows,
   datasetId,
   selection,
+  onCellExpand,
 }: {
   dataset: DatasetMeta;
   rows: DatasetRow[];
   datasetId: string;
   selection: Selection;
+  onCellExpand: (columnName: string, value: unknown, rowId: string) => void;
 }) {
   const tableContainerRef = useRef<HTMLDivElement>(null);
   const previousResizingColumnIdRef = useRef<string | false>(false);
@@ -168,11 +170,12 @@ export function DatasetTable({
       columnWidths,
       isSelected: selection.has,
       toggleRow,
+      onCellExpand,
       isBuilding,
       pendingRowIds,
       flashingCells,
     }),
-    [tableRows, dataset.columns, columnWidths, selection.has, toggleRow, isBuilding, pendingRowIds, flashingCells],
+    [tableRows, dataset.columns, columnWidths, selection.has, toggleRow, onCellExpand, isBuilding, pendingRowIds, flashingCells],
   );
 
   return (

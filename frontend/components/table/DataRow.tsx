@@ -4,6 +4,7 @@ import { memo, type CSSProperties } from "react";
 import { areEqual } from "react-window";
 import type { Row } from "@tanstack/react-table";
 import type { DatasetRow, DatasetColumn } from "./types";
+import { Maximize2 } from "lucide-react";
 import { CellValue } from "./CellValue";
 import { floorWidth } from "./utils";
 
@@ -13,6 +14,7 @@ export interface DataRowData {
   columnWidths: number[];
   isSelected: (id: string) => boolean;
   toggleRow: (id: string, shiftKey: boolean) => void;
+  onCellExpand: (columnName: string, value: unknown, rowId: string) => void;
   isBuilding: boolean;
   pendingRowIds: Set<string>;
   flashingCells: Set<string>;
@@ -27,7 +29,7 @@ function DataRowImpl({
   index: number;
   style: CSSProperties;
 }) {
-  const { rows, columns, columnWidths, isSelected, toggleRow, isBuilding, pendingRowIds, flashingCells } = data;
+  const { rows, columns, columnWidths, isSelected, toggleRow, onCellExpand, isBuilding, pendingRowIds, flashingCells } = data;
   const row = rows[index];
 
   if (!row) {
@@ -112,7 +114,7 @@ function DataRowImpl({
           <div
             key={col.name}
             data-ph-mask-text="true"
-            className={`relative shrink-0 overflow-hidden text-ellipsis whitespace-nowrap border-r border-border/30 last:border-r-0 ${
+            className={`group relative shrink-0 overflow-hidden text-ellipsis whitespace-nowrap border-r border-border/30 last:border-r-0 ${
               cellIdx === 0
                 ? "font-medium text-foreground"
                 : "text-foreground/70"
@@ -123,6 +125,17 @@ function DataRowImpl({
             }}
           >
             <CellValue value={value} type={col.type} />
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onCellExpand(col.name, value, row.original._id);
+              }}
+              className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 p-0.5 rounded bg-foreground/5 hover:bg-foreground/10 text-muted hover:text-foreground transition-all"
+              aria-label={`Expand ${col.name}`}
+            >
+              <Maximize2 className="size-3" />
+            </button>
             {isPending && <div className="shimmer-overlay absolute inset-0" />}
           </div>
         );
