@@ -7,12 +7,21 @@ import type { DatasetRow, DatasetColumn } from "./types";
 import { CellValue } from "./CellValue";
 import { floorWidth } from "./utils";
 
+function IconMaximize2() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>
+    </svg>
+  );
+}
+
 export interface DataRowData {
   rows: Row<DatasetRow>[];
   columns: DatasetColumn[];
   columnWidths: number[];
   isSelected: (id: string) => boolean;
   toggleRow: (id: string, shiftKey: boolean) => void;
+  onCellExpand: (columnName: string, value: unknown, rowId: string) => void;
   isBuilding: boolean;
   pendingRowIds: Set<string>;
   flashingCells: Set<string>;
@@ -27,7 +36,7 @@ function DataRowImpl({
   index: number;
   style: CSSProperties;
 }) {
-  const { rows, columns, columnWidths, isSelected, toggleRow, isBuilding, pendingRowIds, flashingCells } = data;
+  const { rows, columns, columnWidths, isSelected, toggleRow, onCellExpand, isBuilding, pendingRowIds, flashingCells } = data;
   const row = rows[index];
 
   if (!row) {
@@ -112,7 +121,7 @@ function DataRowImpl({
           <div
             key={col.name}
             data-ph-mask-text="true"
-            className={`relative shrink-0 overflow-hidden text-ellipsis whitespace-nowrap border-r border-border/30 last:border-r-0 ${
+            className={`group relative shrink-0 overflow-hidden text-ellipsis whitespace-nowrap border-r border-border/30 last:border-r-0 ${
               cellIdx === 0
                 ? "font-medium text-foreground"
                 : "text-foreground/70"
@@ -123,6 +132,17 @@ function DataRowImpl({
             }}
           >
             <CellValue value={value} type={col.type} />
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onCellExpand(col.name, value, row.original._id);
+              }}
+              className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground p-0.5 rounded bg-foreground/5 hover:bg-foreground/10 text-muted hover:text-foreground transition-all"
+              aria-label={`Expand ${col.name}`}
+            >
+              <IconMaximize2 />
+            </button>
             {isPending && <div className="shimmer-overlay absolute inset-0" />}
           </div>
         );
