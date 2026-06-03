@@ -5,11 +5,6 @@ import { searchWebTool, fetchPageTool } from "../tools/web-tools.js";
 import type { AuthContext } from "../workflows/populate.js";
 import type { PopulateColumn } from "../../pipeline/populate.js";
 
-const openrouter = createOpenRouter({
-  apiKey: process.env.OPENROUTER_API_KEY!,
-  baseURL: process.env.OPENROUTER_BASE_URL,
-});
-
 function buildInvestigateInstructions(columns: PopulateColumn[]): string {
   const columnNames = columns.map((c) => c.name);
   const columnsDesc = columns
@@ -60,8 +55,13 @@ export function buildInvestigateAgent(
   authorizedDatasetId: string,
   authContext: AuthContext,
   columns: PopulateColumn[],
+  openRouterApiKey: string,
 ): Agent {
   const modelSlug = authContext.modelConfig!.investigateSubagent;
+  const openrouter = createOpenRouter({
+    apiKey: openRouterApiKey,
+    baseURL: process.env.OPENROUTER_BASE_URL,
+  });
 
   const { insert_row } = buildPopulateTools(
     authorizedDatasetId,

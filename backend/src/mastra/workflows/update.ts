@@ -4,6 +4,7 @@ import { datasetContextSchema, populateColumnSchema } from "../../pipeline/popul
 import { convex, internal } from "../../convex.js";
 import { buildRefreshAgent } from "../agents/refresh.js";
 import { authContextSchema } from "./populate.js";
+import { requireOpenRouterApiKey } from "../../local-credentials.js";
 import { RunMetrics } from "../run-metrics.js";
 import { saveRunMetrics } from "../save-run-metrics.js";
 import { getSignal } from "../../abort-registry.js";
@@ -99,12 +100,18 @@ const refreshRowsStep = createStep({
 
     const metrics = new RunMetrics();
     const startedAt = Date.now();
+    const openRouterApiKey = await requireOpenRouterApiKey();
 
     const pkColumns = columns.filter((c) => c.isPrimaryKey);
 
     async function processRow(row: z.infer<typeof rowSchema>) {
       try {
-        const agent = buildRefreshAgent(datasetId, authContext, columns);
+        const agent = buildRefreshAgent(
+          datasetId,
+          authContext,
+          columns,
+          openRouterApiKey,
+        );
 
         const pkBlock =
           pkColumns.length > 0

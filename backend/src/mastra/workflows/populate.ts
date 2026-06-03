@@ -5,6 +5,7 @@ import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { datasetContextSchema, populateColumnSchema } from "../../pipeline/populate.js";
 import { convex, internal } from "../../convex.js";
 import { DEFAULT_MODEL_IDS } from "../../config/models.js";
+import { requireOpenRouterApiKey } from "../../local-credentials.js";
 import { buildPopulateAgent } from "../agents/populate.js";
 import { RunMetrics } from "../run-metrics.js";
 import { saveRunMetrics } from "../save-run-metrics.js";
@@ -108,8 +109,9 @@ Respond with EXACTLY one word: scraper or search`;
 
     let classification: "scraper" | "search" = "search";
     try {
+      const apiKey = await requireOpenRouterApiKey();
       const openrouter = createOpenRouter({
-        apiKey: process.env.OPENROUTER_API_KEY!,
+        apiKey,
         baseURL: process.env.OPENROUTER_BASE_URL,
       });
       const modelSlug =
@@ -247,6 +249,7 @@ const agentStep = createStep({
         inputData.authorizedDatasetId,
         inputData.authContext,
         inputData.columns,
+        await requireOpenRouterApiKey(),
         metrics,
       );
       const abortSignal = getSignal(inputData.authorizedDatasetId);

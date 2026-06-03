@@ -1,4 +1,4 @@
-import Fastify, { type FastifyBaseLogger } from "fastify";
+import Fastify, { type FastifyBaseLogger, type FastifyReply } from "fastify";
 import fastifyCors from "@fastify/cors";
 import type { ClerkClient } from "@clerk/backend";
 
@@ -14,6 +14,14 @@ import { datasetReadyTemplate } from "./email/templates/dataset-ready.js";
 import { capture, shutdown as shutdownAnalytics } from "./analytics/posthog.js";
 import { EVENTS } from "./analytics/events.js";
 import { registerDataset, deregisterDataset, abortDataset } from "./abort-registry.js";
+import {
+  exchangeOpenRouterOAuthCode,
+  getLocalSetupStatus,
+  requireLocalSetupComplete,
+  saveLocalCredential,
+  verifyOpenRouterApiKey,
+  verifyTinyFishApiKey,
+} from "./local-credentials.js";
 
 /** Domain part of an email, for analytics (we never log full addresses). */
 function emailDomain(email: string): string {
@@ -84,6 +92,8 @@ async function sendDatasetReadyNotification({
   rowCount: number;
   workflowType?: "populate" | "update";
 }): Promise<void> {
+  if (env.IS_LOCAL_MODE) return;
+
   const baseProps = {
     datasetId,
     datasetName,
@@ -139,6 +149,18 @@ async function sendDatasetReadyNotification({
       { err: notifyErr, datasetId },
       "Notify block crashed unexpectedly; populate already succeeded",
     );
+  }
+}
+
+async function ensureLocalSetupReady(reply: FastifyReply): Promise<boolean> {
+  try {
+    await requireLocalSetupComplete();
+    return true;
+  } catch {
+    await reply.code(428).send({
+      error: "Local setup is incomplete. Connect TinyFish and OpenRouter first.",
+    });
+    return false;
   }
 }
 
@@ -523,6 +545,11 @@ function startLocalRefreshScheduler(
     ticking = true;
 
     try {
+      if (env.IS_LOCAL_MODE) {
+        const setup = await getLocalSetupStatus();
+        if (!setup.complete) return;
+      }
+
       const now = Date.now();
       const dueDatasets = await convex.query(
         internal.datasets.listDueForRefreshInternal,
@@ -629,6 +656,81 @@ fastify.addHook("onClose", async () => {
 
 fastify.get("/health", async () => ({ status: "ok" }));
 
+fastify.get("/local-setup/status", async (_req, reply) => {
+  if (!env.IS_LOCAL_MODE) {
+    return reply.code(404).send({ error: "Not found" });
+  }
+  return await getLocalSetupStatus();
+});
+
+fastify.post("/local-setup/tinyfish", async (req, reply) => {
+  if (!env.IS_LOCAL_MODE) {
+    return reply.code(404).send({ error: "Not found" });
+  }
+
+  const body = req.body as { apiKey?: string };
+  const apiKey = body?.apiKey?.trim();
+  if (!apiKey) {
+    return reply.code(400).send({ error: "TinyFish API key is required" });
+  }
+
+  try {
+    await verifyTinyFishApiKey(apiKey);
+    await saveLocalCredential("tinyfish", apiKey, "api_key");
+    return await getLocalSetupStatus();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "TinyFish verification failed";
+    req.log.warn({ err }, "TinyFish local setup verification failed");
+    return reply.code(400).send({ error: message });
+  }
+});
+
+fastify.post("/local-setup/openrouter-key", async (req, reply) => {
+  if (!env.IS_LOCAL_MODE) {
+    return reply.code(404).send({ error: "Not found" });
+  }
+
+  const body = req.body as { apiKey?: string };
+  const apiKey = body?.apiKey?.trim();
+  if (!apiKey) {
+    return reply.code(400).send({ error: "OpenRouter API key is required" });
+  }
+
+  try {
+    await verifyOpenRouterApiKey(apiKey);
+    await saveLocalCredential("openrouter", apiKey, "api_key");
+    return await getLocalSetupStatus();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "OpenRouter verification failed";
+    req.log.warn({ err }, "OpenRouter local setup verification failed");
+    return reply.code(400).send({ error: message });
+  }
+});
+
+fastify.post("/local-setup/openrouter-oauth", async (req, reply) => {
+  if (!env.IS_LOCAL_MODE) {
+    return reply.code(404).send({ error: "Not found" });
+  }
+
+  const body = req.body as { code?: string; codeVerifier?: string };
+  const code = body?.code?.trim();
+  const codeVerifier = body?.codeVerifier?.trim();
+  if (!code || !codeVerifier) {
+    return reply.code(400).send({ error: "OpenRouter OAuth code is required" });
+  }
+
+  try {
+    const apiKey = await exchangeOpenRouterOAuthCode({ code, codeVerifier });
+    await verifyOpenRouterApiKey(apiKey);
+    await saveLocalCredential("openrouter", apiKey, "oauth");
+    return await getLocalSetupStatus();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "OpenRouter OAuth failed";
+    req.log.warn({ err }, "OpenRouter OAuth setup failed");
+    return reply.code(400).send({ error: message });
+  }
+});
+
 
 fastify.post("/openrouter/refresh", { preHandler: requireAuth }, async (req, reply) => {
   const { fetchModelsFromOpenRouter, upsertModelBatch } = await import("./config/models.js");
@@ -714,6 +816,7 @@ await fastify.register(async (instance) => {
     if (!body?.prompt || typeof body.prompt !== "string" || !body.prompt.trim()) {
       return reply.code(400).send({ error: "prompt is required" });
     }
+    if (!(await ensureLocalSetupReady(reply))) return;
 
     try {
       const auth = req.auth;
@@ -743,6 +846,7 @@ await fastify.register(async (instance) => {
         details: parsed.error.flatten().fieldErrors,
       });
     }
+    if (!(await ensureLocalSetupReady(reply))) return;
 
     try {
       const auth = req.auth;
@@ -815,6 +919,7 @@ await fastify.register(async (instance) => {
         details: parsed.error.flatten().fieldErrors,
       });
     }
+    if (!(await ensureLocalSetupReady(reply))) return;
 
     try {
       const auth = req.auth;

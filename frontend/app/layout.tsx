@@ -1,8 +1,9 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
-import { ClerkProvider } from "@clerk/nextjs";
 import { ConvexClientProvider } from "./convex-provider";
+import { AppAuthProvider } from "@/lib/app-auth";
 import { AnalyticsProvider } from "@/lib/analytics-provider";
+import { LocalSetupGate } from "./local-setup-gate";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -46,14 +47,13 @@ export default function RootLayout({
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
       </head>
       <body className="min-h-full flex flex-col theme-transition">
-        <ClerkProvider
-          signInForceRedirectUrl="/dashboard"
-          signUpForceRedirectUrl="/dashboard"
-        >
+        <AppAuthProvider>
           <ConvexClientProvider>
-            <AnalyticsProvider>{children}</AnalyticsProvider>
+            <AnalyticsProvider>
+              <LocalSetupGate>{children}</LocalSetupGate>
+            </AnalyticsProvider>
           </ConvexClientProvider>
-        </ClerkProvider>
+        </AppAuthProvider>
       </body>
     </html>
   );

@@ -3,8 +3,7 @@
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useMutation, useQuery, useConvexAuth } from "convex/react";
-import { useAuth, useUser, useClerk } from "@clerk/nextjs";
+import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { DatasetTable } from "@/components/table";
@@ -22,13 +21,14 @@ import {
   type RefreshCadence,
 } from "@/lib/refresh-cadence";
 import type { ProfileUser } from "@/lib/profile-user";
+import { useAppAuth, useAppClerk, useAppConvexAuth, useAppUser } from "@/lib/app-auth";
 
 export default function DatasetPage() {
   const params = useParams();
-  const { isLoading: authLoading } = useConvexAuth();
-  const { userId, getToken } = useAuth();
-  const { user } = useUser();
-  const { signOut } = useClerk();
+  const { isLoading: authLoading } = useAppConvexAuth();
+  const { userId, getToken } = useAppAuth();
+  const { user } = useAppUser();
+  const { signOut } = useAppClerk();
   const [exporting, setExporting] = useState<"csv" | "xlsx" | null>(null);
   const [populating, setPopulating] = useState(false);
   const [updating, setUpdating] = useState(false);

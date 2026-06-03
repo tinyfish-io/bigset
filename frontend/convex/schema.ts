@@ -137,6 +137,14 @@ export default defineSchema({
     investigateSubagent: v.optional(v.string()),
   }).index("by_user", ["userId"]),
 
+  localCredentials: defineTable({
+    service: v.union(v.literal("tinyfish"), v.literal("openrouter")),
+    apiKey: v.string(),
+    connectionMethod: v.union(v.literal("api_key"), v.literal("oauth")),
+    verifiedAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_service", ["service"]),
+
   // One row per populate workflow run. Written once at the end of each run
   // (success or error) by the backend agent runner — never by the frontend.
   // Tracks tool-call counts, token usage, and timing so runs can be

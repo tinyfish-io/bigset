@@ -6,11 +6,6 @@ import type { AuthContext } from "../workflows/populate.js";
 import type { PopulateColumn } from "../../pipeline/populate.js";
 import type { RunMetrics } from "../run-metrics.js";
 
-const openrouter = createOpenRouter({
-  apiKey: process.env.OPENROUTER_API_KEY!,
-  baseURL: process.env.OPENROUTER_BASE_URL,
-});
-
 const INSTRUCTIONS = `You are an expert dataset builder. You conduct research using your web tools.
 You do broad research to see which rows to add, and then you spin up sub-agents that can do the deep research and fill in each row for you.
 Your job is to make sure you dispatch and manage your army of sub agents to build up a dataset with 100 rows in it. Stop as soon as the dataset reaches 100 rows.
@@ -43,9 +38,14 @@ export function buildPopulateAgent(
   authorizedDatasetId: string,
   authContext: AuthContext,
   columns: PopulateColumn[],
+  openRouterApiKey: string,
   metrics?: RunMetrics,
 ): Agent {
   const modelSlug = authContext.modelConfig!.populateOrchestrator;
+  const openrouter = createOpenRouter({
+    apiKey: openRouterApiKey,
+    baseURL: process.env.OPENROUTER_BASE_URL,
+  });
 
   return new Agent({
     id: "populate-agent",
@@ -59,6 +59,7 @@ export function buildPopulateAgent(
         authorizedDatasetId,
         authContext,
         columns,
+        openRouterApiKey,
         metrics,
       ),
     },

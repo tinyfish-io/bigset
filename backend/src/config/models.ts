@@ -6,6 +6,7 @@
 
 import { api, internal, convex } from "../convex.js";
 import { env } from "../env.js";
+import { requireOpenRouterApiKey } from "../local-credentials.js";
 
 export interface OpenRouterModel {
   modelName: string;
@@ -130,10 +131,7 @@ export async function getModelConfig(
  * for Convex storage.
  */
 export async function fetchModelsFromOpenRouter(): Promise<OpenRouterModel[]> {
-  const apiKey = env.OPENROUTER_API_KEY;
-  if (!apiKey) {
-    throw new Error("OPENROUTER_API_KEY is not set");
-  }
+  const apiKey = await requireOpenRouterApiKey();
 
   const baseUrl = (process.env.OPENROUTER_BASE_URL || "https://openrouter.ai/api/v1").replace(/\/+$/, "");
   const url = new URL(`${baseUrl}/models`);

@@ -19,6 +19,9 @@ function numberFromEnv(name: string, fallback: number): number {
 }
 
 export const env = {
+  PROD: process.env.PROD,
+  IS_PROD: process.env.PROD === "1",
+  IS_LOCAL_MODE: process.env.PROD !== "1",
   CLIENT_ORIGIN: process.env.CLIENT_ORIGIN || "http://localhost:3500",
   CONVEX_URL: required("CONVEX_URL"),
   PORT: numberFromEnv("PORT", 3501),

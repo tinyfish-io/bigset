@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, type ReactNode } from "react";
-import { useUser } from "@clerk/nextjs";
+import { useAppUser } from "./app-auth";
 import { identify, initAnalytics, reset } from "./analytics";
 
 /**
@@ -24,7 +24,7 @@ import { identify, initAnalytics, reset } from "./analytics";
  * and break anonymous-event attribution.
  */
 export function AnalyticsProvider({ children }: { children: ReactNode }) {
-  const { isLoaded, isSignedIn, user } = useUser();
+  const { isLoaded, isSignedIn, user } = useAppUser();
   const wasSignedIn = useRef<boolean>(false);
 
   useEffect(() => {

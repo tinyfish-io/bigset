@@ -30,8 +30,17 @@ dev: validate-dev-env install-deps
 	docker compose -f docker-compose.dev.yml logs -f
 
 validate-dev-env:
-	@test -f .env || { echo "Error: .env not found. Run: cp .env.example .env"; exit 1; }
-	@missing=""; \
+	@if [ ! -f .env ]; then \
+		printf "# Auto-created by make dev. Leave PROD unset for local mode.\n" > .env; \
+		echo "Created local .env"; \
+	fi
+	@prod="$$(grep '^PROD=' .env | cut -d= -f2-)"; \
+	if [[ "$$prod" != "1" ]]; then \
+		echo "Local mode: Clerk, TinyFish, and OpenRouter env validation skipped."; \
+	fi
+	@prod="$$(grep '^PROD=' .env | cut -d= -f2-)"; \
+	if [[ "$$prod" != "1" ]]; then exit 0; fi; \
+	missing=""; \
 	check_env() { \
 		key="$$1"; placeholder="$$2"; \
 		value="$$(grep "^$$key=" .env | cut -d= -f2-)"; \
@@ -115,7 +124,20 @@ ensure-admin-key:
 
 convex-env:
 	@test -f .env || { echo "Error: .env not found. Run: cp .env.example .env"; exit 1; }
-	@issuer="$$(grep '^CLERK_JWT_ISSUER_DOMAIN=' .env | cut -d= -f2-)"; \
+	@prod="$$(grep '^PROD=' .env | cut -d= -f2-)"; \
+		admin_key="$$(grep '^CONVEX_SELF_HOSTED_ADMIN_KEY=' .env | cut -d= -f2-)"; \
+		if [[ -z "$$admin_key" ]]; then \
+			echo "Error: CONVEX_SELF_HOSTED_ADMIN_KEY is missing in root .env"; \
+			echo "Run make dev to generate it automatically."; \
+			exit 1; \
+		fi; \
+		if [[ "$$prod" != "1" ]]; then \
+			cd frontend && node ../scripts/with-root-env.mjs npx convex env set BIGSET_LOCAL_MODE 1 \
+			--url http://127.0.0.1:3210 \
+			--admin-key "$$admin_key"; \
+			exit 0; \
+		fi; \
+	issuer="$$(grep '^CLERK_JWT_ISSUER_DOMAIN=' .env | cut -d= -f2-)"; \
 		admin_key="$$(grep '^CONVEX_SELF_HOSTED_ADMIN_KEY=' .env | cut -d= -f2-)"; \
 		if [[ -z "$$issuer" || "$$issuer" == "https://your-app.clerk.accounts.dev" ]]; then \
 			echo "Error: CLERK_JWT_ISSUER_DOMAIN must be your Clerk issuer URL in root .env"; \
@@ -126,6 +148,9 @@ convex-env:
 			echo "Run make dev to generate it automatically."; \
 			exit 1; \
 		fi; \
+		cd frontend && node ../scripts/with-root-env.mjs npx convex env set BIGSET_LOCAL_MODE 0 \
+		--url http://127.0.0.1:3210 \
+		--admin-key "$$admin_key"; \
 		cd frontend && node ../scripts/with-root-env.mjs npx convex env set CLERK_JWT_ISSUER_DOMAIN "$$issuer" \
 		--url http://127.0.0.1:3210 \
 		--admin-key "$$admin_key"

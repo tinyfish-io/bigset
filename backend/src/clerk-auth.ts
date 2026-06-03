@@ -8,6 +8,7 @@ import fp from "fastify-plugin";
 import { createClerkClient, type ClerkClient } from "@clerk/backend";
 
 import { env } from "./env.js";
+import { LOCAL_USER_ID } from "./local-credentials.js";
 
 /**
  * Clerk JWT verification for the Fastify backend.
@@ -41,7 +42,7 @@ declare module "fastify" {
 }
 
 const clerkPlugin: FastifyPluginAsync = async (fastify: FastifyInstance) => {
-  if (!env.CLERK_SECRET_KEY) {
+  if (env.IS_PROD && !env.CLERK_SECRET_KEY) {
     fastify.log.warn(
       "CLERK_SECRET_KEY not set — protected routes will reject all requests. " +
         "Set it before adding routes that require auth.",
@@ -66,6 +67,7 @@ export async function getUserEmail(
   clerk: ClerkClient,
   userId: string,
 ): Promise<string | null> {
+  if (env.IS_LOCAL_MODE) return null;
   try {
     const user = await clerk.users.getUser(userId);
     return user.primaryEmailAddress?.emailAddress ?? null;
@@ -87,6 +89,11 @@ export async function requireAuth(
   req: FastifyRequest,
   reply: FastifyReply,
 ): Promise<void> {
+  if (env.IS_LOCAL_MODE) {
+    req.auth = { userId: LOCAL_USER_ID };
+    return;
+  }
+
   if (!env.CLERK_SECRET_KEY) {
     req.log.error("CLERK_SECRET_KEY is not set; cannot verify request");
     await reply.code(500).send({ error: "Auth not configured" });

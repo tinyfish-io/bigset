@@ -63,8 +63,91 @@ export interface OpenRouterModel {
   promptCost: number;
 }
 
+export interface ServiceSetupStatus {
+  configured: boolean;
+  source: "local" | "env" | null;
+  connectionMethod: "api_key" | "oauth" | null;
+  verifiedAt: number | null;
+}
+
+export interface LocalSetupStatus {
+  mode: "local" | "production";
+  required: boolean;
+  complete: boolean;
+  services: {
+    tinyfish: ServiceSetupStatus;
+    openrouter: ServiceSetupStatus;
+  };
+}
+
 const BACKEND_URL =
   process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:3501";
+
+async function errorMessage(res: Response): Promise<string> {
+  const body = await res.json().catch(() => null);
+  return body?.error || `Backend error (${res.status})`;
+}
+
+export async function getLocalSetupStatus(): Promise<LocalSetupStatus> {
+  const res = await fetch(`${BACKEND_URL}/local-setup/status`, {
+    method: "GET",
+  });
+
+  if (!res.ok) {
+    throw new Error(await errorMessage(res));
+  }
+
+  return res.json();
+}
+
+export async function saveTinyFishApiKey(
+  apiKey: string,
+): Promise<LocalSetupStatus> {
+  const res = await fetch(`${BACKEND_URL}/local-setup/tinyfish`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ apiKey }),
+  });
+
+  if (!res.ok) {
+    throw new Error(await errorMessage(res));
+  }
+
+  return res.json();
+}
+
+export async function saveOpenRouterApiKey(
+  apiKey: string,
+): Promise<LocalSetupStatus> {
+  const res = await fetch(`${BACKEND_URL}/local-setup/openrouter-key`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ apiKey }),
+  });
+
+  if (!res.ok) {
+    throw new Error(await errorMessage(res));
+  }
+
+  return res.json();
+}
+
+export async function exchangeOpenRouterOAuth(
+  code: string,
+  codeVerifier: string,
+): Promise<LocalSetupStatus> {
+  const res = await fetch(`${BACKEND_URL}/local-setup/openrouter-oauth`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ code, codeVerifier }),
+  });
+
+  if (!res.ok) {
+    throw new Error(await errorMessage(res));
+  }
+
+  return res.json();
+}
 
 /**
  * Fetch the current user's effective (resolved) model config from the backend.
