@@ -1,12 +1,18 @@
 SHELL := /usr/bin/env bash
 
-.PHONY: all dev validate-dev-env start-local-keychain stop-local-keychain down clean convex-push convex-env seed-public-datasets ensure-admin-key install-deps
+CONVEX_CLI_URL := http://convex:3210
+CONVEX_CLI_RUN := docker compose -f docker-compose.dev.yml run --rm --build --no-deps
+
+.PHONY: all dev validate-dev-env start-local-keychain stop-local-keychain down clean convex-push convex-env seed-public-datasets ensure-admin-key install-deps build-release
 
 all: dev
 
 install-deps:
 	@cd frontend && npm install --silent
 	@cd backend && npm install --silent
+
+build-release: install-deps
+	node scripts/build-release.mjs
 
 dev: validate-dev-env install-deps start-local-keychain
 	docker compose -f docker-compose.dev.yml up --build -d db convex convex-dashboard
@@ -158,8 +164,8 @@ ensure-admin-key:
 		needs_gen=true; \
 	else \
 		echo "Validating Convex admin key..."; \
-		if ! (cd frontend && node ../scripts/with-root-env.mjs npx convex env list \
-			--url http://127.0.0.1:3210 --admin-key "$$admin_key") > /dev/null 2>&1; then \
+		if ! $(CONVEX_CLI_RUN) -e CONVEX_SELF_HOSTED_ADMIN_KEY="$$admin_key" frontend sh -lc \
+			'npx convex env list --url $(CONVEX_CLI_URL) --admin-key "$$CONVEX_SELF_HOSTED_ADMIN_KEY"' > /dev/null 2>&1; then \
 			echo "Admin key is stale (volumes were probably wiped). Regenerating..."; \
 			needs_gen=true; \
 		fi; \
@@ -184,47 +190,37 @@ ensure-admin-key:
 convex-env:
 	@test -f .env || { echo "Error: .env not found. Run: cp .env.example .env"; exit 1; }
 	@prod="$$(grep '^PROD=' .env | cut -d= -f2-)"; \
-		admin_key="$$(grep '^CONVEX_SELF_HOSTED_ADMIN_KEY=' .env | cut -d= -f2-)"; \
-		if [[ -z "$$admin_key" ]]; then \
-			echo "Error: CONVEX_SELF_HOSTED_ADMIN_KEY is missing in root .env"; \
-			echo "Run make dev to generate it automatically."; \
-			exit 1; \
-		fi; \
-		if [[ "$$prod" != "1" ]]; then \
-			cd frontend && node ../scripts/with-root-env.mjs npx convex env set BIGSET_LOCAL_MODE 1 \
-			--url http://127.0.0.1:3210 \
-			--admin-key "$$admin_key"; \
-			exit 0; \
-		fi; \
+	admin_key="$$(grep '^CONVEX_SELF_HOSTED_ADMIN_KEY=' .env | cut -d= -f2-)"; \
+	if [[ -z "$$admin_key" ]]; then \
+		echo "Error: CONVEX_SELF_HOSTED_ADMIN_KEY is missing in root .env"; \
+		echo "Run make dev to generate it automatically."; \
+		exit 1; \
+	fi; \
+	if [[ "$$prod" != "1" ]]; then \
+		$(CONVEX_CLI_RUN) -e CONVEX_SELF_HOSTED_ADMIN_KEY="$$admin_key" frontend sh -lc \
+		'npx convex env set BIGSET_LOCAL_MODE 1 --url $(CONVEX_CLI_URL) --admin-key "$$CONVEX_SELF_HOSTED_ADMIN_KEY"'; \
+		exit 0; \
+	fi; \
 	issuer="$$(grep '^CLERK_JWT_ISSUER_DOMAIN=' .env | cut -d= -f2-)"; \
-		admin_key="$$(grep '^CONVEX_SELF_HOSTED_ADMIN_KEY=' .env | cut -d= -f2-)"; \
-		if [[ -z "$$issuer" || "$$issuer" == "https://your-app.clerk.accounts.dev" ]]; then \
-			echo "Error: CLERK_JWT_ISSUER_DOMAIN must be your Clerk issuer URL in root .env"; \
-			exit 1; \
-		fi; \
-		if [[ -z "$$admin_key" ]]; then \
-			echo "Error: CONVEX_SELF_HOSTED_ADMIN_KEY is missing in root .env"; \
-			echo "Run make dev to generate it automatically."; \
-			exit 1; \
-		fi; \
-		cd frontend && node ../scripts/with-root-env.mjs npx convex env set BIGSET_LOCAL_MODE 0 \
-		--url http://127.0.0.1:3210 \
-		--admin-key "$$admin_key"; \
-		cd frontend && node ../scripts/with-root-env.mjs npx convex env set CLERK_JWT_ISSUER_DOMAIN "$$issuer" \
-		--url http://127.0.0.1:3210 \
-		--admin-key "$$admin_key"
+	if [[ -z "$$issuer" || "$$issuer" == "https://your-app.clerk.accounts.dev" ]]; then \
+		echo "Error: CLERK_JWT_ISSUER_DOMAIN must be your Clerk issuer URL in root .env"; \
+		exit 1; \
+	fi; \
+	$(CONVEX_CLI_RUN) -e CONVEX_SELF_HOSTED_ADMIN_KEY="$$admin_key" frontend sh -lc \
+	'npx convex env set BIGSET_LOCAL_MODE 0 --url $(CONVEX_CLI_URL) --admin-key "$$CONVEX_SELF_HOSTED_ADMIN_KEY"'; \
+	$(CONVEX_CLI_RUN) -e CONVEX_SELF_HOSTED_ADMIN_KEY="$$admin_key" -e CLERK_JWT_ISSUER_DOMAIN="$$issuer" frontend sh -lc \
+	'npx convex env set CLERK_JWT_ISSUER_DOMAIN "$$CLERK_JWT_ISSUER_DOMAIN" --url $(CONVEX_CLI_URL) --admin-key "$$CONVEX_SELF_HOSTED_ADMIN_KEY"'
 
 convex-push:
 	@test -f .env || { echo "Error: .env not found. Run: cp .env.example .env"; exit 1; }
 	@admin_key="$$(grep '^CONVEX_SELF_HOSTED_ADMIN_KEY=' .env | cut -d= -f2-)"; \
-		if [[ -z "$$admin_key" ]]; then \
-			echo "Error: CONVEX_SELF_HOSTED_ADMIN_KEY is missing in root .env"; \
-			echo "Run make dev to generate it automatically."; \
-			exit 1; \
-		fi; \
-		cd frontend && node ../scripts/with-root-env.mjs npx convex deploy \
-		--url http://127.0.0.1:3210 \
-		--admin-key "$$admin_key"
+	if [[ -z "$$admin_key" ]]; then \
+		echo "Error: CONVEX_SELF_HOSTED_ADMIN_KEY is missing in root .env"; \
+		echo "Run make dev to generate it automatically."; \
+		exit 1; \
+	fi; \
+	$(CONVEX_CLI_RUN) -e CONVEX_SELF_HOSTED_ADMIN_KEY="$$admin_key" frontend sh -lc \
+	'npx convex deploy --url $(CONVEX_CLI_URL) --admin-key "$$CONVEX_SELF_HOSTED_ADMIN_KEY"'
 
 seed-public-datasets:
 	@test -f .env || { echo "Error: .env not found. Run: cp .env.example .env"; exit 1; }

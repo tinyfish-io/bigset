@@ -25,6 +25,7 @@ export const env = {
   CLIENT_ORIGIN: process.env.CLIENT_ORIGIN || "http://localhost:3500",
   CONVEX_URL: required("CONVEX_URL"),
   PORT: numberFromEnv("PORT", 3501),
+  SKIP_CONVEX_STARTUP: process.env.BIGSET_SKIP_CONVEX_STARTUP === "1",
 
   // Used by ./convex.ts to call internal Convex functions (e.g. agent-driven
   // row inserts). Optional today because no scheduled jobs run yet; required

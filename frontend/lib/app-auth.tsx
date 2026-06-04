@@ -18,34 +18,42 @@ const localUser = {
   imageUrl: null,
 };
 
+const localAuth = {
+  isLoaded: true,
+  isSignedIn: true,
+  userId: LOCAL_USER_ID,
+  getToken: async () => "bigset-local",
+};
+
+const localUserState = {
+  isLoaded: true,
+  isSignedIn: true,
+  user: localUser,
+};
+
+const localClerk = {
+  signOut: async () => {},
+};
+
+const localConvexAuth = {
+  isLoading: false,
+  isAuthenticated: true,
+};
+
 function useLocalAuth() {
-  return {
-    isLoaded: true,
-    isSignedIn: true,
-    userId: LOCAL_USER_ID,
-    getToken: async () => "bigset-local",
-  };
+  return localAuth;
 }
 
 function useLocalUser() {
-  return {
-    isLoaded: true,
-    isSignedIn: true,
-    user: localUser,
-  };
+  return localUserState;
 }
 
 function useLocalClerk() {
-  return {
-    signOut: async () => {},
-  };
+  return localClerk;
 }
 
 function useLocalConvexAuth() {
-  return {
-    isLoading: false,
-    isAuthenticated: true,
-  };
+  return localConvexAuth;
 }
 
 export const useAppAuth = isLocalMode ? useLocalAuth : useClerkAuth;

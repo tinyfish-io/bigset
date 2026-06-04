@@ -628,8 +628,28 @@ function startLocalRefreshScheduler(
 
 const fastify = Fastify({ logger: true });
 
+const allowedCorsOrigins = new Set([env.CLIENT_ORIGIN]);
+if (env.IS_LOCAL_MODE) {
+  try {
+    const clientOrigin = new URL(env.CLIENT_ORIGIN);
+    if (
+      clientOrigin.hostname === "localhost" ||
+      clientOrigin.hostname === "127.0.0.1"
+    ) {
+      allowedCorsOrigins.add(
+        `${clientOrigin.protocol}//localhost${clientOrigin.port ? `:${clientOrigin.port}` : ""}`,
+      );
+      allowedCorsOrigins.add(
+        `${clientOrigin.protocol}//127.0.0.1${clientOrigin.port ? `:${clientOrigin.port}` : ""}`,
+      );
+    }
+  } catch {
+    // Keep the configured origin only if CLIENT_ORIGIN is not URL-shaped.
+  }
+}
+
 await fastify.register(fastifyCors, {
-  origin: env.CLIENT_ORIGIN,
+  origin: Array.from(allowedCorsOrigins),
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization", "Cookie"],
   credentials: true,
@@ -641,12 +661,19 @@ await fastify.register(fastifyCors, {
 // protected routes — see the example block below.
 await fastify.register(clerkAuthPlugin);
 
-await clearLegacyPlaintextLocalCredentials().catch((err) => {
-  fastify.log.warn({ err }, "Failed to clear legacy local credential plaintext");
-});
+let refreshScheduler: ReturnType<typeof setInterval> | null = null;
+if (env.SKIP_CONVEX_STARTUP) {
+  fastify.log.warn(
+    "Skipping Convex startup work because BIGSET_SKIP_CONVEX_STARTUP=1",
+  );
+} else {
+  await clearLegacyPlaintextLocalCredentials().catch((err) => {
+    fastify.log.warn({ err }, "Failed to clear legacy local credential plaintext");
+  });
 
-await backfillDatasetRefreshSettings(fastify.log);
-const refreshScheduler = startLocalRefreshScheduler(fastify.log);
+  await backfillDatasetRefreshSettings(fastify.log);
+  refreshScheduler = startLocalRefreshScheduler(fastify.log);
+}
 
 // Flush queued PostHog events on graceful shutdown so a SIGTERM mid-flight
 // doesn't drop the dataset_ready_email_sent capture from the last request.
