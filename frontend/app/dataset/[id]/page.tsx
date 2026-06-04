@@ -1,6 +1,6 @@
 "use client";
 
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useConvexAuth } from "convex/react";
@@ -25,6 +25,7 @@ import type { ProfileUser } from "@/lib/profile-user";
 
 export default function DatasetPage() {
   const params = useParams();
+  const router = useRouter();
   const { isLoading: authLoading, isAuthenticated } = useConvexAuth();
   const { userId, getToken } = useAuth();
   const { user } = useUser();
@@ -36,6 +37,7 @@ export default function DatasetPage() {
   const [exportOpen, setExportOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [confirmPopulate, setConfirmPopulate] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [savingRefreshCadence, setSavingRefreshCadence] = useState(false);
   const [savingMaxRowCount, setSavingMaxRowCount] = useState(false);
   const [maxRowCountSaveError, setMaxRowCountSaveError] = useState<string | null>(null);
@@ -55,6 +57,7 @@ export default function DatasetPage() {
     authLoading ? "skip" : { datasetId },
   );
   const updateRefreshSettings = useMutation(api.datasets.updateRefreshSettings);
+  const removeDataset = useMutation(api.datasets.remove);
   const updateMaxRowCount = useMutation(api.datasets.updateMaxRowCount);
   const usage = useQuery(
     api.quota.getMy,
@@ -288,6 +291,17 @@ export default function DatasetPage() {
     }
   }
 
+  async function handleDelete() {
+    if (!dataset) return;
+    try {
+      await removeDataset({ id: dataset._id });
+      router.push("/dashboard");
+    } catch (err) {
+      console.error("[delete] failed", err);
+      captureException(err, { operation: "dataset_delete", datasetId: dataset._id });
+    }
+  }
+
   // Computed before the loading guard so the useEffect below can depend on it
   // without hitting the TDZ. Optional chaining handles the pre-load undefined state.
   const isDatasetBusy = dataset?.status === "building" || dataset?.status === "updating";
@@ -302,7 +316,6 @@ export default function DatasetPage() {
       return () => clearTimeout(id);
     }
   }, [isDatasetBusy]);
-
   if (authLoading || dataset === undefined || rows === undefined) {
     return (
       <div className="flex flex-1 items-center justify-center">
@@ -414,6 +427,7 @@ export default function DatasetPage() {
                 handlePopulate();
               }
             }}
+            onDelete={isOwner ? () => { setSettingsOpen(false); setConfirmDelete(true); } : undefined}
           />
 
           <div className="w-px h-4 bg-border mx-0.5" />
@@ -474,6 +488,17 @@ export default function DatasetPage() {
             handlePopulate();
           }}
           onCancel={() => setConfirmPopulate(false)}
+        />
+      )}
+
+      {confirmDelete && (
+        <ConfirmDeleteModal
+          datasetName={dataset.name}
+          onConfirm={() => {
+            setConfirmDelete(false);
+            handleDelete();
+          }}
+          onCancel={() => setConfirmDelete(false)}
         />
       )}
     </div>
@@ -581,6 +606,7 @@ function SettingsDropdown({
   onMaxRowCountChange,
   onUpdate,
   onPopulate,
+  onDelete,
 }: {
   open: boolean;
   onToggle: () => void;
@@ -599,6 +625,7 @@ function SettingsDropdown({
   onMaxRowCountChange: (maxRowCount: number) => void;
   onUpdate: () => void;
   onPopulate: () => void;
+  onDelete?: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [maxRowCountInput, setMaxRowCountInput] = useState(String(maxRowCount));
@@ -710,6 +737,7 @@ function SettingsDropdown({
                 <button
                   key={option.value}
                   type="button"
+
                   onClick={() => onRefreshCadenceChange(option.value)}
                   disabled={refreshCadenceDisabled || selected}
                   className="w-full flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg text-xs text-foreground hover:bg-foreground/[0.05] transition-colors disabled:cursor-default disabled:opacity-60"
@@ -724,6 +752,17 @@ function SettingsDropdown({
               );
             })}
           </div>
+          {onDelete && (
+            <div className="border-t border-border p-1">
+              <button
+                onClick={onDelete}
+                className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs text-red-500 hover:bg-red-500/[0.08] transition-colors"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+                Delete dataset
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -850,6 +889,57 @@ function ConfirmPopulateModal({
             className="flex-1 rounded-lg bg-red-600 py-1.5 text-xs font-medium text-white hover:bg-red-700 transition-colors"
           >
             Delete &amp; populate
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Confirm delete modal                                               */
+/* ------------------------------------------------------------------ */
+
+function ConfirmDeleteModal({
+  datasetName,
+  onConfirm,
+  onCancel,
+}: {
+  datasetName: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  useEffect(() => {
+    function handleKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onCancel();
+    }
+    document.addEventListener("keydown", handleKey);
+    return () => document.removeEventListener("keydown", handleKey);
+  }, [onCancel]);
+
+  return (
+    <div
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40"
+      onClick={(e) => { if (e.target === e.currentTarget) onCancel(); }}
+      role="presentation"
+    >
+      <div role="dialog" aria-modal="true" aria-labelledby="confirm-delete-title" className="w-full max-w-xs rounded-xl border border-border bg-surface shadow-2xl p-4 text-center">
+        <p id="confirm-delete-title" className="text-sm font-semibold text-foreground">
+          Delete &ldquo;{datasetName}&rdquo;?
+        </p>
+        <p className="mt-1 text-xs text-muted">All rows will be permanently deleted. This can&apos;t be undone.</p>
+        <div className="mt-4 flex gap-2">
+          <button
+            onClick={onCancel}
+            className="flex-1 rounded-lg bg-foreground/[0.06] py-1.5 text-xs font-medium text-foreground hover:bg-foreground/[0.1] transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onConfirm}
+            className="flex-1 rounded-lg bg-red-600 py-1.5 text-xs font-medium text-white hover:bg-red-700 transition-colors"
+          >
+            Delete dataset
           </button>
         </div>
       </div>
