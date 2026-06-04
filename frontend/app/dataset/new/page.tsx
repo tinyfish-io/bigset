@@ -163,6 +163,14 @@ export default function NewDatasetPage() {
 
   async function handleConfirm() {
     if (isCreating) return;
+    if (!datasetName.trim()) {
+      setError("Dataset name is required.");
+      return;
+    }
+    if (columns.length === 0) {
+      setError("Add at least one column before creating the dataset.");
+      return;
+    }
     setIsCreating(true);
     setError(null);
     let datasetId: string;
