@@ -53,11 +53,15 @@ export function useRowChangeDetection(rows: DatasetRow[]) {
     prevRowsRef.current = nextMap;
 
     if (newFlashes.size > 0) {
-      setFlashingCells((prev) => {
-        const merged = new Set(prev);
-        for (const key of newFlashes) merged.add(key);
-        return merged;
-      });
+      const updateTimer = setTimeout(() => {
+        setFlashingCells((prev) => {
+          const merged = new Set(prev);
+          for (const key of newFlashes) merged.add(key);
+          return merged;
+        });
+        flashTimersRef.current.delete(updateTimer);
+      }, 0);
+      flashTimersRef.current.add(updateTimer);
 
       const timer = setTimeout(() => {
         setFlashingCells((prev) => {
