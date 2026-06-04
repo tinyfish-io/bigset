@@ -34,7 +34,12 @@ function useTheme() {
     const html = document.documentElement;
 
     const observer = new MutationObserver(() => {
-      setTheme(readTheme());
+      const attr = html.getAttribute("data-theme");
+      if (attr === "light" || attr === "dark") {
+        setTheme(attr);
+      } else {
+        setTheme(readTheme());
+      }
     });
     observer.observe(html, { attributes: true, attributeFilter: ["data-theme"] });
     return () => observer.disconnect();
