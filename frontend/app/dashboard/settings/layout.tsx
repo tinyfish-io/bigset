@@ -33,7 +33,7 @@ export default function SettingsLayout({
   const imageUrl = user?.imageUrl;
 
   return (
-    <div className="flex flex-col h-screen">
+    <div className="flex h-screen flex-col overflow-hidden">
       <header className="border-b border-border px-6 py-3 flex items-center justify-between bg-surface shrink-0">
         <Link href="/dashboard" className="flex items-center gap-2">
           <img src="/BigSetLogo.png" alt="BigSet" className="h-6.5 dark:hidden" />
@@ -101,7 +101,7 @@ export default function SettingsLayout({
         </div>
       </header>
 
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex min-h-0 flex-1 overflow-hidden">
         {children}
       </div>
     </div>

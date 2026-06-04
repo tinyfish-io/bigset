@@ -1,11 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
-  Bot,
   CheckCircle2,
   ExternalLink,
-  Fish,
+  KeyRound,
   Loader2,
   X,
 } from "lucide-react";
@@ -22,32 +21,37 @@ type ServiceName = "tinyfish" | "openrouter";
 
 const SERVICE_COPY = {
   tinyfish: {
-    title: "TinyFish",
     modalTitle: "TinyFish API key",
-    description: "Search and fetch APIs for live dataset population.",
+    description:
+      "BigSet uses TinyFish's best-in-class search API to unlock real-time information.",
     inputPlaceholder: "tf_...",
     modalDescription: "BigSet verifies the key and stores it in your OS keychain.",
     helperHref:
       "https://agent.tinyfish.ai/api-keys?utm_source=github&utm_medium=organic&utm_campaign=bigset-developer-2026q2",
+    helperLabel: "Need a TinyFish key?",
+    helperDescription: "Open the TinyFish API keys page",
   },
   openrouter: {
-    title: "OpenRouter",
     modalTitle: "OpenRouter API key",
-    description: "Model access for schema inference and agents.",
+    description:
+      "BigSet uses OpenRouter's API to power BigSet with AI model access.",
     inputPlaceholder: "sk-or-...",
     modalDescription:
       "BigSet verifies the key and stores it in your OS keychain.",
     helperHref: "https://openrouter.ai/settings/keys",
+    helperLabel: "Need an OpenRouter key?",
+    helperDescription: "Open the OpenRouter keys page",
   },
 } satisfies Record<
   ServiceName,
   {
-    title: string;
     modalTitle: string;
     description: string;
     inputPlaceholder: string;
     modalDescription: string;
     helperHref: string;
+    helperLabel: string;
+    helperDescription: string;
   }
 >;
 
@@ -86,32 +90,30 @@ export function LocalCredentialsPanel() {
   if (!isLocalMode) return null;
 
   return (
-    <section className="mb-8 border border-border bg-surface">
-      <div className="border-b border-border px-5 py-4">
+    <section className="mb-10">
+      <div className="mb-4 max-w-2xl">
         <h2 className="text-sm font-semibold text-foreground">
           Service credentials
         </h2>
-        <p className="mt-1 text-xs leading-5 text-muted">
-          Local BigSet stores these keys in your OS keychain for this
-          workspace. Cloud deployments continue to use environment variables.
+        <p className="mt-1 text-sm leading-6 text-muted">
+          Add TinyFish and OpenRouter access for live datasets. Local keys stay
+          in your OS keychain.
         </p>
       </div>
 
       {loadError ? (
-        <div className="px-5 py-4 text-xs text-red-600 dark:text-red-400">
+        <div className="border border-red-500/30 bg-red-500/[0.06] px-4 py-3 text-sm text-red-700 dark:text-red-300">
           {loadError}
         </div>
       ) : (
-        <div className="divide-y divide-border">
-          <CredentialRow
-            icon={<Fish className="size-4" />}
+        <div className="grid gap-4">
+          <CredentialCard
             service="tinyfish"
             status={status?.services.tinyfish}
             loading={loading}
             onApiKey={() => setModal("tinyfish")}
           />
-          <CredentialRow
-            icon={<Bot className="size-4" />}
+          <CredentialCard
             service="openrouter"
             status={status?.services.openrouter}
             loading={loading}
@@ -134,14 +136,12 @@ export function LocalCredentialsPanel() {
   );
 }
 
-function CredentialRow({
-  icon,
+function CredentialCard({
   service,
   status,
   loading,
   onApiKey,
 }: {
-  icon: ReactNode;
   service: ServiceName;
   status?: ServiceSetupStatus;
   loading: boolean;
@@ -152,48 +152,94 @@ function CredentialRow({
   const detail = useCredentialDetail(status, loading);
 
   return (
-    <div className="flex flex-col gap-4 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
-      <div className="flex min-w-0 items-start gap-3">
-        <span className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-border bg-background text-foreground">
-          {icon}
-        </span>
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <h3 className="text-sm font-semibold text-foreground">
-              {copy.title}
-            </h3>
-            <StatusPill connected={connected} loading={loading} />
+    <section className="border border-border bg-surface p-5 sm:p-6">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <div className="flex h-9 items-center">
+            <ServiceBrand service={service} />
           </div>
-          <p className="mt-1 text-xs leading-5 text-muted">
-            {copy.description}
-          </p>
-          <p className="mt-1 text-xs text-foreground/70">{detail}</p>
+          <p className="mt-2 text-sm text-muted">{detail}</p>
         </div>
+        <StatusLabel connected={connected} loading={loading} />
       </div>
 
-      <div className="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end">
+      <p className="mt-6 max-w-2xl text-base leading-7 text-foreground/80">
+        {copy.description}
+      </p>
+
+      <div className="mt-6 flex flex-col gap-3">
         <button
           type="button"
           onClick={onApiKey}
-          className="rounded-lg border border-border px-3 py-2 text-xs font-medium text-foreground hover:bg-foreground/[0.04]"
+          className="inline-flex w-fit items-center gap-2 rounded-lg border border-accent bg-accent px-4 py-2.5 text-sm font-semibold text-accent-text transition-opacity hover:opacity-90"
         >
-          {connected ? "Change API key" : "Add API key"}
+          <KeyRound className="size-4" />
+          {connected ? "Update key" : "Add API key"}
         </button>
         <a
           href={copy.helperHref}
           target="_blank"
           rel="noreferrer"
-          className="inline-flex items-center gap-1.5 text-xs text-muted hover:text-foreground"
+          className="inline-flex w-fit items-center gap-1.5 text-sm font-semibold text-foreground underline decoration-border underline-offset-4 hover:decoration-foreground"
         >
-          Get key
-          <ExternalLink className="size-3" />
+          {copy.helperLabel} {copy.helperDescription}
+          <ExternalLink className="size-4 shrink-0" />
         </a>
       </div>
+    </section>
+  );
+}
+
+function ServiceBrand({ service }: { service: ServiceName }) {
+  if (service === "tinyfish") {
+    return (
+      <>
+        <img
+          src="https://www.tinyfish.ai/TF-Logos/Horizontal%20Logo/SVG/TF_Horizontal.svg"
+          alt="TinyFish"
+          className="h-8 w-auto dark:hidden"
+        />
+        <img
+          src="/logos/engines/tinyfish-wordmark-dark.svg"
+          alt="TinyFish"
+          className="hidden h-8 w-auto dark:block"
+        />
+      </>
+    );
+  }
+
+  return <OpenRouterBrand />;
+}
+
+function OpenRouterBrand() {
+  return (
+    <div className="flex items-center gap-2 text-black dark:invert">
+      <svg
+        width="24"
+        height="24"
+        viewBox="0 0 512 512"
+        xmlns="http://www.w3.org/2000/svg"
+        fill="currentColor"
+        stroke="currentColor"
+        aria-hidden="true"
+      >
+        <path
+          d="M3 248.945C18 248.945 76 236 106 219C136 202 136 202 198 158C276.497 102.293 332 120.945 423 120.945"
+          strokeWidth="90"
+        />
+        <path d="M511 121.5L357.25 210.268L357.25 32.7324L511 121.5Z" />
+        <path
+          d="M0 249C15 249 73 261.945 103 278.945C133 295.945 133 295.945 195 339.945C273.497 395.652 329 377 420 377"
+          strokeWidth="90"
+        />
+        <path d="M508 376.445L354.25 287.678L354.25 465.213L508 376.445Z" />
+      </svg>
+      <span className="text-xl font-semibold tracking-tight">OpenRouter</span>
     </div>
   );
 }
 
-function StatusPill({
+function StatusLabel({
   connected,
   loading,
 }: {
@@ -202,23 +248,19 @@ function StatusPill({
 }) {
   if (loading) {
     return (
-      <span className="inline-flex items-center gap-1.5 rounded-full border border-border px-2 py-0.5 text-[11px] font-medium text-muted">
-        <Loader2 className="size-3 animate-spin" />
+      <span className="inline-flex items-center gap-1.5 text-sm font-medium text-muted">
+        <Loader2 className="size-4 animate-spin" />
         Checking
       </span>
     );
   }
 
+  if (!connected) return null;
+
   return (
-    <span
-      className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium ${
-        connected
-          ? "border-green-500/30 text-green-700 dark:text-green-400"
-          : "border-border text-muted"
-      }`}
-    >
-      {connected && <CheckCircle2 className="size-3" />}
-      {connected ? "Connected" : "Required"}
+    <span className="inline-flex items-center gap-1.5 text-sm font-medium text-green-700 dark:text-green-400">
+      <CheckCircle2 className="size-4" />
+      Connected
     </span>
   );
 }
@@ -231,7 +273,7 @@ function useCredentialDetail(
     if (loading) return "Checking connection...";
     if (!status?.configured) return "Not connected";
     if (status.connectionMethod === "oauth") return "Connected through OAuth";
-    if (status.source === "env") return "Using key from .env";
+    if (status.source === "env") return "Connected through .env";
     return "Connected through API key";
   }, [loading, status?.configured, status?.connectionMethod, status?.source]);
 }
