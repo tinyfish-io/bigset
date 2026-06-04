@@ -273,7 +273,7 @@ You MUST now:
 3. Do not call only search_web/fetch_page and stop.
 4. Stop as soon as at least one row has been inserted if you cannot confidently find more rows.`;
 
-        const retryResult = await agent.generate(retryPrompt, { maxSteps: 40 });
+        const retryResult = await agent.generate(retryPrompt, { maxSteps: 80 });
         metrics.addOrchestratorResult(retryResult);
         metrics.countToolCalls(retryResult.toolCalls ?? []);
 
