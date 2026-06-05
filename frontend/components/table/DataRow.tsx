@@ -117,6 +117,7 @@ function DataRowImpl({
         const value = row.original.data[col.name];
         const isPending = pendingRowIds.has(row.original._id);
         const isFlashing = flashingCells.has(`${row.original._id}:${col.name}`);
+        const hasProvenance = !!row.original.provenance?.[col.name];
         return (
           <div
             key={col.name}
@@ -131,7 +132,17 @@ function DataRowImpl({
               padding: "var(--table-cell-py) var(--table-cell-px)",
             }}
           >
-            <CellValue value={value} type={col.type} />
+            <div className="flex items-center gap-1.5 min-w-0 pr-6">
+              <div className="truncate">
+                <CellValue value={value} type={col.type} />
+              </div>
+              {hasProvenance && (
+                <span
+                  title="Source provenance available"
+                  className="inline-flex shrink-0 w-1.5 h-1.5 rounded-full bg-emerald-500/70"
+                />
+              )}
+            </div>
             <button
               type="button"
               onClick={(e) => {

@@ -82,6 +82,16 @@ export default defineSchema({
     datasetId: v.id("datasets"),
     data: v.record(v.string(), v.any()),
     sources: v.optional(v.array(v.string())),
+    provenance: v.optional(
+      v.record(
+        v.string(),
+        v.object({
+          url: v.string(),
+          query: v.optional(v.string()),
+          snippet: v.optional(v.string()),
+        })
+      )
+    ),
     rowSummary: v.optional(v.string()),
     howFound: v.optional(v.string()),
     updateStatus: v.optional(v.literal("pending")),
@@ -170,6 +180,8 @@ export default defineSchema({
     rowsUpdated: v.optional(v.number()),
   })
     .index("by_dataset", ["datasetId"])
+    .index("by_dataset_started_at", ["datasetId", "startedAt"])
     .index("by_user", ["userId"])
+    .index("by_user_started_at", ["userId", "startedAt"])
     .index("by_workflow_run", ["workflowRunId"]),
 });

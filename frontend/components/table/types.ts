@@ -29,5 +29,13 @@ export interface DatasetRow {
   _creationTime: number;
   data: Record<string, unknown>;
   sources?: string[];
+  provenance?: Record<
+    string,
+    {
+      url: string;
+      query?: string;
+      snippet?: string;
+    }
+  >;
   updateStatus?: "pending";
 }

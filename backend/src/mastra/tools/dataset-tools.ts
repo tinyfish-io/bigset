@@ -131,6 +131,17 @@ export function buildPopulateTools(
         .array(z.string())
         .optional()
         .describe("URLs you visited or used to gather data for this row"),
+      provenance: z
+        .record(
+          z.string(),
+          z.object({
+            url: z.string(),
+            query: z.string().optional(),
+            snippet: z.string().optional(),
+          })
+        )
+        .optional()
+        .describe("Mapping of column names to their detailed source provenance (url, query, snippet)"),
       row_summary: z
         .string()
         .optional()
@@ -141,7 +152,7 @@ export function buildPopulateTools(
         .describe("Brief description of how you found and verified this data"),
     }),
     outputSchema: writeResultSchema,
-    execute: async ({ data, sources, row_summary, how_found }) => {
+    execute: async ({ data, sources, provenance, row_summary, how_found }) => {
       if (!data || Object.keys(data).length === 0)
         return {
           success: false,
@@ -158,6 +169,7 @@ export function buildPopulateTools(
           datasetId: authorizedDatasetId,
           data: cleanedData,
           ...(sources !== undefined ? { sources } : {}),
+          ...(provenance !== undefined ? { provenance } : {}),
           ...(row_summary !== undefined ? { rowSummary: row_summary } : {}),
           ...(how_found !== undefined ? { howFound: how_found } : {}),
         });
@@ -265,6 +277,17 @@ export function buildPopulateTools(
         .array(z.string())
         .optional()
         .describe("Updated source URLs where this data was verified"),
+      provenance: z
+        .record(
+          z.string(),
+          z.object({
+            url: z.string(),
+            query: z.string().optional(),
+            snippet: z.string().optional(),
+          })
+        )
+        .optional()
+        .describe("Updated mapping of column names to their detailed source provenance (url, query, snippet)"),
       row_summary: z
         .string()
         .optional()
@@ -275,7 +298,7 @@ export function buildPopulateTools(
         .describe("Brief description of how the updated data was found"),
     }),
     outputSchema: writeResultSchema,
-    execute: async ({ rowId, data, sources, row_summary, how_found }) => {
+    execute: async ({ rowId, data, sources, provenance, row_summary, how_found }) => {
       if (!rowId) return { success: false, error: "rowId is required." };
       if (!data || Object.keys(data).length === 0)
         return {
@@ -293,6 +316,7 @@ export function buildPopulateTools(
           expectedDatasetId: authorizedDatasetId,
           data: cleanedData,
           ...(sources !== undefined ? { sources } : {}),
+          ...(provenance !== undefined ? { provenance } : {}),
           ...(row_summary !== undefined ? { rowSummary: row_summary } : {}),
           ...(how_found !== undefined ? { howFound: how_found } : {}),
         });
