@@ -269,7 +269,23 @@ We'd love your feedback, ideas, or help building — come say hi:
 - 🗣 **Twitter:** [@not_simantak](https://x.com/not_simantak) for the unfiltered version
 - 🐛 **GitHub Issues:** [Report bugs or request features](https://github.com/tinyfish-io/bigset/issues)
 
+
+## Star History
+
+<p align="center">
+  <a href="https://www.star-history.com/#tinyfish-io/bigset&type=date">
+    <img src="https://api.star-history.com/svg?repos=tinyfish-io/bigset&type=date&legend=top-left" alt="Star History Chart">
+  </a>
+</p>
+
+
 ## 🤝 Contributing
+
+<a href="https://github.com/tinyfish-io/bigset/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=tinyfish-io/bigset" />
+</a>
+
+^ This awesome team is behing BigSet! We'd love to have you on board :) 
 
 Contributions are very welcome — whether it's code, feedback, or just telling us what datasets you'd want to build.
 
