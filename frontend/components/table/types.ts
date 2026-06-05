@@ -28,5 +28,6 @@ export interface DatasetRow {
   _id: string;
   _creationTime: number;
   data: Record<string, unknown>;
+  sources?: string[];
   updateStatus?: "pending";
 }

@@ -32,11 +32,19 @@ function applyTheme(theme: Theme): void {
 
 function subscribeToThemeChange(onThemeChange: () => void): () => void {
   if (typeof window === "undefined") return () => {};
-  window.addEventListener("storage", onThemeChange);
-  window.addEventListener(THEME_CHANGED_EVENT, onThemeChange);
+  const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+  function syncTheme() {
+    applyTheme(readEffectiveTheme());
+    onThemeChange();
+  }
+
+  window.addEventListener("storage", syncTheme);
+  window.addEventListener(THEME_CHANGED_EVENT, syncTheme);
+  mediaQuery.addEventListener("change", syncTheme);
   return () => {
-    window.removeEventListener("storage", onThemeChange);
-    window.removeEventListener(THEME_CHANGED_EVENT, onThemeChange);
+    window.removeEventListener("storage", syncTheme);
+    window.removeEventListener(THEME_CHANGED_EVENT, syncTheme);
+    mediaQuery.removeEventListener("change", syncTheme);
   };
 }
 

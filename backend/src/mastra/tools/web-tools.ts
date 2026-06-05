@@ -35,7 +35,7 @@ export const searchWebTool = createTool({
     const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
     try {
       const res = await fetch(url, {
-        headers: { "X-API-Key": apiKey },
+        headers: { "X-API-Key": apiKey, "X-TF-Request-Origin": "bigset" },
         signal: controller.signal,
       });
       clearTimeout(timeout);
@@ -104,6 +104,7 @@ export const fetchPageTool = createTool({
         headers: {
           "Content-Type": "application/json",
           "X-API-Key": apiKey,
+          "X-TF-Request-Origin": "bigset",
         },
         body: JSON.stringify({ urls: [targetUrl], format: "markdown" }),
         signal: controller.signal,
