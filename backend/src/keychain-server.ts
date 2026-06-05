@@ -132,8 +132,9 @@ async function handleRequest(
         return;
       }
 
+      const apiKey = body.apiKey.trim();
       const { entry, account } = credentialEntry(body.service);
-      entry.setPassword(body.apiKey);
+      entry.setPassword(apiKey);
       writeJson(res, 200, { keychainAccount: account });
       return;
     }

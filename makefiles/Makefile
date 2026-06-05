@@ -134,8 +134,8 @@ start-local-keychain:
 	fi
 	@port="$$(grep '^LOCAL_KEYCHAIN_PORT=' .env | tail -n1 | cut -d= -f2-)"; \
 	echo "Starting local keychain bridge on 127.0.0.1:$$port..."; \
-	LOCAL_KEYCHAIN_BIND_HOST=127.0.0.1 bash -lc 'cd backend && exec node ../scripts/with-root-env.mjs npx tsx src/keychain-server.ts' \
-		> .local/keychain.log 2>&1 & echo $$! > .local/keychain.pid; \
+	LOCAL_KEYCHAIN_BIND_HOST=127.0.0.1 WITH_ROOT_ENV_CHILD_PID_FILE=.local/keychain.pid bash -lc 'cd backend && exec node ../scripts/with-root-env.mjs npx tsx src/keychain-server.ts' \
+		> .local/keychain.log 2>&1 & \
 	for i in $$(seq 1 30); do \
 		if curl -sf "http://127.0.0.1:$$port/health" > /dev/null 2>&1; then \
 			echo "Local keychain bridge is up."; \

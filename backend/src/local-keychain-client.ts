@@ -13,6 +13,30 @@ interface KeychainSetResponse {
   keychainAccount: string;
 }
 
+type KeychainResponseValidator<T> = (payload: unknown) => payload is T;
+
+function isJsonObject(payload: unknown): payload is Record<string, unknown> {
+  return (
+    payload !== null && typeof payload === "object" && !Array.isArray(payload)
+  );
+}
+
+function isKeychainGetResponse(
+  payload: unknown,
+): payload is KeychainGetResponse {
+  return (
+    isJsonObject(payload) &&
+    (typeof payload.apiKey === "string" || payload.apiKey === null) &&
+    typeof payload.keychainAccount === "string"
+  );
+}
+
+function isKeychainSetResponse(
+  payload: unknown,
+): payload is KeychainSetResponse {
+  return isJsonObject(payload) && typeof payload.keychainAccount === "string";
+}
+
 function requireKeychainConfig(): { url: string; token: string } {
   if (!env.LOCAL_KEYCHAIN_URL || !env.LOCAL_KEYCHAIN_TOKEN) {
     throw new Error(
@@ -30,6 +54,7 @@ function keychainUrl(path: string): string {
 async function keychainRequest<T>(
   path: string,
   body: Record<string, unknown>,
+  validatePayload: KeychainResponseValidator<T>,
 ): Promise<T> {
   const { token } = requireKeychainConfig();
   const controller = new AbortController();
@@ -49,15 +74,31 @@ async function keychainRequest<T>(
       signal: controller.signal,
     });
 
-    const payload = (await response.json().catch(() => null)) as
-      | { error?: string }
-      | null;
+    const payload: unknown = await response.json().catch(() => null);
 
     if (!response.ok) {
-      throw new Error(payload?.error || `Keychain bridge error (${response.status})`);
+      const bridgeError =
+        isJsonObject(payload) && typeof payload.error === "string"
+          ? payload.error
+          : null;
+      throw new Error(
+        bridgeError || `Keychain bridge error (${response.status})`,
+      );
     }
 
-    return payload as T;
+    if (!isJsonObject(payload)) {
+      throw new Error(
+        `Keychain bridge returned an invalid response for ${path}: expected a JSON object.`,
+      );
+    }
+
+    if (!validatePayload(payload)) {
+      throw new Error(
+        `Keychain bridge returned an invalid response for ${path}.`,
+      );
+    }
+
+    return payload;
   } catch (err) {
     if (err instanceof Error && err.name === "AbortError") {
       throw new Error("Local keychain bridge timed out.");
@@ -77,9 +118,13 @@ export function expectedKeychainAccount(
 export async function getKeychainCredential(
   service: LocalCredentialService,
 ): Promise<{ apiKey: string; keychainAccount: string } | null> {
-  const result = await keychainRequest<KeychainGetResponse>("/credentials/get", {
-    service,
-  });
+  const result = await keychainRequest<KeychainGetResponse>(
+    "/credentials/get",
+    {
+      service,
+    },
+    isKeychainGetResponse,
+  );
 
   if (!result.apiKey) return null;
   return {
@@ -92,8 +137,12 @@ export async function setKeychainCredential(
   service: LocalCredentialService,
   apiKey: string,
 ): Promise<{ keychainAccount: string }> {
-  return await keychainRequest<KeychainSetResponse>("/credentials/set", {
-    service,
-    apiKey,
-  });
+  return await keychainRequest<KeychainSetResponse>(
+    "/credentials/set",
+    {
+      service,
+      apiKey,
+    },
+    isKeychainSetResponse,
+  );
 }

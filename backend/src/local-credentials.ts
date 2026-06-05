@@ -1,5 +1,6 @@
 import { convex, internal } from "./convex.js";
 import { env } from "./env.js";
+import { FETCH_TIMEOUT_MS } from "./fetch-timeout.js";
 import {
   getKeychainCredential,
   setKeychainCredential,
@@ -109,6 +110,25 @@ export function tinyFishHeaders(apiKey: string): Record<string, string> {
   };
 }
 
+async function withFetchTimeout<T>(
+  operation: (signal: AbortSignal) => Promise<T>,
+  timeoutMessage: string,
+): Promise<T> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+
+  try {
+    return await operation(controller.signal);
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") {
+      throw new Error(timeoutMessage);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export async function requireLocalSetupComplete(): Promise<void> {
   if (!env.IS_LOCAL_MODE) return;
   const status = await getLocalSetupStatus();
@@ -207,36 +227,49 @@ export async function verifyTinyFishApiKey(apiKey: string): Promise<void> {
   const url = new URL("https://api.search.tinyfish.ai");
   url.searchParams.set("query", "BigSet");
 
-  const response = await fetch(url, {
-    headers: tinyFishHeaders(apiKey),
-  });
+  await withFetchTimeout(
+    async (signal) => {
+      const response = await fetch(url, {
+        headers: tinyFishHeaders(apiKey),
+        signal,
+      });
 
-  if (!response.ok) {
-    if (response.status === 401) {
-      throw new Error("TinyFish rejected that API key.");
-    }
-    throw new Error(
-      `TinyFish verification failed with HTTP ${response.status}.`,
-    );
-  }
+      if (!response.ok) {
+        if (response.status === 401) {
+          throw new Error("TinyFish rejected that API key.");
+        }
+        throw new Error(
+          `TinyFish verification failed with HTTP ${response.status}.`,
+        );
+      }
+    },
+    `TinyFish verification timed out after ${FETCH_TIMEOUT_MS / 1000} seconds.`,
+  );
 }
 
 export async function verifyOpenRouterApiKey(apiKey: string): Promise<void> {
   const baseUrl = (
     process.env.OPENROUTER_BASE_URL || "https://openrouter.ai/api/v1"
   ).replace(/\/+$/, "");
-  const response = await fetch(`${baseUrl}/models`, {
-    headers: { Authorization: `Bearer ${apiKey}` },
-  });
 
-  if (!response.ok) {
-    if (response.status === 401 || response.status === 403) {
-      throw new Error("OpenRouter rejected that API key.");
-    }
-    throw new Error(
-      `OpenRouter verification failed with HTTP ${response.status}.`,
-    );
-  }
+  await withFetchTimeout(
+    async (signal) => {
+      const response = await fetch(`${baseUrl}/models`, {
+        headers: { Authorization: `Bearer ${apiKey}` },
+        signal,
+      });
+
+      if (!response.ok) {
+        if (response.status === 401 || response.status === 403) {
+          throw new Error("OpenRouter rejected that API key.");
+        }
+        throw new Error(
+          `OpenRouter verification failed with HTTP ${response.status}.`,
+        );
+      }
+    },
+    `OpenRouter verification timed out after ${FETCH_TIMEOUT_MS / 1000} seconds.`,
+  );
 }
 
 export async function exchangeOpenRouterOAuthCode({
@@ -246,25 +279,31 @@ export async function exchangeOpenRouterOAuthCode({
   code: string;
   codeVerifier: string;
 }): Promise<string> {
-  const response = await fetch("https://openrouter.ai/api/v1/auth/keys", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      code,
-      code_verifier: codeVerifier,
-      code_challenge_method: "S256",
-    }),
-  });
+  return await withFetchTimeout(
+    async (signal) => {
+      const response = await fetch("https://openrouter.ai/api/v1/auth/keys", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          code,
+          code_verifier: codeVerifier,
+          code_challenge_method: "S256",
+        }),
+        signal,
+      });
 
-  if (!response.ok) {
-    throw new Error(
-      `OpenRouter OAuth exchange failed with HTTP ${response.status}.`,
-    );
-  }
+      if (!response.ok) {
+        throw new Error(
+          `OpenRouter OAuth exchange failed with HTTP ${response.status}.`,
+        );
+      }
 
-  const body = (await response.json()) as { key?: string };
-  if (!body.key) {
-    throw new Error("OpenRouter OAuth exchange did not return an API key.");
-  }
-  return body.key;
+      const body = (await response.json()) as { key?: string };
+      if (!body.key) {
+        throw new Error("OpenRouter OAuth exchange did not return an API key.");
+      }
+      return body.key;
+    },
+    `OpenRouter OAuth exchange timed out after ${FETCH_TIMEOUT_MS / 1000} seconds.`,
+  );
 }

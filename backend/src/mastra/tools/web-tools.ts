@@ -1,8 +1,7 @@
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
+import { FETCH_TIMEOUT_MS } from "../../fetch-timeout.js";
 import { getTinyFishApiKey, tinyFishHeaders } from "../../local-credentials.js";
-
-const FETCH_TIMEOUT_MS = 30_000;
 
 const searchResultSchema = z.object({
   title: z.string(),
