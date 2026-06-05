@@ -43,6 +43,29 @@ const BACKEND_TYPE_MAP: Record<InferredColumn["type"], ColumnType> = {
   boolean: "boolean",
 };
 
+const EXAMPLE_PROMPTS = [
+  {
+    label: "Funded startup leads",
+    prompt:
+      "Startups that raised funding in the last 30 days, with what they do, funding stage, location, and careers page.",
+  },
+  {
+    label: "Engineering hiring targets",
+    prompt:
+      "YC companies currently hiring engineers, with funding stage, location, and number of open roles.",
+  },
+  {
+    label: "Free-tier SaaS gaps",
+    prompt:
+      "Popular B2B SaaS tools that offer a free tier, with category, free-tier summary, and pricing page URL.",
+  },
+  {
+    label: "AI skills roadmap",
+    prompt:
+      "AI startups hiring engineers right now, with the specific skills and stack listed in each role.",
+  },
+];
+
 function mapBackendColumn(col: InferredColumn, index: number): ProposedColumn {
   return {
     id: String(index + 1),
@@ -235,6 +258,29 @@ export default function NewDatasetPage() {
                   rows={4}
                   className="w-full rounded-lg border border-border bg-surface px-4 py-3 text-sm outline-none placeholder:text-muted/50 focus:border-foreground/30 transition-colors resize-none"
                 />
+              </div>
+
+              <div className="space-y-3">
+                <p className="text-xs font-medium uppercase tracking-wider text-muted">
+                  Try an example
+                </p>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {EXAMPLE_PROMPTS.map((example) => (
+                    <button
+                      key={example.label}
+                      type="button"
+                      onClick={() => setPrompt(example.prompt)}
+                      className="rounded-lg border border-border bg-surface px-3 py-2.5 text-left transition-colors hover:border-foreground/30 hover:bg-foreground/[0.03]"
+                    >
+                      <span className="block text-sm font-medium text-foreground">
+                        {example.label}
+                      </span>
+                      <span className="mt-1 block line-clamp-2 text-xs leading-relaxed text-muted">
+                        {example.prompt}
+                      </span>
+                    </button>
+                  ))}
+                </div>
               </div>
 
               {error && (

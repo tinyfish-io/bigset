@@ -55,6 +55,37 @@ Any dataset. Any source. Always fresh. That's the idea.
 5. **You get a structured table**: browse it in the UI, export CSV or XLSX
 6. **Set a refresh cadence** and the agents re-run on schedule, keeping the dataset current automatically
 
+## Example Workflow: Find Funded Leads (and Your Next Job)
+
+Companies that just raised funding usually have budget and urgent problems to solve, which makes them useful sales leads, hiring targets, and market signals. BigSet can turn one sentence into a live dataset of those companies.
+
+### 1. Type one sentence
+
+```text
+Startups that raised funding in the last 30 days, with what they do, funding stage, location, and careers page.
+```
+
+BigSet infers the schema: company, description, funding stage, location, careers page, source links, and any other useful columns it needs.
+
+### 2. Let agents research the live web
+
+The orchestrator discovers recently funded companies, then sub-agents fan out in parallel to research one company each. Rows are deduplicated, and findings are checked against public sources before they land in your table.
+
+### 3. Export and refresh
+
+Export the dataset to CSV or XLSX, then set a refresh cadence: 30 minutes, 6 hours, 12 hours, daily, or weekly. The agents re-run on that schedule so the list keeps pulling in fresh companies as funding news drops.
+
+### Prompts to Steal
+
+| Goal | Prompt |
+|------|--------|
+| Find leads or clients | `Startups that raised funding in the last 30 days, with what they do, funding stage, location, and careers page.` |
+| Apply before jobs are posted | `YC companies currently hiring engineers, with funding stage, location, and number of open roles.` |
+| Spot side-project gaps | `Popular B2B SaaS tools that offer a free tier, with category, free-tier summary, and pricing page URL.` |
+| Pick what to learn next | `AI startups hiring engineers right now, with the specific skills and stack listed in each role.` |
+
+Funded startups are leads. What gets funded is a signal for your next idea. What they hire for is your learning roadmap.
+
 ## Things to Know Before You Start
 
 - **It's experimental.** Expect rough edges; schema inference isn't always perfect, and some topics work better than others.
