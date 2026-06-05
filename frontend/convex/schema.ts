@@ -82,6 +82,16 @@ export default defineSchema({
     datasetId: v.id("datasets"),
     data: v.record(v.string(), v.any()),
     sources: v.optional(v.array(v.string())),
+    provenance: v.optional(
+      v.record(
+        v.string(),
+        v.object({
+          url: v.string(),
+          query: v.optional(v.string()),
+          snippet: v.optional(v.string()),
+        })
+      )
+    ),
     rowSummary: v.optional(v.string()),
     howFound: v.optional(v.string()),
     updateStatus: v.optional(v.literal("pending")),

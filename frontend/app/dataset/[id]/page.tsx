@@ -41,6 +41,11 @@ export default function DatasetPage() {
     column: DatasetColumn;
     value: unknown;
     sources?: string[];
+    provenance?: {
+      url: string;
+      query?: string;
+      snippet?: string;
+    };
   } | null>(null);
 
   const datasetId = params.id as Id<"datasets">;
@@ -95,7 +100,12 @@ export default function DatasetPage() {
     const col = dataset.columns.find((c) => c.name === columnName);
     if (!col) return;
     const row = rows.find((r) => r._id === rowId);
-    setCellDetail({ column: col, value, sources: row?.sources });
+    setCellDetail({
+      column: col,
+      value,
+      sources: row?.sources,
+      provenance: row?.provenance?.[columnName],
+    });
   }, [dataset, rows]);
 
   const openedFired = useRef<string | null>(null);
@@ -409,6 +419,7 @@ export default function DatasetPage() {
             column={cellDetail.column}
             value={cellDetail.value}
             sources={cellDetail.sources}
+            provenance={cellDetail.provenance}
           />
         )}
       </SideSheet>
