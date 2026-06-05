@@ -61,6 +61,7 @@ export default function DatasetPage() {
         dataset._id,
         dataset.name,
         dataset.description,
+        dataset.maxRowCount ?? 100,
         dataset.columns,
         token,
       );

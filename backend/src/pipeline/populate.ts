@@ -12,6 +12,7 @@ export const datasetContextSchema = z.object({
   datasetId: z.string().min(1),
   datasetName: z.string(),
   description: z.string(),
+  maxRowCount: z.number().int().min(1).default(100),
   columns: z.array(populateColumnSchema).min(1),
   rowIds: z.array(z.string()).min(1).optional(),
 });
