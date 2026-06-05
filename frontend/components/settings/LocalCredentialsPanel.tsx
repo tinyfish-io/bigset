@@ -126,7 +126,6 @@ export function LocalCredentialsPanel() {
         <ApiKeyModal
           service={modal}
           onClose={() => setModal(null)}
-          onStatusChange={setStatus}
           onSaved={(next) => {
             setStatus(next);
             setModal(null);
@@ -282,12 +281,10 @@ function useCredentialDetail(
 function ApiKeyModal({
   service,
   onClose,
-  onStatusChange,
   onSaved,
 }: {
   service: ServiceName;
   onClose: () => void;
-  onStatusChange: (status: LocalSetupStatus) => void;
   onSaved: (status: LocalSetupStatus) => void;
 }) {
   const [apiKey, setApiKey] = useState("");
@@ -307,11 +304,6 @@ function ApiKeyModal({
       onSaved(next);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Verification failed");
-      try {
-        onStatusChange(await getLocalSetupStatus());
-      } catch {
-        // Keep the verification error visible if status refresh also fails.
-      }
     } finally {
       setSaving(false);
     }

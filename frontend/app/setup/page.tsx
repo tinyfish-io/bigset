@@ -130,7 +130,6 @@ export default function SetupPage() {
         <ApiKeyModal
           service={modal}
           onClose={() => setModal(null)}
-          onStatusChange={setStatus}
           onSaved={(next) => {
             setStatus(next);
             setModal(null);
@@ -256,12 +255,10 @@ function OpenRouterBrand() {
 function ApiKeyModal({
   service,
   onClose,
-  onStatusChange,
   onSaved,
 }: {
   service: "tinyfish" | "openrouter";
   onClose: () => void;
-  onStatusChange: (status: LocalSetupStatus) => void;
   onSaved: (status: LocalSetupStatus) => void;
 }) {
   const [apiKey, setApiKey] = useState("");
@@ -280,11 +277,6 @@ function ApiKeyModal({
       onSaved(next);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Verification failed");
-      try {
-        onStatusChange(await getLocalSetupStatus());
-      } catch {
-        // Keep the verification error visible if status refresh also fails.
-      }
     } finally {
       setSaving(false);
     }
