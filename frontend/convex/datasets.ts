@@ -424,6 +424,21 @@ export const updateRefreshSettings = mutation({
   },
 });
 
+export const updateMaxRowCount = mutation({
+  args: {
+    id: v.id("datasets"),
+    maxRowCount: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const dataset = await loadOwnedDataset(ctx, args.id);
+    validateMaxRowCount(args.maxRowCount);
+    await requireQuotaRemaining(ctx, dataset.ownerId, args.maxRowCount);
+    await ctx.db.patch(dataset._id, {
+      maxRowCount: args.maxRowCount,
+    });
+  },
+});
+
 export const backfillRefreshSettings = internalMutation({
   args: {
     defaultCadence: v.optional(refreshCadenceValidator),

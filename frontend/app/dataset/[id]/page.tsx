@@ -23,7 +23,7 @@ import type { ProfileUser } from "@/lib/profile-user";
 
 export default function DatasetPage() {
   const params = useParams();
-  const { isLoading: authLoading } = useConvexAuth();
+  const { isLoading: authLoading, isAuthenticated } = useConvexAuth();
   const { userId, getToken } = useAuth();
   const { user } = useUser();
   const { signOut } = useClerk();
@@ -34,6 +34,7 @@ export default function DatasetPage() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [confirmPopulate, setConfirmPopulate] = useState(false);
   const [savingRefreshCadence, setSavingRefreshCadence] = useState(false);
+  const [savingMaxRowCount, setSavingMaxRowCount] = useState(false);
 
   const datasetId = params.id as Id<"datasets">;
   const dataset = useQuery(
@@ -45,6 +46,11 @@ export default function DatasetPage() {
     authLoading ? "skip" : { datasetId },
   );
   const updateRefreshSettings = useMutation(api.datasets.updateRefreshSettings);
+  const updateMaxRowCount = useMutation(api.datasets.updateMaxRowCount);
+  const usage = useQuery(
+    api.quota.getMy,
+    isAuthenticated ? {} : "skip",
+  );
 
   const rowIds = useMemo(() => (rows ?? []).map((r) => r._id), [rows]);
   const selection = useSelection(rowIds);
@@ -196,6 +202,34 @@ export default function DatasetPage() {
     }
   }
 
+  async function handleMaxRowCountChange(maxRowCount: number) {
+    if (!dataset || savingMaxRowCount || userId !== dataset.ownerId) return;
+    if (!Number.isInteger(maxRowCount) || maxRowCount < 1) {
+      captureException(new Error("Invalid max row count"), {
+        operation: "dataset_max_row_count_update",
+        datasetId: dataset._id,
+      });
+      return;
+    }
+    if (usage && maxRowCount > usage.remaining) return;
+
+    setSavingMaxRowCount(true);
+    try {
+      await updateMaxRowCount({
+        id: dataset._id,
+        maxRowCount,
+      });
+    } catch (err) {
+      console.error("[max rows] failed", err);
+      captureException(err, {
+        operation: "dataset_max_row_count_update",
+        datasetId: dataset._id,
+      });
+    } finally {
+      setSavingMaxRowCount(false);
+    }
+  }
+
   if (authLoading || dataset === undefined || rows === undefined) {
     return (
       <div className="flex flex-1 items-center justify-center">
@@ -215,6 +249,7 @@ export default function DatasetPage() {
     ...dataset,
     refreshCadence: dataset.refreshCadence ?? "daily",
     refreshEnabled: dataset.refreshEnabled ?? true,
+    maxRowCount: dataset.maxRowCount ?? 100,
   };
   const updateDisabled = updating || isDatasetBusy;
   const populateDisabled = populating || isDatasetBusy;
@@ -274,11 +309,15 @@ export default function DatasetPage() {
             onClose={() => setSettingsOpen(false)}
             refreshCadence={displayDataset.refreshCadence}
             refreshCadenceDisabled={!isOwner || savingRefreshCadence}
+            maxRowCount={displayDataset.maxRowCount}
+            maxRowCountRemaining={usage?.remaining}
+            maxRowCountDisabled={!isOwner || savingMaxRowCount}
             updateLabel={updateLabel}
             updateDisabled={updateDisabled}
             populateLabel={populateLabel}
             populateDisabled={populateDisabled}
             onRefreshCadenceChange={handleRefreshCadenceChange}
+            onMaxRowCountChange={handleMaxRowCountChange}
             onUpdate={() => { setSettingsOpen(false); handleUpdate(); }}
             onPopulate={() => {
               setSettingsOpen(false);
@@ -432,11 +471,15 @@ function SettingsDropdown({
   onClose,
   refreshCadence,
   refreshCadenceDisabled,
+  maxRowCount,
+  maxRowCountRemaining,
+  maxRowCountDisabled,
   updateLabel,
   updateDisabled,
   populateLabel,
   populateDisabled,
   onRefreshCadenceChange,
+  onMaxRowCountChange,
   onUpdate,
   onPopulate,
 }: {
@@ -445,15 +488,31 @@ function SettingsDropdown({
   onClose: () => void;
   refreshCadence: RefreshCadence;
   refreshCadenceDisabled: boolean;
+  maxRowCount: number;
+  maxRowCountRemaining?: number;
+  maxRowCountDisabled: boolean;
   updateLabel: string;
   updateDisabled: boolean;
   populateLabel: string;
   populateDisabled: boolean;
   onRefreshCadenceChange: (refreshCadence: RefreshCadence) => void;
+  onMaxRowCountChange: (maxRowCount: number) => void;
   onUpdate: () => void;
   onPopulate: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  const [maxRowCountInput, setMaxRowCountInput] = useState(String(maxRowCount));
+  const parsedMaxRowCount = Number(maxRowCountInput);
+  const maxRowCountError =
+    !maxRowCountInput.trim()
+      ? "Required"
+      : !Number.isInteger(parsedMaxRowCount) || parsedMaxRowCount < 1
+        ? "Use a whole number"
+        : maxRowCountRemaining !== undefined && parsedMaxRowCount > maxRowCountRemaining
+          ? `Max ${maxRowCountRemaining.toLocaleString()}`
+          : null;
+  const maxRowCountChanged =
+    Number.isInteger(parsedMaxRowCount) && parsedMaxRowCount !== maxRowCount;
 
   useEffect(() => {
     if (!open) return;
@@ -463,6 +522,10 @@ function SettingsDropdown({
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
   }, [open, onClose]);
+
+  useEffect(() => {
+    if (!open) setMaxRowCountInput(String(maxRowCount));
+  }, [maxRowCount, open]);
 
   return (
     <div ref={ref} className="relative">
@@ -476,7 +539,7 @@ function SettingsDropdown({
       </button>
 
       {open && (
-        <div className="absolute right-0 top-full mt-1.5 w-56 rounded-xl border border-border bg-surface shadow-xl ring-1 ring-black/[0.04] z-50 overflow-hidden">
+        <div className="absolute right-0 top-full mt-1.5 w-64 rounded-xl border border-border bg-surface shadow-xl ring-1 ring-black/[0.04] z-50 overflow-hidden">
           <div className="p-1">
             <button
               onClick={onUpdate}
@@ -494,6 +557,47 @@ function SettingsDropdown({
               <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polygon points="5 3 19 12 5 21 5 3"/></svg>
               {populateLabel}
             </button>
+          </div>
+          <div className="border-t border-border p-2">
+            <div className="mb-1 text-[11px] font-medium text-muted">
+              Max rows
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                value={maxRowCountInput}
+                disabled={maxRowCountDisabled}
+                onChange={(e) => setMaxRowCountInput(e.currentTarget.value)}
+                onBlur={() => {
+                  if (!maxRowCountInput.trim()) return;
+                  const value = Number(maxRowCountInput);
+                  if (Number.isInteger(value) && value >= 1) {
+                    setMaxRowCountInput(String(value));
+                  }
+                }}
+                className="min-w-0 flex-1 rounded-lg border border-border bg-background px-2 py-1.5 text-xs text-foreground outline-none transition-colors focus:border-foreground/30 disabled:opacity-50"
+              />
+              <button
+                type="button"
+                disabled={
+                  maxRowCountDisabled ||
+                  !maxRowCountChanged ||
+                  maxRowCountError !== null
+                }
+                onClick={() => onMaxRowCountChange(parsedMaxRowCount)}
+                className="rounded-lg border border-border px-2 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-foreground/[0.05] disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Save
+              </button>
+            </div>
+            <p className="mt-1 text-[11px] text-muted">
+              {maxRowCountError ??
+                (maxRowCountRemaining !== undefined
+                  ? `${maxRowCountRemaining.toLocaleString()} row operations available`
+                  : "Applies to the next populate run")}
+            </p>
           </div>
           <div className="border-t border-border p-1">
             <div className="px-2 py-1 text-[11px] font-medium text-muted">
