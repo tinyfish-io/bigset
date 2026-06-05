@@ -773,7 +773,6 @@ await fastify.register(async (instance) => {
         id: parsed.data.datasetId,
       });
       if (!dataset) {
-        await setDatasetPopulateStatus(parsed.data.datasetId, "failed", "Dataset not found");
         return reply.code(404).send({ error: "Dataset not found" });
       }
 

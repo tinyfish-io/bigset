@@ -432,7 +432,9 @@ export const updateMaxRowCount = mutation({
   handler: async (ctx, args) => {
     const dataset = await loadOwnedDataset(ctx, args.id);
     validateMaxRowCount(args.maxRowCount);
-    await requireQuotaRemaining(ctx, dataset.ownerId, args.maxRowCount);
+    const currentRowCount = dataset.rowCount ?? 0;
+    const additionalRowsNeeded = Math.max(0, args.maxRowCount - currentRowCount);
+    await requireQuotaRemaining(ctx, dataset.ownerId, additionalRowsNeeded);
     await ctx.db.patch(dataset._id, {
       maxRowCount: args.maxRowCount,
     });

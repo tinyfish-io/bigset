@@ -38,6 +38,7 @@ export default function DatasetPage() {
   const [confirmPopulate, setConfirmPopulate] = useState(false);
   const [savingRefreshCadence, setSavingRefreshCadence] = useState(false);
   const [savingMaxRowCount, setSavingMaxRowCount] = useState(false);
+  const [maxRowCountSaveError, setMaxRowCountSaveError] = useState<string | null>(null);
   const [cellDetail, setCellDetail] = useState<{
     column: DatasetColumn;
     value: unknown;
@@ -225,22 +226,33 @@ export default function DatasetPage() {
   async function handleMaxRowCountChange(maxRowCount: number) {
     if (!dataset || savingMaxRowCount || userId !== dataset.ownerId) return;
     if (!Number.isInteger(maxRowCount) || maxRowCount < 1) {
+      setMaxRowCountSaveError("Max rows must be a whole number greater than 0.");
       captureException(new Error("Invalid max row count"), {
         operation: "dataset_max_row_count_update",
         datasetId: dataset._id,
       });
       return;
     }
-    if (usage && maxRowCount > usage.remaining) return;
+    if (usage && maxRowCount > usage.remaining) {
+      setMaxRowCountSaveError(
+        `Max rows cannot exceed your remaining monthly quota of ${usage.remaining.toLocaleString()} row operations.`,
+      );
+      return;
+    }
 
+    setMaxRowCountSaveError(null);
     setSavingMaxRowCount(true);
     try {
       await updateMaxRowCount({
         id: dataset._id,
         maxRowCount,
       });
+      setMaxRowCountSaveError(null);
     } catch (err) {
       console.error("[max rows] failed", err);
+      setMaxRowCountSaveError(
+        err instanceof Error ? err.message : "Failed to update max rows.",
+      );
       captureException(err, {
         operation: "dataset_max_row_count_update",
         datasetId: dataset._id,
@@ -385,6 +397,7 @@ export default function DatasetPage() {
             refreshCadenceDisabled={!isOwner || savingRefreshCadence}
             maxRowCount={displayDataset.maxRowCount}
             maxRowCountRemaining={usage?.remaining}
+            maxRowCountSaveError={maxRowCountSaveError}
             maxRowCountDisabled={!isOwner || savingMaxRowCount}
             updateLabel={updateLabel}
             updateDisabled={updateDisabled}
@@ -558,6 +571,7 @@ function SettingsDropdown({
   refreshCadenceDisabled,
   maxRowCount,
   maxRowCountRemaining,
+  maxRowCountSaveError,
   maxRowCountDisabled,
   updateLabel,
   updateDisabled,
@@ -575,6 +589,7 @@ function SettingsDropdown({
   refreshCadenceDisabled: boolean;
   maxRowCount: number;
   maxRowCountRemaining?: number;
+  maxRowCountSaveError: string | null;
   maxRowCountDisabled: boolean;
   updateLabel: string;
   updateDisabled: boolean;
@@ -588,7 +603,7 @@ function SettingsDropdown({
   const ref = useRef<HTMLDivElement>(null);
   const [maxRowCountInput, setMaxRowCountInput] = useState(String(maxRowCount));
   const parsedMaxRowCount = Number(maxRowCountInput);
-  const maxRowCountError =
+  const maxRowCountValidationError =
     !maxRowCountInput.trim()
       ? "Required"
       : !Number.isInteger(parsedMaxRowCount) || parsedMaxRowCount < 1
@@ -669,7 +684,7 @@ function SettingsDropdown({
                 disabled={
                   maxRowCountDisabled ||
                   !maxRowCountChanged ||
-                  maxRowCountError !== null
+                  maxRowCountValidationError !== null
                 }
                 onClick={() => onMaxRowCountChange(parsedMaxRowCount)}
                 className="rounded-lg border border-border px-2 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-foreground/[0.05] disabled:cursor-not-allowed disabled:opacity-40"
@@ -677,8 +692,9 @@ function SettingsDropdown({
                 Save
               </button>
             </div>
-            <p className="mt-1 text-[11px] text-muted">
-              {maxRowCountError ??
+            <p className={`mt-1 text-[11px] ${maxRowCountValidationError || maxRowCountSaveError ? "text-red-500" : "text-muted"}`}>
+              {maxRowCountValidationError ??
+                maxRowCountSaveError ??
                 (maxRowCountRemaining !== undefined
                   ? `${maxRowCountRemaining.toLocaleString()} row operations available`
                   : "Applies to the next populate run")}
