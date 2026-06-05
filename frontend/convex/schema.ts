@@ -50,6 +50,9 @@ export default defineSchema({
     // with rows created before this field existed — write paths self-heal
     // on first hit, and `datasets.backfillRowCounts` migrates all at once.
     rowCount: v.optional(v.number()),
+    // User-selected target/limit for populate runs. Optional so existing
+    // datasets keep the legacy 100-row behavior until touched.
+    maxRowCount: v.optional(v.number()),
     columns: v.array(
       v.object({
         name: v.string(),

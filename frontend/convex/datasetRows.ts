@@ -5,7 +5,7 @@ import type { Id } from "./_generated/dataModel.js";
 import { assertRowInDataset, loadReadableDataset } from "./lib/authz.js";
 import { consumeQuotaForDataset } from "./lib/quota.js";
 
-const MAX_DATASET_ROWS = 100;
+const DEFAULT_MAX_DATASET_ROWS = 100;
 
 /**
  * Authoritative row count for a dataset. O(N), so use only on the slow
@@ -77,9 +77,10 @@ export const insert = internalMutation({
       typeof dataset.rowCount === "number"
         ? dataset.rowCount
         : await actualRowCount(ctx, args.datasetId);
-    if (previousCount >= MAX_DATASET_ROWS) {
+    const maxRowCount = dataset.maxRowCount ?? DEFAULT_MAX_DATASET_ROWS;
+    if (previousCount >= maxRowCount) {
       throw new Error(
-        `Row limit reached: BigSet datasets are capped at ${MAX_DATASET_ROWS} rows. Stop inserting rows and finish the run.`,
+        `Row limit reached: this BigSet dataset is capped at ${maxRowCount} rows. Stop inserting rows and finish the run.`,
       );
     }
 

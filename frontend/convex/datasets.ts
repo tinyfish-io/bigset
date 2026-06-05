@@ -13,7 +13,7 @@ import {
   loadReadableDataset,
   requireIdentity,
 } from "./lib/authz.js";
-import { requireQuotaRemaining } from "./lib/quota.js";
+import { FREE_TIER_MONTHLY_QUOTA, requireQuotaRemaining } from "./lib/quota.js";
 import {
   nextRefreshAtFor,
   refreshCadenceValidator,
@@ -62,6 +62,19 @@ function refreshCadenceFromLegacyLabel(
 }
 
 const PREVIEW_ROW_COUNT = 5;
+const DEFAULT_MAX_ROW_COUNT = 100;
+
+function validateMaxRowCount(maxRowCount: number): void {
+  if (
+    !Number.isInteger(maxRowCount) ||
+    maxRowCount < 1 ||
+    maxRowCount > FREE_TIER_MONTHLY_QUOTA
+  ) {
+    throw new Error(
+      `Max row count must be a whole number between 1 and ${FREE_TIER_MONTHLY_QUOTA}.`,
+    );
+  }
+}
 
 async function attachPreview(ctx: QueryCtx, dataset: Doc<"datasets">) {
   // Mini-table preview: just the first N rows. `.take` keeps the
@@ -270,6 +283,7 @@ export const claimScheduledRefreshInternal = internalMutation({
         description: dataset.description,
         columns: dataset.columns,
         ownerId: dataset.ownerId,
+        maxRowCount: dataset.maxRowCount ?? DEFAULT_MAX_ROW_COUNT,
       },
     };
   },
@@ -360,6 +374,7 @@ export const create = mutation({
     name: v.string(),
     description: v.string(),
     refreshCadence: refreshCadenceValidator,
+    maxRowCount: v.number(),
     columns: v.array(columnValidator),
     retrievalStrategy: v.optional(
       v.union(
@@ -373,10 +388,11 @@ export const create = mutation({
   handler: async (ctx, args) => {
     const identity = await requireIdentity(ctx);
     assertNotReservedOwner(identity.subject);
+    validateMaxRowCount(args.maxRowCount);
     // Block dataset creation at full exhaustion — a dataset you can't
     // populate is just clutter. Row generation later will re-check, so
     // this is a UX safeguard, not the only line of defense.
-    await requireQuotaRemaining(ctx, identity.subject, 1);
+    await requireQuotaRemaining(ctx, identity.subject, args.maxRowCount);
 
     return await ctx.db.insert("datasets", {
       ...args,
@@ -404,6 +420,23 @@ export const updateRefreshSettings = mutation({
       nextRefreshAt: refreshEnabled
         ? nextRefreshAtFor(args.refreshCadence, Date.now())
         : undefined,
+    });
+  },
+});
+
+export const updateMaxRowCount = mutation({
+  args: {
+    id: v.id("datasets"),
+    maxRowCount: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const dataset = await loadOwnedDataset(ctx, args.id);
+    validateMaxRowCount(args.maxRowCount);
+    const currentRowCount = dataset.rowCount ?? 0;
+    const additionalRowsNeeded = Math.max(0, args.maxRowCount - currentRowCount);
+    await requireQuotaRemaining(ctx, dataset.ownerId, additionalRowsNeeded);
+    await ctx.db.patch(dataset._id, {
+      maxRowCount: args.maxRowCount,
     });
   },
 });

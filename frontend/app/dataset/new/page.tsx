@@ -4,7 +4,7 @@ import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useAuth } from "@clerk/nextjs";
-import { useMutation, useConvexAuth } from "convex/react";
+import { useMutation, useQuery, useConvexAuth } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { EVENTS, track } from "@/lib/analytics";
 import { inferSchema, type InferredColumn } from "@/lib/backend";
@@ -42,6 +42,8 @@ const BACKEND_TYPE_MAP: Record<InferredColumn["type"], ColumnType> = {
   number: "number",
   boolean: "boolean",
 };
+
+const DEFAULT_MAX_ROW_COUNT = 100;
 
 function mapBackendColumn(col: InferredColumn, index: number): ProposedColumn {
   return {
@@ -81,6 +83,9 @@ export default function NewDatasetPage() {
   const [step, setStep] = useState<Step>("describe");
   const [prompt, setPrompt] = useState("");
   const [refreshCadence, setRefreshCadence] = useState<RefreshCadence>("daily");
+  const [maxRowCountInput, setMaxRowCountInput] = useState(
+    String(DEFAULT_MAX_ROW_COUNT),
+  );
   const [columns, setColumns] = useState<ProposedColumn[]>([]);
   const [datasetName, setDatasetName] = useState("");
   const [isCreating, setIsCreating] = useState(false);
@@ -92,6 +97,10 @@ export default function NewDatasetPage() {
   const { getToken } = useAuth();
 
   const createDataset = useMutation(api.datasets.create);
+  const usage = useQuery(
+    api.quota.getMy,
+    isAuthenticated ? {} : "skip",
+  );
 
   // Page-view event: fires once when the wizard becomes visible (after
   // auth resolves and the user is authenticated; we don't want to fire
@@ -163,6 +172,17 @@ export default function NewDatasetPage() {
 
   async function handleConfirm() {
     if (isCreating) return;
+    const maxRowCount = Number(maxRowCountInput);
+    if (!Number.isInteger(maxRowCount) || maxRowCount < 1) {
+      setError("Max rows must be a whole number greater than 0.");
+      return;
+    }
+    if (usage && maxRowCount > usage.remaining) {
+      setError(
+        `Max rows cannot exceed your remaining monthly quota of ${usage.remaining.toLocaleString()} row operations.`,
+      );
+      return;
+    }
     setIsCreating(true);
     setError(null);
     let datasetId: string;
@@ -171,6 +191,7 @@ export default function NewDatasetPage() {
         name: datasetName,
         description: prompt,
         refreshCadence,
+        maxRowCount,
         columns: columns.map((c) => ({
           name: c.name,
           type: c.type,
@@ -195,6 +216,7 @@ export default function NewDatasetPage() {
         datasetId,
         column_count: columns.length,
         refreshCadence,
+        maxRowCount,
       });
     } catch {}
     router.push(`/dataset/${datasetId}`);
@@ -319,6 +341,34 @@ export default function NewDatasetPage() {
                       </button>
                     ))}
                   </div>
+                </div>
+
+                <div className="space-y-2">
+                  <label htmlFor="max-row-count" className="block text-sm font-medium">
+                    Max rows
+                  </label>
+                  <input
+                    id="max-row-count"
+                    type="number"
+                    min={1}
+                    max={usage?.remaining}
+                    step={1}
+                    value={maxRowCountInput}
+                    onChange={(e) => setMaxRowCountInput(e.currentTarget.value)}
+                    onBlur={() => {
+                      if (!maxRowCountInput.trim()) return;
+                      const value = Number(maxRowCountInput);
+                      if (Number.isInteger(value) && value >= 1) {
+                        setMaxRowCountInput(String(value));
+                      }
+                    }}
+                    className="w-36 rounded-lg border border-border bg-surface px-4 py-2.5 text-sm font-medium outline-none focus:border-foreground/30 transition-colors"
+                  />
+                  {usage && (
+                    <p className="text-xs text-muted">
+                      Up to {usage.remaining.toLocaleString()} row operations available this month.
+                    </p>
+                  )}
                 </div>
               </div>
 

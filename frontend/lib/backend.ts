@@ -211,6 +211,7 @@ export async function populate(
   datasetId: string,
   datasetName: string,
   description: string,
+  maxRowCount: number,
   columns: PopulateColumn[],
   token: string,
 ): Promise<PopulateStartResult> {
@@ -220,7 +221,7 @@ export async function populate(
       "Content-Type": "application/json",
       Authorization: `Bearer ${token}`,
     },
-    body: JSON.stringify({ datasetId, datasetName: datasetName, description, columns }),
+    body: JSON.stringify({ datasetId, datasetName, description, maxRowCount, columns }),
   });
 
   if (!res.ok) {
