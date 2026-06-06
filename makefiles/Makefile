@@ -31,10 +31,11 @@ dev: validate-dev-env install-deps
 
 validate-dev-env:
 	@test -f .env || { echo "Error: .env not found. Run: cp .env.example .env"; exit 1; }
-	@missing=""; \
+	@env_value() { grep "^$$1=" .env | tail -n1 | cut -d= -f2- | tr -d '\r'; }; \
+	missing=""; \
 	check_env() { \
 		key="$$1"; placeholder="$$2"; \
-		value="$$(grep "^$$key=" .env | cut -d= -f2-)"; \
+		value="$$(env_value "$$key")"; \
 		if [[ -z "$$value" || "$$value" == "$$placeholder" || "$$value" == *"..."* ]]; then \
 			missing="$$missing $$key"; \
 		fi; \
@@ -84,7 +85,8 @@ validate-dev-env:
 	fi
 
 ensure-admin-key:
-	@admin_key="$$(grep '^CONVEX_SELF_HOSTED_ADMIN_KEY=' .env | cut -d= -f2-)"; \
+	@env_value() { grep "^$$1=" .env | tail -n1 | cut -d= -f2- | tr -d '\r'; }; \
+	admin_key="$$(env_value CONVEX_SELF_HOSTED_ADMIN_KEY)"; \
 	needs_gen=false; \
 	if [[ -z "$$admin_key" ]]; then \
 		needs_gen=true; \
@@ -115,8 +117,9 @@ ensure-admin-key:
 
 convex-env:
 	@test -f .env || { echo "Error: .env not found. Run: cp .env.example .env"; exit 1; }
-	@issuer="$$(grep '^CLERK_JWT_ISSUER_DOMAIN=' .env | cut -d= -f2-)"; \
-		admin_key="$$(grep '^CONVEX_SELF_HOSTED_ADMIN_KEY=' .env | cut -d= -f2-)"; \
+	@env_value() { grep "^$$1=" .env | tail -n1 | cut -d= -f2- | tr -d '\r'; }; \
+		issuer="$$(env_value CLERK_JWT_ISSUER_DOMAIN)"; \
+		admin_key="$$(env_value CONVEX_SELF_HOSTED_ADMIN_KEY)"; \
 		if [[ -z "$$issuer" || "$$issuer" == "https://your-app.clerk.accounts.dev" ]]; then \
 			echo "Error: CLERK_JWT_ISSUER_DOMAIN must be your Clerk issuer URL in root .env"; \
 			exit 1; \
@@ -132,7 +135,8 @@ convex-env:
 
 convex-push:
 	@test -f .env || { echo "Error: .env not found. Run: cp .env.example .env"; exit 1; }
-	@admin_key="$$(grep '^CONVEX_SELF_HOSTED_ADMIN_KEY=' .env | cut -d= -f2-)"; \
+	@env_value() { grep "^$$1=" .env | tail -n1 | cut -d= -f2- | tr -d '\r'; }; \
+		admin_key="$$(env_value CONVEX_SELF_HOSTED_ADMIN_KEY)"; \
 		if [[ -z "$$admin_key" ]]; then \
 			echo "Error: CONVEX_SELF_HOSTED_ADMIN_KEY is missing in root .env"; \
 			echo "Run make dev to generate it automatically."; \
