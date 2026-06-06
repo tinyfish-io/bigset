@@ -173,6 +173,8 @@ export default defineSchema({
     rowsUpdated: v.optional(v.number()),
   })
     .index("by_dataset", ["datasetId"])
+    .index("by_dataset_started_at", ["datasetId", "startedAt"])
     .index("by_user", ["userId"])
+    .index("by_user_started_at", ["userId", "startedAt"])
     .index("by_workflow_run", ["workflowRunId"]),
 });

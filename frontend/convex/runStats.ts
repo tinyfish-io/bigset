@@ -1,6 +1,9 @@
 import { internalMutation, internalQuery } from "./_generated/server.js";
 import { v } from "convex/values";
 
+const DEFAULT_PAGE_SIZE = 50;
+const MAX_PAGE_SIZE = 200;
+
 /**
  * Insert a populate-run metrics record.
  *
@@ -68,33 +71,52 @@ export const getByWorkflowRunId = internalQuery({
 });
 
 /**
- * List all runs for a dataset, newest first.
- * TODO: paginate — .collect() loads all docs into memory and will degrade
- * as run history grows. Add cursor-based pagination when this is exposed
- * to the frontend or run counts become large.
+ * List runs for a dataset, newest first.
+ * Cursor-based pagination keeps memory bounded as run history grows.
  */
 export const listByDataset = internalQuery({
-  args: { datasetId: v.string() },
+  args: {
+    datasetId: v.string(),
+    cursor: v.optional(v.string()),
+    limit: v.optional(v.number()),
+  },
   handler: async (ctx, args) => {
-    const runs = await ctx.db
+    const limit = Math.min(args.limit ?? DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE);
+    const { page, isDone, continueCursor } = await ctx.db
       .query("runStats")
-      .withIndex("by_dataset", (q) => q.eq("datasetId", args.datasetId))
-      .collect();
-    return runs.sort((a, b) => b.startedAt - a.startedAt);
+      .withIndex("by_dataset_started_at", (q) =>
+        q.eq("datasetId", args.datasetId),
+      )
+      .order("desc")
+      .paginate({
+        cursor: args.cursor ?? null,
+        numItems: limit,
+      });
+
+    return { runs: page, isDone, continueCursor };
   },
 });
 
 /**
- * List all runs for a user, newest first.
- * TODO: paginate — same concern as listByDataset above.
+ * List runs for a user, newest first.
  */
 export const listByUser = internalQuery({
-  args: { userId: v.string() },
+  args: {
+    userId: v.string(),
+    cursor: v.optional(v.string()),
+    limit: v.optional(v.number()),
+  },
   handler: async (ctx, args) => {
-    const runs = await ctx.db
+    const limit = Math.min(args.limit ?? DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE);
+    const { page, isDone, continueCursor } = await ctx.db
       .query("runStats")
-      .withIndex("by_user", (q) => q.eq("userId", args.userId))
-      .collect();
-    return runs.sort((a, b) => b.startedAt - a.startedAt);
+      .withIndex("by_user_started_at", (q) => q.eq("userId", args.userId))
+      .order("desc")
+      .paginate({
+        cursor: args.cursor ?? null,
+        numItems: limit,
+      });
+
+    return { runs: page, isDone, continueCursor };
   },
 });
