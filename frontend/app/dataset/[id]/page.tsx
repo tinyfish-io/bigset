@@ -38,6 +38,7 @@ export default function DatasetPage() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [confirmPopulate, setConfirmPopulate] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [savingRefreshCadence, setSavingRefreshCadence] = useState(false);
   const [savingMaxRowCount, setSavingMaxRowCount] = useState(false);
   const [maxRowCountSaveError, setMaxRowCountSaveError] = useState<string | null>(null);
@@ -292,13 +293,17 @@ export default function DatasetPage() {
   }
 
   async function handleDelete() {
-    if (!dataset) return;
+    if (!dataset || deleting || dataset.status === "building" || dataset.status === "updating") return;
+    setDeleting(true);
     try {
       await removeDataset({ id: dataset._id });
-      router.push("/dashboard");
+      setConfirmDelete(false);
+      router.replace("/dashboard");
     } catch (err) {
       console.error("[delete] failed", err);
       captureException(err, { operation: "dataset_delete", datasetId: dataset._id });
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -427,7 +432,7 @@ export default function DatasetPage() {
                 handlePopulate();
               }
             }}
-            onDelete={isOwner ? () => { setSettingsOpen(false); setConfirmDelete(true); } : undefined}
+            onDelete={isOwner && !isDatasetBusy ? () => { setSettingsOpen(false); setConfirmDelete(true); } : undefined}
           />
 
           <div className="w-px h-4 bg-border mx-0.5" />
@@ -494,11 +499,9 @@ export default function DatasetPage() {
       {confirmDelete && (
         <ConfirmDeleteModal
           datasetName={dataset.name}
-          onConfirm={() => {
-            setConfirmDelete(false);
-            handleDelete();
-          }}
-          onCancel={() => setConfirmDelete(false)}
+          deleting={deleting}
+          onConfirm={handleDelete}
+          onCancel={() => { if (!deleting) setConfirmDelete(false); }}
         />
       )}
     </div>
@@ -902,10 +905,12 @@ function ConfirmPopulateModal({
 
 function ConfirmDeleteModal({
   datasetName,
+  deleting,
   onConfirm,
   onCancel,
 }: {
   datasetName: string;
+  deleting: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
@@ -931,15 +936,17 @@ function ConfirmDeleteModal({
         <div className="mt-4 flex gap-2">
           <button
             onClick={onCancel}
-            className="flex-1 rounded-lg bg-foreground/[0.06] py-1.5 text-xs font-medium text-foreground hover:bg-foreground/[0.1] transition-colors"
+            disabled={deleting}
+            className="flex-1 rounded-lg bg-foreground/[0.06] py-1.5 text-xs font-medium text-foreground hover:bg-foreground/[0.1] transition-colors disabled:opacity-40"
           >
             Cancel
           </button>
           <button
             onClick={onConfirm}
-            className="flex-1 rounded-lg bg-red-600 py-1.5 text-xs font-medium text-white hover:bg-red-700 transition-colors"
+            disabled={deleting}
+            className="flex-1 rounded-lg bg-red-600 py-1.5 text-xs font-medium text-white hover:bg-red-700 transition-colors disabled:opacity-60"
           >
-            Delete dataset
+            {deleting ? "Deleting..." : "Delete dataset"}
           </button>
         </div>
       </div>
