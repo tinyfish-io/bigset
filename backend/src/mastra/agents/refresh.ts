@@ -9,6 +9,20 @@ const openrouter = createOpenRouter({
   apiKey: process.env.OPENROUTER_API_KEY!,
 });
 
+const OPENROUTER_MODEL_SLUG_PATTERN =
+  /^[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._:-]*$/i;
+
+function assertValidOpenRouterModelSlug(modelSlug: string): string {
+  if (
+    modelSlug.length > 200 ||
+    !OPENROUTER_MODEL_SLUG_PATTERN.test(modelSlug)
+  ) {
+    throw new Error(`Invalid investigateSubagent model slug: "${modelSlug}"`);
+  }
+
+  return modelSlug;
+}
+
 function buildRefreshInstructions(columns: PopulateColumn[]): string {
   const columnNames = columns.map((c) => c.name);
   const columnsDesc = columns
@@ -56,6 +70,9 @@ export function buildRefreshAgent(
   authContext: AuthContext,
   columns: PopulateColumn[],
 ): Agent {
+  const modelSlug = assertValidOpenRouterModelSlug(
+    authContext.modelConfig!.investigateSubagent,
+  );
   const { update_row } = buildPopulateTools(
     authorizedDatasetId,
     authContext,
@@ -64,7 +81,7 @@ export function buildRefreshAgent(
     id: "refresh-agent",
     name: "Dataset Refresh Agent",
     instructions: buildRefreshInstructions(columns),
-    model: openrouter("qwen/qwen3.7-max"),
+    model: openrouter(modelSlug),
     tools: {
       update_row,
       search_web: searchWebTool,

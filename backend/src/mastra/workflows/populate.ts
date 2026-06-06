@@ -203,6 +203,7 @@ ${columnsDesc}${pkNote}${manifestNote}${strategyNote}
 
 Search the web broadly to find real entities that fit this dataset topic.
 For each lead you find, call run_subagent with the primary key values and any context/URLs you have found.
+Do not finish after only searching or fetching pages. If you have any concrete lead, call run_subagent before ending the run.
 If run_subagent returns ROW_LIMIT_REACHED, stop immediately and do not make any more tool calls.
 Stop the populate run as soon as the dataset reaches ${inputData.maxRowCount} rows.`;
 
@@ -256,6 +257,40 @@ const agentStep = createStep({
       metrics.addOrchestratorResult(result);
       // Use result.toolCalls (flat accumulated list) — same reasoning as investigate-tool.ts.
       metrics.countToolCalls(result.toolCalls ?? []);
+
+      let rowCount = await convex.query(internal.datasetRows.countByDataset, {
+        datasetId: inputData.authorizedDatasetId,
+      });
+
+      if (rowCount === 0) {
+        console.warn(
+          `[populate-agent] first pass inserted 0 rows for dataset ${inputData.authorizedDatasetId}; retrying with stricter instructions`,
+        );
+        const retryPrompt = `${inputData.prompt}
+
+The previous pass ended without inserting any rows.
+
+You MUST now:
+1. Identify 3-5 concrete candidate rows from the dataset topic.
+2. For each candidate, call run_subagent with primary_keys, context, and URLs.
+3. Do not call only search_web/fetch_page and stop.
+4. Stop as soon as at least one row has been inserted if you cannot confidently find more rows.`;
+
+        const retryResult = await agent.generate(retryPrompt, { maxSteps: 80 });
+        metrics.addOrchestratorResult(retryResult);
+        metrics.countToolCalls(retryResult.toolCalls ?? []);
+
+        rowCount = await convex.query(internal.datasetRows.countByDataset, {
+          datasetId: inputData.authorizedDatasetId,
+        });
+
+        if (rowCount === 0) {
+          throw new Error("Populate workflow completed with 0 rows after retry");
+        }
+
+        return { text: `${result.text}\n\nRetry result:\n${retryResult.text}` };
+      }
+
       return { text: result.text };
     } catch (err) {
       status = "error";
