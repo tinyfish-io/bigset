@@ -72,8 +72,10 @@ async function writeStartScript() {
     join(packageRoot, "start.mjs"),
     `#!/usr/bin/env node
 import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
 const root = new URL(".", import.meta.url);
+const fromRoot = (path) => fileURLToPath(new URL(path, root));
 const backendPort = process.env.BIGSET_BACKEND_PORT || "3501";
 const frontendPort = process.env.BIGSET_FRONTEND_PORT || "3500";
 const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || \`http://127.0.0.1:\${backendPort}\`;
@@ -91,6 +93,11 @@ function start(name, command, args, env, cwd) {
   children.push(child);
   child.stdout.on("data", (chunk) => process.stdout.write(\`[\${name}] \${chunk}\`));
   child.stderr.on("data", (chunk) => process.stderr.write(\`[\${name}] \${chunk}\`));
+  child.on("error", (err) => {
+    if (shuttingDown) return;
+    console.error(\`\\n\${name} failed to start: \${err.message}\`);
+    shutdown(1);
+  });
   child.on("exit", (code, signal) => {
     if (shuttingDown) return;
     console.error(\`\\n\${name} exited unexpectedly\${signal ? \` with signal \${signal}\` : \` with code \${code}\`}\`);
@@ -102,8 +109,9 @@ function start(name, command, args, env, cwd) {
 let shuttingDown = false;
 function shutdown(code = 0) {
   shuttingDown = true;
+  process.exitCode = code;
   for (const child of children) {
-    if (!child.killed) child.kill("SIGTERM");
+    if (child.pid && !child.killed) child.kill("SIGTERM");
   }
   setTimeout(() => process.exit(code), 250).unref();
 }
@@ -114,7 +122,7 @@ process.on("SIGTERM", () => shutdown(0));
 start(
   "backend",
   process.execPath,
-  [new URL("./backend/backend.mjs", root).pathname],
+  [fromRoot("./backend/backend.mjs")],
   {
     ...process.env,
     PORT: backendPort,
@@ -124,13 +132,13 @@ start(
     NEXT_PUBLIC_BACKEND_URL: backendUrl,
     REFRESH_SCHEDULER_ENABLED: process.env.REFRESH_SCHEDULER_ENABLED ?? "false",
   },
-  new URL("./backend", root).pathname,
+  fromRoot("./backend"),
 );
 
 start(
   "frontend",
   process.execPath,
-  [new URL("./frontend/server.js", root).pathname],
+  [fromRoot("./frontend/server.js")],
   {
     ...process.env,
     PORT: frontendPort,
@@ -140,7 +148,7 @@ start(
     NEXT_PUBLIC_PROD: process.env.NEXT_PUBLIC_PROD || "",
     PROD: process.env.PROD || "",
   },
-  new URL("./frontend", root).pathname,
+  fromRoot("./frontend"),
 );
 
 console.log("");
