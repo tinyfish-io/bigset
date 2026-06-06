@@ -568,6 +568,7 @@ function startLocalRefreshScheduler(
             datasetId: dataset.datasetId,
             datasetName: dataset.datasetName,
             description: dataset.description,
+            maxRowCount: dataset.maxRowCount ?? 100,
             columns: dataset.columns,
           },
           run,
@@ -768,6 +769,13 @@ await fastify.register(async (instance) => {
         throw new Error(`Unexpected populate claim outcome: ${populateOutcome}`);
       }
 
+      const dataset = await convex.query(internal.datasets.getInternal, {
+        id: parsed.data.datasetId,
+      });
+      if (!dataset) {
+        return reply.code(404).send({ error: "Dataset not found" });
+      }
+
       const { getModelConfig } = await import("./config/models.js");
       const modelConfig = await getModelConfig(auth.userId);
 
@@ -787,7 +795,10 @@ await fastify.register(async (instance) => {
       const controller = registerDataset(parsed.data.datasetId);
 
       void runPopulateWorkflowInBackground({
-        input: parsed.data,
+        input: {
+          ...parsed.data,
+          maxRowCount: dataset.maxRowCount ?? parsed.data.maxRowCount,
+        },
         run,
         controller,
         authorizedUserId: auth.userId,
