@@ -6,6 +6,17 @@
 #   bash scripts/verify-authz.sh
 set -u
 
+# Use python3 if available, fallback to python (common on Windows)
+PYTHON="python3"
+if ! command -v python3 &>/dev/null; then
+  if command -v python &>/dev/null; then
+    PYTHON="python"
+  else
+    echo "Error: python3 or python is required to run this script."
+    exit 1
+  fi
+fi
+
 CONVEX="${CONVEX_URL:-http://localhost:3210}"
 FRONTEND="${FRONTEND_URL:-http://localhost:3500}"
 FAIL=0
@@ -34,11 +45,11 @@ mutation() {
 }
 
 assert_success() {
-  python3 -c "import json,sys; d=json.load(sys.stdin); print('PASS' if d.get('status')=='success' else 'FAIL: '+d.get('errorMessage','?')[:60])"
+  $PYTHON -c "import json,sys; d=json.load(sys.stdin); print('PASS' if d.get('status')=='success' else 'FAIL: '+d.get('errorMessage','?')[:60])"
 }
 assert_error_contains() {
   local needle="$1"
-  python3 -c "import json,sys; d=json.load(sys.stdin); print('PASS' if '$needle' in d.get('errorMessage','') else 'FAIL: '+d.get('errorMessage','?')[:80])"
+  $PYTHON -c "import json,sys; d=json.load(sys.stdin); print('PASS' if '$needle' in d.get('errorMessage','') else 'FAIL: '+d.get('errorMessage','?')[:80])"
 }
 
 echo "════════════════════════════════════════════════════════════════"
@@ -47,7 +58,7 @@ echo "  convex=$CONVEX  frontend=$FRONTEND"
 echo "════════════════════════════════════════════════════════════════"
 
 PUB_ID=$(query '{"path":"datasets:listPublic","args":{},"format":"json"}' \
-  | python3 -c "import json,sys; print(json.load(sys.stdin)['value'][0]['_id'])")
+  | $PYTHON -c "import json,sys; print(json.load(sys.stdin)['value'][0]['_id'])")
 if [ -z "${PUB_ID:-}" ]; then
   echo "No public dataset found. Seed curated data first (publicSeed:seedPublicDatasets)."
   exit 1
@@ -65,7 +76,7 @@ section "Anonymous WRITES — must all be rejected"
 run_test "anon datasets.listMine -> Not authenticated" \
   "$(query '{"path":"datasets:listMine","args":{},"format":"json"}' | assert_error_contains 'Not authenticated')"
 run_test "anon datasets.create -> Not authenticated" \
-  "$(mutation '{"path":"datasets:create","args":{"name":"x","description":"x","cadence":"daily","columns":[]},"format":"json"}' | assert_error_contains 'Not authenticated')"
+  "$(mutation '{"path":"datasets:create","args":{"name":"x","description":"x","refreshCadence":"daily","columns":[]},"format":"json"}' | assert_error_contains 'Not authenticated')"
 run_test "anon datasets.updateStatus -> Not authenticated" \
   "$(mutation "{\"path\":\"datasets:updateStatus\",\"args\":{\"id\":\"$PUB_ID\",\"status\":\"paused\"},\"format\":\"json\"}" | assert_error_contains 'Not authenticated')"
 run_test "anon datasets.remove -> Not authenticated" \

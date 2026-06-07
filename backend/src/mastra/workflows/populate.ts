@@ -2,6 +2,7 @@ import { createStep, createWorkflow } from "@mastra/core/workflows";
 import { z } from "zod";
 import { generateText } from "ai";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
+import { wrapModelWithTokenLimit } from "../model-wrapper.js";
 import { datasetContextSchema, populateColumnSchema } from "../../pipeline/populate.js";
 import { convex, internal } from "../../convex.js";
 import { DEFAULT_MODEL_IDS } from "../../config/models.js";
@@ -114,7 +115,7 @@ Respond with EXACTLY one word: scraper or search`;
       const modelSlug =
         inputData.authContext?.modelConfig?.schemaInference ?? DEFAULT_MODEL_IDS.SCHEMA_INFERENCE;
       const result = await generateText({
-        model: openrouter(modelSlug),
+        model: wrapModelWithTokenLimit(openrouter(modelSlug)),
         prompt: classificationPrompt,
         maxOutputTokens: 10,
         abortSignal: getSignal(inputData.datasetId),

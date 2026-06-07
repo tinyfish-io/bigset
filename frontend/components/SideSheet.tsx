@@ -119,6 +119,12 @@ interface CellDetailProps {
   value: unknown;
   /** Row-level sources stored by the populate agent. */
   sources?: string[];
+  /** Cell-level provenance metadata. */
+  provenance?: {
+    url: string;
+    query?: string;
+    snippet?: string;
+  };
 }
 
 function isValidHttpUrl(src: string): boolean {
@@ -130,7 +136,7 @@ function isValidHttpUrl(src: string): boolean {
   }
 }
 
-export function CellDetail({ column, value, sources }: CellDetailProps) {
+export function CellDetail({ column, value, sources, provenance }: CellDetailProps) {
   const [copied, setCopied] = useState(false);
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const displayValue = value == null || value === "" ? "—" : String(value);
@@ -191,6 +197,65 @@ export function CellDetail({ column, value, sources }: CellDetailProps) {
           </p>
         </div>
       </div>
+
+      {/* Cell Provenance */}
+      {provenance && (
+        <div className="rounded-xl border border-emerald-500/15 bg-emerald-500/[0.02] p-4 space-y-3.5">
+          <div className="flex items-center gap-2 text-emerald-700 dark:text-emerald-400 font-medium text-xs">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+            </svg>
+            <span>Verified Source Origin</span>
+          </div>
+
+          <div className="space-y-3">
+            {/* Source URL */}
+            <div>
+              <p className="text-[10px] font-semibold text-muted uppercase tracking-wider">Source URL</p>
+              {isValidHttpUrl(provenance.url) ? (
+                <a
+                  href={provenance.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-xs text-link hover:underline break-all mt-0.5"
+                  data-ph-mask-text="true"
+                >
+                  <IconExternalLink />
+                  {provenance.url}
+                </a>
+              ) : (
+                <p className="text-xs text-foreground break-all mt-0.5" data-ph-mask-text="true">
+                  {provenance.url}
+                </p>
+              )}
+            </div>
+
+            {/* Search Query */}
+            {provenance.query && (
+              <div>
+                <p className="text-[10px] font-semibold text-muted uppercase tracking-wider">Search Query Used</p>
+                <div className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-foreground/[0.04] border border-border/60 text-xs text-foreground/80 mt-1" data-ph-mask-text="true">
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="opacity-60">
+                    <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
+                  </svg>
+                  <span>{provenance.query}</span>
+                </div>
+              </div>
+            )}
+
+            {/* Text Snippet */}
+            {provenance.snippet && (
+              <div>
+                <p className="text-[10px] font-semibold text-muted uppercase tracking-wider mb-1">Snippet Context</p>
+                <div className="relative rounded-lg border border-border bg-background px-3 py-2 text-xs italic text-foreground/80 leading-relaxed" data-ph-mask-text="true">
+                  <span className="absolute left-2.5 top-1.5 text-foreground/10 text-2xl font-serif leading-none">&ldquo;</span>
+                  <p className="pl-4 pr-1">{provenance.snippet}</p>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Sources */}
       {sources && sources.length > 0 && (
