@@ -7,8 +7,6 @@ import type { PopulateColumn } from "../../pipeline/populate.js";
 import type { RunMetrics } from "../run-metrics.js";
 import { getSignal } from "../../abort-registry.js";
 
-const MAX_DATASET_ROWS = 100;
-
 const investigateInputSchema = z.object({
   entity_hint: z
     .string()
@@ -77,6 +75,7 @@ export function buildSubagentTool(
   authorizedDatasetId: string,
   authContext: AuthContext,
   columns: PopulateColumn[],
+  maxRowCount: number,
   metrics?: RunMetrics,
 ) {
   return createTool({
@@ -90,10 +89,10 @@ export function buildSubagentTool(
         const rowCount = await convex.query(internal.datasetRows.countByDataset, {
           datasetId: authorizedDatasetId,
         });
-        if (rowCount >= MAX_DATASET_ROWS) {
+        if (rowCount >= maxRowCount) {
           return {
             inserted: false,
-            reason: `ROW_LIMIT_REACHED: BigSet datasets are capped at ${MAX_DATASET_ROWS} rows. Stop calling run_subagent and finish the run.`,
+            reason: `ROW_LIMIT_REACHED: this BigSet dataset is capped at ${maxRowCount} rows. Stop calling run_subagent and finish the run.`,
             row_summary: undefined,
             clues: undefined,
           };
@@ -130,7 +129,7 @@ Context (partial data already found):
 ${context}${urlsBlock}${notesBlock}`;
 
         const abortSignal = getSignal(authorizedDatasetId);
-        const result = await agent.generate(prompt, { abortSignal, maxSteps: 10 });
+        const result = await agent.generate(prompt, { abortSignal, maxSteps: 25 });
         if (metrics) {
           // Use result.toolCalls (the flat accumulated list across all steps) rather
           // than iterating result.steps[n].toolCalls. The per-step arrays are snapshots

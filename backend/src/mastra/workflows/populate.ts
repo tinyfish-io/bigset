@@ -158,6 +158,7 @@ const buildPromptOutputSchema = z.object({
   authorizedDatasetId: z.string(),
   authContext: authContextSchema,
   columns: z.array(populateColumnSchema),
+  maxRowCount: z.number().int().min(1),
 });
 
 const buildPromptStep = createStep({
@@ -204,7 +205,7 @@ ${columnsDesc}${pkNote}${manifestNote}${strategyNote}
 Search the web broadly to find real entities that fit this dataset topic.
 For each lead you find, call run_subagent with the primary key values and any context/URLs you have found.
 If run_subagent returns ROW_LIMIT_REACHED, stop immediately and do not make any more tool calls.
-Stop the populate run as soon as the dataset reaches 100 rows.`;
+Stop the populate run as soon as the dataset reaches ${inputData.maxRowCount} rows.`;
 
     console.log(
       `[build-prompt] Built prompt for ${inputData.datasetName} (${inputData.columns.length} columns, strategy=${inputData.enumerationStrategy})`,
@@ -214,6 +215,7 @@ Stop the populate run as soon as the dataset reaches 100 rows.`;
       authorizedDatasetId: inputData.datasetId,
       authContext: inputData.authContext,
       columns: inputData.columns,
+      maxRowCount: inputData.maxRowCount,
     };
   },
 });
@@ -247,6 +249,7 @@ const agentStep = createStep({
         inputData.authorizedDatasetId,
         inputData.authContext,
         inputData.columns,
+        inputData.maxRowCount,
         metrics,
       );
       const abortSignal = getSignal(inputData.authorizedDatasetId);
