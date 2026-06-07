@@ -1,5 +1,6 @@
 import { generateText, Output, NoObjectGeneratedError } from "ai";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
+import { wrapModelWithTokenLimit } from "../mastra/model-wrapper.js";
 
 import { DEFAULT_MODEL_IDS } from "../config/models.js";
 import { datasetSchemaSchema, type DatasetSchema } from "./types.js";
@@ -33,7 +34,7 @@ function getModel(modelSlug?: string) {
   }
   const openrouter = createOpenRouter({ apiKey });
   const resolvedSlug = modelSlug ?? DEFAULT_MODEL_IDS.SCHEMA_INFERENCE;
-  return openrouter(resolvedSlug);
+  return wrapModelWithTokenLimit(openrouter(resolvedSlug));
 }
 
 export async function inferSchema(prompt: string, modelSlug?: string): Promise<DatasetSchema> {

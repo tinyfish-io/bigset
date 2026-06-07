@@ -1,5 +1,6 @@
 import { Agent } from "@mastra/core/agent";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
+import { wrapModelWithTokenLimit } from "../model-wrapper.js";
 import { buildSubagentTool } from "../tools/investigate-tool.js";
 import { searchWebTool, fetchPageTool } from "../tools/web-tools.js";
 import type { AuthContext } from "../workflows/populate.js";
@@ -50,7 +51,7 @@ export function buildPopulateAgent(
     id: "populate-agent",
     name: "Dataset Populate Orchestrator",
     instructions: INSTRUCTIONS,
-    model: openrouter(modelSlug),
+    model: wrapModelWithTokenLimit(openrouter(modelSlug)),
     tools: {
       search_web: searchWebTool,
       fetch_page: fetchPageTool,
