@@ -8,7 +8,7 @@
 
 <p align="center">
   <a href="https://youtu.be/ixuOBI9qUnQ">
-    <img src="https://img.youtube.com/vi/ixuOBI9qUnQ/maxresdefault.jpg" alt="BigSet Demo" width="400" />
+    <img src="assets/demo-thumbnail.jpg" alt="Watch the demo" width="100%" />
   </a>
 </p>
 
