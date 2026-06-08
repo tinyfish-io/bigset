@@ -138,7 +138,7 @@ start(
 start(
   "frontend",
   process.execPath,
-  [fromRoot("./frontend/server.js")],
+  [fromRoot("./frontend/frontend/server.js")],
   {
     ...process.env,
     PORT: frontendPort,
@@ -148,7 +148,7 @@ start(
     NEXT_PUBLIC_PROD: process.env.NEXT_PUBLIC_PROD || "",
     PROD: process.env.PROD || "",
   },
-  fromRoot("./frontend"),
+  fromRoot("./frontend/frontend"),
 );
 
 console.log("");
@@ -254,12 +254,12 @@ async function main() {
 
   console.log("Assembling release directory...");
   await cp(standaloneDir, join(packageRoot, "frontend"), { recursive: true });
-  await cp(join(frontendDir, "public"), join(packageRoot, "frontend", "public"), {
+  await cp(join(frontendDir, "public"), join(packageRoot, "frontend", "frontend", "public"), {
     recursive: true,
   });
   await cp(
     join(frontendDir, ".next", "static"),
-    join(packageRoot, "frontend", ".next", "static"),
+    join(packageRoot, "frontend", "frontend", ".next", "static"),
     { recursive: true },
   );
   await copyConvexRuntime();
