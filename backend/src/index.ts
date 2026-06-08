@@ -16,6 +16,7 @@ import { capture, shutdown as shutdownAnalytics } from "./analytics/posthog.js";
 import { EVENTS } from "./analytics/events.js";
 import { registerDataset, deregisterDataset, abortDataset } from "./abort-registry.js";
 import {
+  LOCAL_USER_ID,
   clearLegacyPlaintextLocalCredentials,
   exchangeOpenRouterOAuthCode,
   getLocalSetupStatus,
@@ -75,20 +76,16 @@ function mapSchemaTypeToDatasetType(
   return "text";
 }
 
-function requireCliMvp(reply: FastifyReply): string | null {
-  if (!env.CLI_MVP_ENABLED) {
+function requireLocalCli(reply: FastifyReply): string | null {
+  if (!env.IS_LOCAL_MODE) {
     void reply.code(404).send({ error: "Not found" });
-    return null;
-  }
-  if (!env.CLI_MVP_OWNER_ID) {
-    void reply.code(500).send({ error: "BIGSET_CLI_MVP_OWNER_ID is required" });
     return null;
   }
   if (!env.CONVEX_ADMIN_KEY) {
     void reply.code(500).send({ error: "CONVEX_SELF_HOSTED_ADMIN_KEY is required" });
     return null;
   }
-  return env.CLI_MVP_OWNER_ID;
+  return LOCAL_USER_ID;
 }
 
 function statusErrorMessage(err: unknown): string {
@@ -827,11 +824,11 @@ fastify.get("/openrouter/models", async (req, reply) => {
 });
 
 // ────────────────────────────────────────────────────────────────────────
-//  Local trusted CLI MVP routes
+//  Local trusted CLI routes
 // ────────────────────────────────────────────────────────────────────────
 
 fastify.get("/cli/datasets", async (_req, reply) => {
-  const ownerId = requireCliMvp(reply);
+  const ownerId = requireLocalCli(reply);
   if (!ownerId) return;
 
   try {
@@ -846,8 +843,9 @@ fastify.get("/cli/datasets", async (_req, reply) => {
 });
 
 fastify.post("/cli/datasets", async (req, reply) => {
-  const ownerId = requireCliMvp(reply);
+  const ownerId = requireLocalCli(reply);
   if (!ownerId) return;
+  if (!(await ensureLocalSetupReady(reply))) return;
 
   const parsed = cliCreateDatasetSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -893,7 +891,7 @@ fastify.post("/cli/datasets", async (req, reply) => {
 });
 
 fastify.get("/cli/datasets/:datasetId", async (req, reply) => {
-  const ownerId = requireCliMvp(reply);
+  const ownerId = requireLocalCli(reply);
   if (!ownerId) return;
 
   const params = cliDatasetIdParamsSchema.safeParse(req.params);
@@ -915,7 +913,7 @@ fastify.get("/cli/datasets/:datasetId", async (req, reply) => {
 });
 
 fastify.get("/cli/datasets/:datasetId/rows", async (req, reply) => {
-  const ownerId = requireCliMvp(reply);
+  const ownerId = requireLocalCli(reply);
   if (!ownerId) return;
 
   const params = cliDatasetIdParamsSchema.safeParse(req.params);
@@ -940,8 +938,9 @@ fastify.get("/cli/datasets/:datasetId/rows", async (req, reply) => {
 });
 
 fastify.post("/cli/datasets/:datasetId/populate", async (req, reply) => {
-  const ownerId = requireCliMvp(reply);
+  const ownerId = requireLocalCli(reply);
   if (!ownerId) return;
+  if (!(await ensureLocalSetupReady(reply))) return;
 
   const params = cliDatasetIdParamsSchema.safeParse(req.params);
   if (!params.success) {
@@ -995,7 +994,7 @@ fastify.post("/cli/datasets/:datasetId/populate", async (req, reply) => {
 });
 
 fastify.post("/cli/datasets/:datasetId/stop", async (req, reply) => {
-  const ownerId = requireCliMvp(reply);
+  const ownerId = requireLocalCli(reply);
   if (!ownerId) return;
 
   const params = cliDatasetIdParamsSchema.safeParse(req.params);
