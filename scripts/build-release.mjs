@@ -208,6 +208,10 @@ async function bundleBackend() {
 }
 
 async function copyConvexRuntime() {
+  await cp(
+    join(frontendDir, "package.json"),
+    join(packageRoot, "frontend", "package.json"),
+  );
   await cp(join(frontendDir, "convex"), join(packageRoot, "frontend", "convex"), {
     recursive: true,
   });
