@@ -6,7 +6,11 @@
   <strong>Build and maintain any dataset from the live web, that refreshes regularly</strong>
 </p>
 
-<!-- TODO: Add demo video here once hosted (autoplay mp4 or YouTube embed) -->
+<p align="center">
+  <a href="https://youtu.be/ixuOBI9qUnQ">
+    <img src="https://img.youtube.com/vi/ixuOBI9qUnQ/maxresdefault.jpg" alt="BigSet Demo" width="600" />
+  </a>
+</p>
 
 <p align="center">
   <a href="https://github.com/tinyfish-io/bigset/stargazers"><img src="https://img.shields.io/github/stars/tinyfish-io/bigset?style=flat" alt="GitHub Stars" /></a>
