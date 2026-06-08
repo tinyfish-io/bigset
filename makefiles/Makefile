@@ -10,6 +10,7 @@ all: dev
 install-deps:
 	@cd frontend && npm install --silent
 	@cd backend && npm install --silent
+	@cd cli && npm install --silent
 
 build-release: install-deps
 	node scripts/build-release.mjs

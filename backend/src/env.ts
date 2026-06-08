@@ -18,6 +18,12 @@ function numberFromEnv(name: string, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function booleanFromEnv(name: string, fallback = false): boolean {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  return raw === "true" || raw === "1";
+}
+
 export const env = {
   PROD: process.env.PROD,
   IS_PROD: process.env.PROD === "1",
@@ -85,4 +91,9 @@ export const env = {
     "REFRESH_SCHEDULER_STALE_AFTER_MS",
     6 * 60 * 60 * 1000,
   ),
+
+  // Local trusted CLI MVP. These endpoints intentionally use backend system
+  // access, so keep them disabled unless explicitly enabled in local dev.
+  CLI_MVP_ENABLED: booleanFromEnv("BIGSET_CLI_MVP_ENABLED"),
+  CLI_MVP_OWNER_ID: process.env.BIGSET_CLI_MVP_OWNER_ID,
 };

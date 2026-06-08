@@ -22,6 +22,8 @@ yarn-debug.log*
 dist/
 tmp/
 temp/
+cli/dist/
+cli/*.csv
 
 .mastra
 
