@@ -7,12 +7,6 @@
 </p>
 
 <p align="center">
-  <a href="https://youtu.be/ixuOBI9qUnQ">
-    <img src="assets/demo-thumb.jpg" alt="Watch the demo" width="100%" />
-  </a>
-</p>
-
-<p align="center">
   <a href="https://github.com/tinyfish-io/bigset/stargazers"><img src="https://img.shields.io/github/stars/tinyfish-io/bigset?style=flat" alt="GitHub Stars" /></a>
   <a href="https://github.com/tinyfish-io/bigset/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-blue" alt="License" /></a>
   <a href="https://github.com/tinyfish-io/bigset/issues"><img src="https://img.shields.io/github/issues/tinyfish-io/bigset" alt="Issues" /></a>
@@ -31,14 +25,21 @@ You type a sentence:
 
 > *"YC companies that are currently hiring engineers, with their funding stage, location, and number of open roles."*
 
-BigSet infers the schema automatically, sends autonomous agents to research it on the live web, verifies what they find against real sources, deduplicates, and hands you a structured dataset. Download as CSV or XLSX. Set a refresh cadence (30 min, 6 hours, 12 hours, daily, weekly) and the agents re-run on schedule, pulling fresh data so the dataset never goes stale.
+BigSet infers the schema automatically, sends autonomous agents to research it on the live web, verifies what they find against real sources, deduplicates, and hands you a structured dataset. Download as CSV or XLSX.
 
-**Any topic.** GPU prices. Competitor features. Research papers. Restaurant menus. Insurance quotes. Whatever you type, it builds. And keeps current.
+You can even set a refresh cadence (30 min, 6 hours, 12 hours, daily, weekly) and the agents re-run on schedule, pulling fresh data so the dataset never goes stale.
 
-You don't pick a scraper, write selectors, or point it at a URL. You just describe the data you care about, set a refresh cadence, and BigSet handles the rest.
 
 Built on [TinyFish](https://www.tinyfish.ai?utm_source=github&utm_medium=organic&utm_campaign=bigset-developer-2026q2) APIs.
 
+
+## Quick set up guide (~3 mins)
+
+<p align="center">
+  <a href="https://youtu.be/ixuOBI9qUnQ">
+    <img src="assets/demo-thumb.jpg" alt="Watch the demo" width="100%" />
+  </a>
+</p>
 
 ## ✨ Why BigSet?
 
