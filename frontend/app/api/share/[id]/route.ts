@@ -15,13 +15,16 @@ export async function GET(
     const res = await fetch(`${BACKEND_URL}/share/${id}`, {
       signal: AbortSignal.timeout(5000),
     });
-    if (!res.ok) {
+    if (res.ok) {
+      const data = await res.json();
+      return NextResponse.json(data, { headers: CORS });
+    }
+    if (res.status === 404) {
       return NextResponse.json({ error: "Dataset not found" }, { status: 404, headers: CORS });
     }
-    const data = await res.json();
-    return NextResponse.json(data, { headers: CORS });
+    return NextResponse.json({ error: "Upstream service error" }, { status: 502, headers: CORS });
   } catch {
-    return NextResponse.json({ error: "Dataset not found" }, { status: 404, headers: CORS });
+    return NextResponse.json({ error: "Upstream service error" }, { status: 502, headers: CORS });
   }
 }
 

@@ -8,7 +8,7 @@ import { inferSchema } from "./pipeline/schema-inference.js";
 import { datasetContextSchema, type DatasetContext } from "./pipeline/populate.js";
 import { populateWorkflow } from "./mastra/workflows/populate.js";
 import { updateWorkflow } from "./mastra/workflows/update.js";
-import { convex, internal } from "./convex.js";
+import { convex, api, internal } from "./convex.js";
 import { sendTransactionalEmail } from "./email/send.js";
 import { datasetReadyTemplate } from "./email/templates/dataset-ready.js";
 import { capture, shutdown as shutdownAnalytics } from "./analytics/posthog.js";
@@ -685,20 +685,22 @@ fastify.get("/health", async () => ({ status: "ok" }));
 fastify.get("/share/:id", async (request, reply) => {
   const { id } = request.params as { id: string };
   reply.header("Access-Control-Allow-Origin", "*");
+  let dataset;
   try {
-    const dataset = await convex.query(api.datasets.get, { id });
-    if (!dataset || dataset.visibility !== "public") {
-      return reply.code(404).send({ error: "Dataset not found" });
-    }
-    return {
-      name: dataset.name,
-      description: dataset.description,
-      rowCount: dataset.rowCount,
-      columns: dataset.columns,
-    };
-  } catch {
+    dataset = await convex.query(api.datasets.get, { id });
+  } catch (err) {
+    request.log.error({ err, id }, "Failed to fetch dataset for share route");
+    return reply.code(502).send({ error: "Failed to fetch dataset" });
+  }
+  if (!dataset || dataset.visibility !== "public") {
     return reply.code(404).send({ error: "Dataset not found" });
   }
+  return {
+    name: dataset.name,
+    description: dataset.description,
+    rowCount: dataset.rowCount,
+    columns: dataset.columns,
+  };
 });
 
 fastify.options("/share/:id", async (_request, reply) => {
