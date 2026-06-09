@@ -530,6 +530,45 @@ export const importDataset = mutation({
   },
 });
 
+const columnValidator = v.object({
+  name: v.string(),
+  type: v.union(
+    v.literal("text"),
+    v.literal("number"),
+    v.literal("boolean"),
+    v.literal("url"),
+    v.literal("date"),
+  ),
+  description: v.optional(v.string()),
+  isPrimaryKey: v.optional(v.boolean()),
+});
+
+export const importDatasetFromSchema = mutation({
+  args: {
+    name: v.string(),
+    description: v.string(),
+    columns: v.array(columnValidator),
+  },
+  handler: async (ctx, args) => {
+    const identity = await requireIdentity(ctx);
+    assertNotReservedOwner(identity.subject);
+    await requireQuotaRemaining(ctx, identity.subject, DEFAULT_MAX_ROW_COUNT);
+    return await ctx.db.insert("datasets", {
+      name: args.name,
+      description: args.description,
+      columns: args.columns,
+      ownerId: identity.subject,
+      status: "paused",
+      visibility: "private",
+      rowCount: 0,
+      refreshCadence: "manual",
+      refreshEnabled: false,
+      maxRowCount: DEFAULT_MAX_ROW_COUNT,
+      nextRefreshAt: nextRefreshAtFor("manual", Date.now()),
+    });
+  },
+});
+
 export const remove = mutation({
   args: { id: v.id("datasets") },
   handler: async (ctx, args) => {

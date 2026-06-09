@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import type { DatasetMeta } from "@/lib/fetch-dataset-meta";
 import {
   DatasetCard,
   type DatasetCardData,
@@ -238,27 +239,49 @@ function ImportModal({ onClose }: { onClose: () => void }) {
   const [url, setUrl] = useState("");
   const [importing, setImporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [crossPreview, setCrossPreview] = useState<DatasetMeta | null | "loading">(null);
   const importDataset = useMutation(api.datasets.importDataset);
+  const importDatasetFromSchema = useMutation(api.datasets.importDatasetFromSchema);
 
-  function extractDatasetId(input: string): string | null {
+  function parseShareUrl(input: string): { id: string; origin: string } | null {
     const trimmed = input.trim();
     try {
       const parsed = new URL(trimmed);
       const match = parsed.pathname.match(/\/(?:dataset|share)\/([^/?#]+)/);
       const id = match?.[1] ?? null;
-      // Convex IDs are alphanumeric strings, at least 20 chars
-      if (id && /^[a-zA-Z0-9]{20,}$/.test(id)) return id;
+      if (id && /^[a-zA-Z0-9]{20,}$/.test(id)) return { id, origin: parsed.origin };
       return null;
     } catch {
       return null;
     }
   }
 
-  const extractedId = extractDatasetId(url);
-  const preview = useQuery(
+  const parsed = parseShareUrl(url);
+  const extractedId = parsed?.id ?? null;
+  const sourceOrigin = parsed?.origin ?? null;
+  const currentOrigin = typeof window !== "undefined" ? window.location.origin : "";
+  const isCrossInstance = !!sourceOrigin && sourceOrigin !== currentOrigin;
+
+  const sameInstancePreview = useQuery(
     api.datasets.get,
-    extractedId ? { id: extractedId as Id<"datasets"> } : "skip",
+    !isCrossInstance && extractedId ? { id: extractedId as Id<"datasets"> } : "skip",
   );
+
+  useEffect(() => {
+    if (!isCrossInstance || !extractedId || !sourceOrigin) {
+      setCrossPreview(null);
+      return;
+    }
+    setCrossPreview("loading");
+    const controller = new AbortController();
+    fetch(`${sourceOrigin}/api/share/${extractedId}`, {
+      signal: controller.signal,
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: DatasetMeta | null) => setCrossPreview(data))
+      .catch(() => setCrossPreview(null));
+    return () => controller.abort();
+  }, [isCrossInstance, extractedId, sourceOrigin]);
 
   useEffect(() => {
     function handleKey(e: KeyboardEvent) {
@@ -268,12 +291,34 @@ function ImportModal({ onClose }: { onClose: () => void }) {
     return () => document.removeEventListener("keydown", handleKey);
   }, [onClose]);
 
+  const preview: DatasetMeta | null | undefined = isCrossInstance
+    ? (crossPreview === "loading" ? undefined : crossPreview)
+    : (sameInstancePreview as DatasetMeta | null | undefined);
+
+  const previewLoading = isCrossInstance
+    ? crossPreview === "loading"
+    : extractedId !== null && sameInstancePreview === undefined;
+
+  const isValidUrl = extractedId !== null;
+  const isPublic = isCrossInstance
+    ? preview !== null && preview !== undefined
+    : preview !== null && preview !== undefined && (preview as { visibility?: string }).visibility === "public";
+
   async function handleImport() {
-    if (!extractedId || importing) return;
+    if (!extractedId || importing || !preview) return;
     setImporting(true);
     setError(null);
     try {
-      const newId = await importDataset({ sourceId: extractedId as Id<"datasets"> });
+      let newId: Id<"datasets">;
+      if (isCrossInstance) {
+        newId = await importDatasetFromSchema({
+          name: preview.name,
+          description: preview.description,
+          columns: preview.columns,
+        });
+      } else {
+        newId = await importDataset({ sourceId: extractedId as Id<"datasets"> });
+      }
       onClose();
       router.push(`/dataset/${newId}`);
     } catch (err) {
@@ -287,9 +332,6 @@ function ImportModal({ onClose }: { onClose: () => void }) {
       setImporting(false);
     }
   }
-
-  const isValidUrl = extractedId !== null;
-  const isPublic = preview !== null && preview !== undefined && preview.visibility === "public";
 
   return (
     <div
@@ -317,11 +359,11 @@ function ImportModal({ onClose }: { onClose: () => void }) {
           className="w-full rounded-lg border border-border bg-foreground/[0.03] px-3 py-2 text-xs text-foreground placeholder:text-muted/50 outline-none focus:border-foreground/30 transition-[border-color]"
         />
 
-        {isValidUrl && preview === undefined && (
+        {isValidUrl && previewLoading && (
           <p className="mt-2 text-[11px] text-muted">Loading preview...</p>
         )}
 
-        {isValidUrl && preview === null && (
+        {isValidUrl && !previewLoading && preview === null && (
           <p className="mt-2 text-[11px] text-red-500">Dataset not found or not accessible.</p>
         )}
 

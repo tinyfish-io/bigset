@@ -1,8 +1,10 @@
+export type ColumnType = "text" | "number" | "boolean" | "url" | "date";
+
 export interface DatasetMeta {
   name: string;
   description: string;
   rowCount?: number;
-  columns: { name: string; type: string }[];
+  columns: { name: string; type: ColumnType; description?: string; isPrimaryKey?: boolean }[];
 }
 
 export async function fetchPublicDatasetMeta(id: string): Promise<DatasetMeta | null> {
