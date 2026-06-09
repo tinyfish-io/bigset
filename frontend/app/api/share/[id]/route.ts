@@ -1,18 +1,28 @@
 import { NextResponse } from "next/server";
-import { fetchPublicDatasetMeta } from "@/lib/fetch-dataset-meta";
 
 const CORS = { "Access-Control-Allow-Origin": "*" };
+const BACKEND_URL =
+  process.env.BACKEND_URL ??
+  process.env.NEXT_PUBLIC_BACKEND_URL ??
+  "http://localhost:3501";
 
 export async function GET(
   _req: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
-  const dataset = await fetchPublicDatasetMeta(id, { noCache: true });
-  if (!dataset) {
+  try {
+    const res = await fetch(`${BACKEND_URL}/share/${id}`, {
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) {
+      return NextResponse.json({ error: "Dataset not found" }, { status: 404, headers: CORS });
+    }
+    const data = await res.json();
+    return NextResponse.json(data, { headers: CORS });
+  } catch {
     return NextResponse.json({ error: "Dataset not found" }, { status: 404, headers: CORS });
   }
-  return NextResponse.json(dataset, { headers: CORS });
 }
 
 export async function OPTIONS() {

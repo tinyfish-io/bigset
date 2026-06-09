@@ -123,6 +123,7 @@ services:
       NEXT_PUBLIC_CLERK_AFTER_SIGN_IN_URL: /dashboard
       NEXT_PUBLIC_CLERK_AFTER_SIGN_UP_URL: /dashboard
       NEXT_PUBLIC_BACKEND_URL: http://localhost:3501
+      BACKEND_URL: http://backend:3501
       # PostHog — analytics no-ops if unset
       NEXT_PUBLIC_POSTHOG_KEY: ${NEXT_PUBLIC_POSTHOG_KEY:-}
       NEXT_PUBLIC_POSTHOG_HOST: ${NEXT_PUBLIC_POSTHOG_HOST:-https://us.i.posthog.com}

@@ -682,6 +682,32 @@ fastify.addHook("onClose", async () => {
 
 fastify.get("/health", async () => ({ status: "ok" }));
 
+fastify.get("/share/:id", async (request, reply) => {
+  const { id } = request.params as { id: string };
+  reply.header("Access-Control-Allow-Origin", "*");
+  try {
+    const dataset = await convex.query(api.datasets.get, { id });
+    if (!dataset || dataset.visibility !== "public") {
+      return reply.code(404).send({ error: "Dataset not found" });
+    }
+    return {
+      name: dataset.name,
+      description: dataset.description,
+      rowCount: dataset.rowCount,
+      columns: dataset.columns,
+    };
+  } catch {
+    return reply.code(404).send({ error: "Dataset not found" });
+  }
+});
+
+fastify.options("/share/:id", async (_request, reply) => {
+  reply.header("Access-Control-Allow-Origin", "*");
+  reply.header("Access-Control-Allow-Methods", "GET, OPTIONS");
+  reply.header("Access-Control-Allow-Headers", "Content-Type");
+  return reply.code(204).send();
+});
+
 fastify.get("/local-setup/status", async (_req, reply) => {
   if (!env.IS_LOCAL_MODE) {
     return reply.code(404).send({ error: "Not found" });
