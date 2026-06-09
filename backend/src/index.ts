@@ -947,6 +947,7 @@ fastify.post("/cli/datasets/:datasetId/populate", async (req, reply) => {
     return reply.code(400).send({ error: "datasetId is required" });
   }
 
+  let claimedDatasetId: string | null = null;
   try {
     const dataset = await convex.query(internal.datasets.getOwnedInternal, {
       id: params.data.datasetId,
@@ -964,6 +965,7 @@ fastify.post("/cli/datasets/:datasetId/populate", async (req, reply) => {
     if (populateOutcome !== "started") {
       return reply.code(409).send({ error: `Cannot populate dataset: ${populateOutcome}` });
     }
+    claimedDatasetId = dataset._id;
 
     const { getModelConfig } = await import("./config/models.js");
     const modelConfig = await getModelConfig(ownerId);
@@ -989,6 +991,20 @@ fastify.post("/cli/datasets/:datasetId/populate", async (req, reply) => {
     return reply.code(202).send({ success: true, runId: run.runId });
   } catch (err) {
     req.log.error(err, "CLI populate failed");
+    if (claimedDatasetId) {
+      try {
+        await setDatasetPopulateStatus(
+          claimedDatasetId,
+          "failed",
+          statusErrorMessage(err),
+        );
+      } catch (statusErr) {
+        req.log.error(
+          { err: statusErr, datasetId: claimedDatasetId },
+          "Failed to release CLI populate dataset claim",
+        );
+      }
+    }
     return reply.code(502).send({ error: "Failed to populate dataset" });
   }
 });
