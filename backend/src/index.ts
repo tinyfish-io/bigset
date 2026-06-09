@@ -629,23 +629,25 @@ function startLocalRefreshScheduler(
 
 const fastify = Fastify({ logger: true });
 
-const allowedCorsOrigins = new Set([env.CLIENT_ORIGIN]);
+const allowedCorsOrigins = new Set(env.CLIENT_ORIGINS);
 if (env.IS_LOCAL_MODE) {
-  try {
-    const clientOrigin = new URL(env.CLIENT_ORIGIN);
-    if (
-      clientOrigin.hostname === "localhost" ||
-      clientOrigin.hostname === "127.0.0.1"
-    ) {
-      allowedCorsOrigins.add(
-        `${clientOrigin.protocol}//localhost${clientOrigin.port ? `:${clientOrigin.port}` : ""}`,
-      );
-      allowedCorsOrigins.add(
-        `${clientOrigin.protocol}//127.0.0.1${clientOrigin.port ? `:${clientOrigin.port}` : ""}`,
-      );
+  for (const origin of env.CLIENT_ORIGINS) {
+    try {
+      const clientOrigin = new URL(origin);
+      if (
+        clientOrigin.hostname === "localhost" ||
+        clientOrigin.hostname === "127.0.0.1"
+      ) {
+        allowedCorsOrigins.add(
+          `${clientOrigin.protocol}//localhost${clientOrigin.port ? `:${clientOrigin.port}` : ""}`,
+        );
+        allowedCorsOrigins.add(
+          `${clientOrigin.protocol}//127.0.0.1${clientOrigin.port ? `:${clientOrigin.port}` : ""}`,
+        );
+      }
+    } catch {
+      // Keep the configured origin only if the origin is not URL-shaped.
     }
-  } catch {
-    // Keep the configured origin only if CLIENT_ORIGIN is not URL-shaped.
   }
 }
 

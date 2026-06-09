@@ -274,14 +274,21 @@ function ImportModal({ onClose }: { onClose: () => void }) {
     }
     setCrossPreview("loading");
     const controller = new AbortController();
+
+    let fallback: DatasetMeta | null = null;
+    try {
+      const schemaParam = new URL(url.trim()).searchParams.get("schema");
+      if (schemaParam) fallback = JSON.parse(atob(schemaParam)) as DatasetMeta;
+    } catch {}
+
     fetch(`${sourceOrigin}/api/share/${extractedId}`, {
       signal: controller.signal,
     })
       .then((r) => (r.ok ? r.json() : null))
-      .then((data: DatasetMeta | null) => setCrossPreview(data))
-      .catch(() => setCrossPreview(null));
+      .then((data: DatasetMeta | null) => setCrossPreview(data ?? fallback))
+      .catch(() => setCrossPreview(fallback));
     return () => controller.abort();
-  }, [isCrossInstance, extractedId, sourceOrigin]);
+  }, [isCrossInstance, extractedId, sourceOrigin, url]);
 
   useEffect(() => {
     function handleKey(e: KeyboardEvent) {

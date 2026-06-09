@@ -534,6 +534,8 @@ export default function DatasetPage() {
         <ShareModal
           datasetId={dataset._id}
           datasetName={dataset.name}
+          description={dataset.description}
+          columns={dataset.columns}
           visibility={dataset.visibility ?? "private"}
           onVisibilityChange={(v) => updateVisibility({ id: dataset._id, visibility: v })}
           onClose={() => setShareOpen(false)}
@@ -930,12 +932,16 @@ function ConfirmPopulateModal({
 function ShareModal({
   datasetId,
   datasetName,
+  description,
+  columns,
   visibility,
   onVisibilityChange,
   onClose,
 }: {
   datasetId: string;
   datasetName: string;
+  description: string;
+  columns: Array<{ name: string; type: string; description?: string; isPrimaryKey?: boolean }>;
   visibility: "public" | "private";
   onVisibilityChange: (v: "public" | "private") => Promise<unknown>;
   onClose: () => void;
@@ -944,7 +950,10 @@ function ShareModal({
   const [saveError, setSaveError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const shareUrl = typeof window !== "undefined"
-    ? `${window.location.origin}/share/${datasetId}`
+    ? (() => {
+        const schema = btoa(JSON.stringify({ name: datasetName, description, columns }));
+        return `${window.location.origin}/share/${datasetId}?schema=${schema}`;
+      })()
     : "";
 
   useEffect(() => {
