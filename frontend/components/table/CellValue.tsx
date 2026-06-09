@@ -68,7 +68,8 @@ export function CellValue({
     return (
 	 <span className="tabular-nums" title={str} >
 		{str}
-	</span>;
+	</span>
+    );
   }
 
   return (
