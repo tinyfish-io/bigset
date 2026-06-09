@@ -1,6 +1,8 @@
 import { clerkMiddleware } from "@clerk/nextjs/server";
 import type { NextRequest } from "next/server";
 
+const isLocalMode = process.env.PROD !== "1";
+
 /**
  * Public routes (Clerk middleware lets these through without auth):
  *   /                  — landing page with curated datasets
@@ -33,11 +35,13 @@ function isPublicPath(req: NextRequest): boolean {
   return false;
 }
 
-export default clerkMiddleware(async (auth, request) => {
+const clerkProxy = clerkMiddleware(async (auth, request) => {
   if (!isPublicPath(request)) {
     await auth.protect();
   }
 });
+
+export default isLocalMode ? function localProxy() {} : clerkProxy;
 
 export const config = {
   matcher: [

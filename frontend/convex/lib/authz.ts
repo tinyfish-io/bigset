@@ -34,6 +34,19 @@ type AnyCtx =
 const DATASET_NOT_FOUND = "Dataset not found";
 const ROW_NOT_FOUND = "Row not found";
 const UNAUTHENTICATED = "Not authenticated";
+const LOCAL_USER_ID = "local_user_default";
+
+function isLocalMode(): boolean {
+  return process.env.BIGSET_LOCAL_MODE === "1";
+}
+
+function localIdentity(): UserIdentity {
+  return {
+    subject: LOCAL_USER_ID,
+    issuer: "bigset-local",
+    tokenIdentifier: `bigset-local|${LOCAL_USER_ID}`,
+  };
+}
 
 /**
  * Owner-id values reserved for system-managed datasets (e.g. curated
@@ -93,6 +106,7 @@ function logDeny(
 export async function requireIdentity(ctx: AnyCtx): Promise<UserIdentity> {
   const identity = await ctx.auth.getUserIdentity();
   if (!identity) {
+    if (isLocalMode()) return localIdentity();
     logDeny("unauthenticated", { op: "write" });
     throw new Error(UNAUTHENTICATED);
   }
@@ -102,7 +116,9 @@ export async function requireIdentity(ctx: AnyCtx): Promise<UserIdentity> {
 export async function getIdentity(
   ctx: AnyCtx,
 ): Promise<UserIdentity | null> {
-  return await ctx.auth.getUserIdentity();
+  const identity = await ctx.auth.getUserIdentity();
+  if (!identity && isLocalMode()) return localIdentity();
+  return identity;
 }
 
 function isPublic(dataset: Doc<"datasets">): boolean {

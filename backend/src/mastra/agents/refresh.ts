@@ -5,10 +5,6 @@ import { searchWebTool, fetchPageTool } from "../tools/web-tools.js";
 import type { AuthContext } from "../workflows/populate.js";
 import type { PopulateColumn } from "../../pipeline/populate.js";
 
-const openrouter = createOpenRouter({
-  apiKey: process.env.OPENROUTER_API_KEY!,
-});
-
 function buildRefreshInstructions(columns: PopulateColumn[]): string {
   const columnNames = columns.map((c) => c.name);
   const columnsDesc = columns
@@ -55,7 +51,13 @@ export function buildRefreshAgent(
   authorizedDatasetId: string,
   authContext: AuthContext,
   columns: PopulateColumn[],
+  openRouterApiKey: string,
 ): Agent {
+  const modelSlug = authContext.modelConfig!.investigateSubagent;
+  const openrouter = createOpenRouter({
+    apiKey: openRouterApiKey,
+    baseURL: process.env.OPENROUTER_BASE_URL,
+  });
   const { update_row } = buildPopulateTools(
     authorizedDatasetId,
     authContext,
@@ -64,7 +66,7 @@ export function buildRefreshAgent(
     id: "refresh-agent",
     name: "Dataset Refresh Agent",
     instructions: buildRefreshInstructions(columns),
-    model: openrouter("qwen/qwen3.7-max"),
+    model: openrouter(modelSlug),
     tools: {
       update_row,
       search_web: searchWebTool,

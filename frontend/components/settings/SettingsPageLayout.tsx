@@ -112,14 +112,14 @@ export function SettingsPageLayout({ children, navItems }: SettingsPageLayoutPro
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   return (
-    <div className="flex flex-1 h-screen">
+    <div className="flex min-h-0 flex-1">
       <SettingsSidebar
         items={navItems}
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
       />
 
-      <main className="flex-1 overflow-auto">
+      <main className="min-h-0 flex-1 overflow-y-auto">
         <div className="flex items-center gap-4 p-4 border-b border-border sm:hidden">
           <button
             onClick={() => setSidebarOpen(true)}
@@ -131,7 +131,7 @@ export function SettingsPageLayout({ children, navItems }: SettingsPageLayoutPro
           <span className="text-sm font-semibold text-foreground">Settings</span>
         </div>
 
-        <div style={{ padding: "32px 24px" }}>
+        <div className="px-4 pb-20 pt-8 sm:px-6">
           {children}
         </div>
       </main>

@@ -13,6 +13,7 @@ import { isReservedOwnerId } from "./authz.js";
  * Charging model:
  *   - 1 row inserted, updated, or replaced = 1 unit consumed this period
  *   - System-owned datasets (ownerId === "system") bypass quota entirely
+ *   - Local OSS mode bypasses quota entirely
  *   - Deletes do NOT refund; the counter tracks WORK in the period, not
  *     current row count. Deletion is just cleanup.
  *   - Period rolls over on the 1st (UTC) of each calendar month
@@ -50,6 +51,7 @@ type WriteCtx = GenericMutationCtx<DataModel>;
  * row (`plan` field + lookup table) when paid tiers exist.
  */
 export const FREE_TIER_MONTHLY_QUOTA = 2500;
+const LOCAL_MODE_QUOTA_LIMIT = Number.MAX_SAFE_INTEGER;
 
 export class QuotaExceededError extends Error {
   constructor(consumed: number, limit: number, requested: number) {
@@ -87,12 +89,20 @@ function getNextMonthStartUTC(ts: number): number {
   return Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1);
 }
 
-function snapshotOf(consumed: number, periodStart: number): UsageSnapshot {
-  const remaining = Math.max(0, FREE_TIER_MONTHLY_QUOTA - consumed);
-  const fractionUsed = Math.min(1, consumed / FREE_TIER_MONTHLY_QUOTA);
+function isLocalMode(): boolean {
+  return process.env.BIGSET_LOCAL_MODE === "1";
+}
+
+function snapshotOf(
+  consumed: number,
+  periodStart: number,
+  limit = FREE_TIER_MONTHLY_QUOTA,
+): UsageSnapshot {
+  const remaining = Math.max(0, limit - consumed);
+  const fractionUsed = Math.min(1, consumed / limit);
   return {
     consumed,
-    limit: FREE_TIER_MONTHLY_QUOTA,
+    limit,
     remaining,
     fractionUsed,
     periodStart,
@@ -110,12 +120,15 @@ export async function getUsageFor(
   ctx: AnyCtx,
   userId: string,
 ): Promise<UsageSnapshot> {
+  const monthStart = getMonthStartUTC(Date.now());
+  if (isLocalMode()) {
+    return snapshotOf(0, monthStart, LOCAL_MODE_QUOTA_LIMIT);
+  }
+
   const row = await ctx.db
     .query("usage")
     .withIndex("by_user", (q) => q.eq("userId", userId))
     .unique();
-
-  const monthStart = getMonthStartUTC(Date.now());
 
   // Either no row yet, or row belongs to a previous period → show 0.
   // (The DB row is left alone here; the next write rolls it over.)
@@ -136,6 +149,8 @@ export async function requireQuotaRemaining(
   userId: string,
   atLeast: number = 1,
 ): Promise<void> {
+  if (isLocalMode()) return;
+
   const usage = await getUsageFor(ctx, userId);
   if (usage.remaining < atLeast) {
     throw new QuotaExceededError(usage.consumed, usage.limit, atLeast);
@@ -157,6 +172,7 @@ export async function consumeQuota(
   n: number,
 ): Promise<void> {
   if (n <= 0) return;
+  if (isLocalMode()) return;
   if (isReservedOwnerId(dataset.ownerId)) return;
 
   const userId = dataset.ownerId;

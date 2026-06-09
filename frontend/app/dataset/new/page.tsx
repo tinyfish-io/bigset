@@ -3,11 +3,11 @@
 import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { useAuth } from "@clerk/nextjs";
-import { useMutation, useQuery, useConvexAuth } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { EVENTS, track } from "@/lib/analytics";
 import { inferSchema, type InferredColumn } from "@/lib/backend";
+import { useAppAuth, useAppConvexAuth } from "@/lib/app-auth";
 import {
   REFRESH_CADENCE_OPTIONS,
   type RefreshCadence,
@@ -78,7 +78,7 @@ function TypeSelector({ value, onChange }: { value: ColumnType; onChange: (v: Co
 
 export default function NewDatasetPage() {
   const router = useRouter();
-  const { isAuthenticated, isLoading } = useConvexAuth();
+  const { isAuthenticated, isLoading } = useAppConvexAuth();
 
   const [step, setStep] = useState<Step>("describe");
   const [prompt, setPrompt] = useState("");
@@ -94,7 +94,7 @@ export default function NewDatasetPage() {
     "search_fetch" | "browser" | "hybrid" | null
   >(null);
   const [sourceHint, setSourceHint] = useState("");
-  const { getToken } = useAuth();
+  const { getToken } = useAppAuth();
 
   const createDataset = useMutation(api.datasets.create);
   const usage = useQuery(

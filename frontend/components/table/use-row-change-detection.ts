@@ -9,9 +9,10 @@ export function useRowChangeDetection(rows: DatasetRow[]) {
   const [flashingCells, setFlashingCells] = useState<Set<string>>(new Set());
 
   useEffect(() => {
+    const timers = flashTimersRef.current;
     return () => {
-      for (const timer of flashTimersRef.current) clearTimeout(timer);
-      flashTimersRef.current.clear();
+      for (const timer of timers) clearTimeout(timer);
+      timers.clear();
     };
   }, []);
 
@@ -53,21 +54,25 @@ export function useRowChangeDetection(rows: DatasetRow[]) {
     prevRowsRef.current = nextMap;
 
     if (newFlashes.size > 0) {
-      setFlashingCells((prev) => {
-        const merged = new Set(prev);
-        for (const key of newFlashes) merged.add(key);
-        return merged;
-      });
-
-      const timer = setTimeout(() => {
+      const startTimer = setTimeout(() => {
         setFlashingCells((prev) => {
-          const next = new Set(prev);
-          for (const key of newFlashes) next.delete(key);
-          return next;
+          const merged = new Set(prev);
+          for (const key of newFlashes) merged.add(key);
+          return merged;
         });
-        flashTimersRef.current.delete(timer);
-      }, FLASH_DURATION_MS);
-      flashTimersRef.current.add(timer);
+        flashTimersRef.current.delete(startTimer);
+
+        const clearTimer = setTimeout(() => {
+          setFlashingCells((prev) => {
+            const next = new Set(prev);
+            for (const key of newFlashes) next.delete(key);
+            return next;
+          });
+          flashTimersRef.current.delete(clearTimer);
+        }, FLASH_DURATION_MS);
+        flashTimersRef.current.add(clearTimer);
+      }, 0);
+      flashTimersRef.current.add(startTimer);
     }
   }, [rows]);
 

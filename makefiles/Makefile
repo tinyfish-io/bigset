@@ -1,6 +1,9 @@
 SHELL := /usr/bin/env bash
 
-.PHONY: all dev validate-dev-env down clean convex-push convex-env seed-public-datasets ensure-admin-key install-deps
+CONVEX_CLI_URL := http://convex:3210
+CONVEX_CLI_RUN := docker compose -f docker-compose.dev.yml run --rm --build --no-deps
+
+.PHONY: all dev validate-dev-env start-local-keychain stop-local-keychain down clean convex-push convex-env seed-public-datasets ensure-admin-key install-deps build-release
 
 all: dev
 
@@ -8,7 +11,10 @@ install-deps:
 	@cd frontend && npm install --silent
 	@cd backend && npm install --silent
 
-dev: validate-dev-env install-deps
+build-release: install-deps
+	node scripts/build-release.mjs
+
+dev: validate-dev-env install-deps start-local-keychain
 	docker compose -f docker-compose.dev.yml up --build -d db convex convex-dashboard
 	@echo "Waiting for Convex..."
 	@for i in $$(seq 1 120); do \
@@ -30,8 +36,37 @@ dev: validate-dev-env install-deps
 	docker compose -f docker-compose.dev.yml logs -f
 
 validate-dev-env:
-	@test -f .env || { echo "Error: .env not found. Run: cp .env.example .env"; exit 1; }
-	@missing=""; \
+	@if [ ! -f .env ]; then \
+		printf "# Auto-created by make dev. Leave PROD unset for local mode.\n" > .env; \
+		echo "Created local .env"; \
+	fi
+	@prod="$$(grep '^PROD=' .env | cut -d= -f2-)"; \
+	if [[ "$$prod" != "1" ]]; then \
+		ensure_env_var() { \
+			key="$$1"; value="$$2"; \
+			if grep -q "^$$key=" .env; then \
+				current="$$(grep "^$$key=" .env | tail -n1 | cut -d= -f2-)"; \
+				if [[ -z "$$current" ]]; then \
+					sed -i.bak "s#^$$key=.*#$$key=$$value#" .env && rm -f .env.bak; \
+				fi; \
+			else \
+				echo "$$key=$$value" >> .env; \
+			fi; \
+		}; \
+		workspace_id="$$(node -e 'const { createHash } = require("node:crypto"); process.stdout.write(createHash("sha256").update(process.cwd()).digest("hex").slice(0, 16));')"; \
+		token="$$(node -e 'const { randomBytes } = require("node:crypto"); process.stdout.write(randomBytes(32).toString("hex"));')"; \
+		ensure_env_var LOCAL_KEYCHAIN_PORT 3502; \
+		ensure_env_var LOCAL_KEYCHAIN_TIMEOUT_MS 5000; \
+		ensure_env_var BIGSET_LOCAL_WORKSPACE_ID "$$workspace_id"; \
+		ensure_env_var LOCAL_KEYCHAIN_TOKEN "$$token"; \
+	fi
+	@prod="$$(grep '^PROD=' .env | cut -d= -f2-)"; \
+	if [[ "$$prod" != "1" ]]; then \
+		echo "Local mode: Clerk, TinyFish, and OpenRouter env validation skipped."; \
+	fi
+	@prod="$$(grep '^PROD=' .env | cut -d= -f2-)"; \
+	if [[ "$$prod" != "1" ]]; then exit 0; fi; \
+	missing=""; \
 	check_env() { \
 		key="$$1"; placeholder="$$2"; \
 		value="$$(grep "^$$key=" .env | cut -d= -f2-)"; \
@@ -83,6 +118,45 @@ validate-dev-env:
 		exit 1; \
 	fi
 
+start-local-keychain:
+	@prod="$$(grep '^PROD=' .env | cut -d= -f2-)"; \
+	if [[ "$$prod" == "1" ]]; then \
+		echo "Production mode: local keychain bridge skipped."; \
+		exit 0; \
+	fi
+	@mkdir -p .local
+	@if [ -f .local/keychain.pid ]; then \
+		pid="$$(cat .local/keychain.pid)"; \
+		if [[ -n "$$pid" ]] && kill -0 "$$pid" > /dev/null 2>&1; then \
+			kill "$$pid" > /dev/null 2>&1 || true; \
+		fi; \
+		rm -f .local/keychain.pid; \
+	fi
+	@port="$$(grep '^LOCAL_KEYCHAIN_PORT=' .env | tail -n1 | cut -d= -f2-)"; \
+	echo "Starting local keychain bridge on 127.0.0.1:$$port..."; \
+	LOCAL_KEYCHAIN_BIND_HOST=127.0.0.1 WITH_ROOT_ENV_CHILD_PID_FILE=.local/keychain.pid bash -lc 'cd backend && exec node ../scripts/with-root-env.mjs npx tsx src/keychain-server.ts' \
+		> .local/keychain.log 2>&1 & \
+	for i in $$(seq 1 30); do \
+		if curl -sf "http://127.0.0.1:$$port/health" > /dev/null 2>&1; then \
+			echo "Local keychain bridge is up."; \
+			exit 0; \
+		fi; \
+		sleep 1; \
+	done; \
+	echo "Error: local keychain bridge did not start. Last log lines:"; \
+	tail -40 .local/keychain.log; \
+	exit 1
+
+stop-local-keychain:
+	@if [ -f .local/keychain.pid ]; then \
+		pid="$$(cat .local/keychain.pid)"; \
+		if [[ -n "$$pid" ]] && kill -0 "$$pid" > /dev/null 2>&1; then \
+			echo "Stopping local keychain bridge..."; \
+			kill "$$pid" > /dev/null 2>&1 || true; \
+		fi; \
+		rm -f .local/keychain.pid; \
+	fi
+
 ensure-admin-key:
 	@admin_key="$$(grep '^CONVEX_SELF_HOSTED_ADMIN_KEY=' .env | cut -d= -f2-)"; \
 	needs_gen=false; \
@@ -90,8 +164,8 @@ ensure-admin-key:
 		needs_gen=true; \
 	else \
 		echo "Validating Convex admin key..."; \
-		if ! (cd frontend && node ../scripts/with-root-env.mjs npx convex env list \
-			--url http://127.0.0.1:3210 --admin-key "$$admin_key") > /dev/null 2>&1; then \
+		if ! $(CONVEX_CLI_RUN) -e CONVEX_SELF_HOSTED_ADMIN_KEY="$$admin_key" frontend sh -lc \
+			'npx convex env list --url $(CONVEX_CLI_URL) --admin-key "$$CONVEX_SELF_HOSTED_ADMIN_KEY"' > /dev/null 2>&1; then \
 			echo "Admin key is stale (volumes were probably wiped). Regenerating..."; \
 			needs_gen=true; \
 		fi; \
@@ -115,41 +189,47 @@ ensure-admin-key:
 
 convex-env:
 	@test -f .env || { echo "Error: .env not found. Run: cp .env.example .env"; exit 1; }
-	@issuer="$$(grep '^CLERK_JWT_ISSUER_DOMAIN=' .env | cut -d= -f2-)"; \
-		admin_key="$$(grep '^CONVEX_SELF_HOSTED_ADMIN_KEY=' .env | cut -d= -f2-)"; \
-		if [[ -z "$$issuer" || "$$issuer" == "https://your-app.clerk.accounts.dev" ]]; then \
-			echo "Error: CLERK_JWT_ISSUER_DOMAIN must be your Clerk issuer URL in root .env"; \
-			exit 1; \
-		fi; \
-		if [[ -z "$$admin_key" ]]; then \
-			echo "Error: CONVEX_SELF_HOSTED_ADMIN_KEY is missing in root .env"; \
-			echo "Run make dev to generate it automatically."; \
-			exit 1; \
-		fi; \
-		cd frontend && node ../scripts/with-root-env.mjs npx convex env set CLERK_JWT_ISSUER_DOMAIN "$$issuer" \
-		--url http://127.0.0.1:3210 \
-		--admin-key "$$admin_key"
+	@prod="$$(grep '^PROD=' .env | cut -d= -f2-)"; \
+	admin_key="$$(grep '^CONVEX_SELF_HOSTED_ADMIN_KEY=' .env | cut -d= -f2-)"; \
+	if [[ -z "$$admin_key" ]]; then \
+		echo "Error: CONVEX_SELF_HOSTED_ADMIN_KEY is missing in root .env"; \
+		echo "Run make dev to generate it automatically."; \
+		exit 1; \
+	fi; \
+	if [[ "$$prod" != "1" ]]; then \
+		$(CONVEX_CLI_RUN) -e CONVEX_SELF_HOSTED_ADMIN_KEY="$$admin_key" frontend sh -lc \
+		'npx convex env set BIGSET_LOCAL_MODE 1 --url $(CONVEX_CLI_URL) --admin-key "$$CONVEX_SELF_HOSTED_ADMIN_KEY"'; \
+		exit 0; \
+	fi; \
+	issuer="$$(grep '^CLERK_JWT_ISSUER_DOMAIN=' .env | cut -d= -f2-)"; \
+	if [[ -z "$$issuer" || "$$issuer" == "https://your-app.clerk.accounts.dev" ]]; then \
+		echo "Error: CLERK_JWT_ISSUER_DOMAIN must be your Clerk issuer URL in root .env"; \
+		exit 1; \
+	fi; \
+	$(CONVEX_CLI_RUN) -e CONVEX_SELF_HOSTED_ADMIN_KEY="$$admin_key" frontend sh -lc \
+	'npx convex env set BIGSET_LOCAL_MODE 0 --url $(CONVEX_CLI_URL) --admin-key "$$CONVEX_SELF_HOSTED_ADMIN_KEY"'; \
+	$(CONVEX_CLI_RUN) -e CONVEX_SELF_HOSTED_ADMIN_KEY="$$admin_key" -e CLERK_JWT_ISSUER_DOMAIN="$$issuer" frontend sh -lc \
+	'npx convex env set CLERK_JWT_ISSUER_DOMAIN "$$CLERK_JWT_ISSUER_DOMAIN" --url $(CONVEX_CLI_URL) --admin-key "$$CONVEX_SELF_HOSTED_ADMIN_KEY"'
 
 convex-push:
 	@test -f .env || { echo "Error: .env not found. Run: cp .env.example .env"; exit 1; }
 	@admin_key="$$(grep '^CONVEX_SELF_HOSTED_ADMIN_KEY=' .env | cut -d= -f2-)"; \
-		if [[ -z "$$admin_key" ]]; then \
-			echo "Error: CONVEX_SELF_HOSTED_ADMIN_KEY is missing in root .env"; \
-			echo "Run make dev to generate it automatically."; \
-			exit 1; \
-		fi; \
-		cd frontend && node ../scripts/with-root-env.mjs npx convex deploy \
-		--url http://127.0.0.1:3210 \
-		--admin-key "$$admin_key"
+	if [[ -z "$$admin_key" ]]; then \
+		echo "Error: CONVEX_SELF_HOSTED_ADMIN_KEY is missing in root .env"; \
+		echo "Run make dev to generate it automatically."; \
+		exit 1; \
+	fi; \
+	$(CONVEX_CLI_RUN) -e CONVEX_SELF_HOSTED_ADMIN_KEY="$$admin_key" frontend sh -lc \
+	'npx convex deploy --url $(CONVEX_CLI_URL) --admin-key "$$CONVEX_SELF_HOSTED_ADMIN_KEY"'
 
 seed-public-datasets:
 	@test -f .env || { echo "Error: .env not found. Run: cp .env.example .env"; exit 1; }
 	@cd frontend && node ../scripts/with-root-env.mjs npx convex run publicSeed:seedPublicDatasets
 
-down:
+down: stop-local-keychain
 	docker compose -f docker-compose.dev.yml down
 
-clean:
+clean: stop-local-keychain
 	docker compose -f docker-compose.dev.yml down -v --rmi local
 	@if [ -f .env ]; then \
 		sed -i.bak 's|^CONVEX_SELF_HOSTED_ADMIN_KEY=.*|CONVEX_SELF_HOSTED_ADMIN_KEY=|' .env && rm -f .env.bak; \

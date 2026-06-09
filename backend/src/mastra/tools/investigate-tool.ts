@@ -75,6 +75,7 @@ export function buildSubagentTool(
   authorizedDatasetId: string,
   authContext: AuthContext,
   columns: PopulateColumn[],
+  openRouterApiKey: string,
   maxRowCount: number,
   metrics?: RunMetrics,
 ) {
@@ -107,6 +108,7 @@ export function buildSubagentTool(
           authorizedDatasetId,
           authContext,
           columns,
+          openRouterApiKey,
         );
 
         const pkBlock = Object.entries(primary_keys)

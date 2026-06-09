@@ -3,8 +3,7 @@
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useMutation, useQuery, useConvexAuth } from "convex/react";
-import { useAuth, useUser, useClerk } from "@clerk/nextjs";
+import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { DatasetTable } from "@/components/table";
@@ -22,14 +21,15 @@ import {
   type RefreshCadence,
 } from "@/lib/refresh-cadence";
 import type { ProfileUser } from "@/lib/profile-user";
+import { useAppAuth, useAppClerk, useAppConvexAuth, useAppUser } from "@/lib/app-auth";
 
 export default function DatasetPage() {
   const params = useParams();
   const router = useRouter();
-  const { isLoading: authLoading, isAuthenticated } = useConvexAuth();
-  const { userId, getToken } = useAuth();
-  const { user } = useUser();
-  const { signOut } = useClerk();
+  const { isLoading: authLoading, isAuthenticated } = useAppConvexAuth();
+  const { userId, getToken } = useAppAuth();
+  const { user } = useAppUser();
+  const { signOut } = useAppClerk();
   const [exporting, setExporting] = useState<"csv" | "xlsx" | null>(null);
   const [populating, setPopulating] = useState(false);
   const [updating, setUpdating] = useState(false);
@@ -654,7 +654,10 @@ function SettingsDropdown({
   }, [open, onClose]);
 
   useEffect(() => {
-    if (!open) setMaxRowCountInput(String(maxRowCount));
+    if (!open) {
+      const id = setTimeout(() => setMaxRowCountInput(String(maxRowCount)), 0);
+      return () => clearTimeout(id);
+    }
   }, [maxRowCount, open]);
 
   return (
@@ -740,7 +743,6 @@ function SettingsDropdown({
                 <button
                   key={option.value}
                   type="button"
-
                   onClick={() => onRefreshCadenceChange(option.value)}
                   disabled={refreshCadenceDisabled || selected}
                   className="w-full flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg text-xs text-foreground hover:bg-foreground/[0.05] transition-colors disabled:cursor-default disabled:opacity-60"
@@ -758,6 +760,7 @@ function SettingsDropdown({
           {onDelete && (
             <div className="border-t border-border p-1">
               <button
+                type="button"
                 onClick={onDelete}
                 className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs text-red-500 hover:bg-red-500/[0.08] transition-colors"
               >

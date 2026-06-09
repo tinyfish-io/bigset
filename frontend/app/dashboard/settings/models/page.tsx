@@ -2,18 +2,19 @@
 
 import { useState, useEffect } from "react";
 import { useQuery } from "convex/react";
-import { useAuth } from "@clerk/nextjs";
 import { api } from "@/convex/_generated/api";
 import { getModelConfig, saveModelConfig, getOpenRouterModels, refreshOpenRouterModels, type EffectiveModelConfig, type OpenRouterModel } from "@/lib/backend";
 import { SettingsPageLayout } from "@/components/settings/SettingsPageLayout";
 import { SettingsHeader } from "@/components/settings/SettingsHeader";
 import { SettingsTile } from "@/components/settings/SettingsTile";
+import { LocalCredentialsPanel } from "@/components/settings/LocalCredentialsPanel";
 import { ModelSideSheet } from "@/components/settings/ModelSideSheet";
 import { MODEL_ROLES, type ModelRole } from "@/components/settings/types";
 import { SkeletonList } from "@/components/settings/Skeleton";
+import { useAppAuth } from "@/lib/app-auth";
 
 export default function ModelSettingsPage() {
-  const { getToken } = useAuth();
+  const { getToken } = useAppAuth();
   const convexModels = useQuery(api.openRouterModels.list, {});
 
   const [effectiveConfig, setEffectiveConfig] = useState<EffectiveModelConfig | null>(null);
@@ -115,25 +116,29 @@ export default function ModelSettingsPage() {
 
   return (
     <SettingsPageLayout navItems={navItems}>
-      <SettingsHeader
-        title="Model Settings"
-        subtitle="Configure AI models for different tasks. Models are fetched from OpenRouter."
-      />
+      <div className="w-full max-w-4xl">
+        <LocalCredentialsPanel />
 
-      <div className="space-y-2">
-        {isLoading ? (
-          <SkeletonList count={MODEL_ROLES.length} />
-        ) : (
-          MODEL_ROLES.map((role) => (
-            <SettingsTile
-              key={role.key}
-              label={role.label}
-              description={role.description}
-              value={getSelectedModel(role)}
-              onClick={() => openSideSheet(role)}
-            />
-          ))
-        )}
+        <SettingsHeader
+          title="Model Settings"
+          subtitle="Configure AI models for different tasks. Models are fetched from OpenRouter."
+        />
+
+        <div className="space-y-2">
+          {isLoading ? (
+            <SkeletonList count={MODEL_ROLES.length} />
+          ) : (
+            MODEL_ROLES.map((role) => (
+              <SettingsTile
+                key={role.key}
+                label={role.label}
+                description={role.description}
+                value={getSelectedModel(role)}
+                onClick={() => openSideSheet(role)}
+              />
+            ))
+          )}
+        </div>
       </div>
 
       {activeSheet && (

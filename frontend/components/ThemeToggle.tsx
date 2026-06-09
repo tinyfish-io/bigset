@@ -1,6 +1,6 @@
 "use client";
 
-import { useSyncExternalStore } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 import { EVENTS, track } from "@/lib/analytics";
 
 type Theme = "light" | "dark";
@@ -70,6 +70,16 @@ export function useTheme() {
   }
 
   return { theme, toggle } as const;
+}
+
+export function ThemeSync() {
+  const { theme } = useTheme();
+
+  useEffect(() => {
+    applyTheme(theme);
+  }, [theme]);
+
+  return null;
 }
 
 export function ThemeToggle({ className = "" }: { className?: string }) {

@@ -18,6 +18,8 @@ yarn-debug.log*
 
 # Local-only files
 *.bak
+.local/
+dist/
 tmp/
 temp/
 

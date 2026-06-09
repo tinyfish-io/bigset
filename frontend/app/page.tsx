@@ -1,26 +1,20 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { redirect } from "next/navigation";
 import { useEffect } from "react";
-import { useQuery, useConvexAuth } from "convex/react";
+import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { DatasetCard, type DatasetCardData } from "@/components/dataset/DatasetCard";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { EVENTS, track } from "@/lib/analytics";
+import { useAppConvexAuth } from "@/lib/app-auth";
 
 const PUBLIC_GRID_COUNT = 9;
 
 export default function Home() {
-  const { isAuthenticated, isLoading } = useConvexAuth();
-  const router = useRouter();
+  const { isAuthenticated, isLoading } = useAppConvexAuth();
   const publicDatasets = useQuery(api.datasets.listPublic, {});
-
-  useEffect(() => {
-    if (isAuthenticated) {
-      router.replace("/dashboard");
-    }
-  }, [isAuthenticated, router]);
 
   // Fire once when the landing page actually displays to an anonymous
   // visitor. Skip if we'll immediately redirect them to the dashboard.
@@ -30,7 +24,11 @@ export default function Home() {
     }
   }, [isLoading, isAuthenticated]);
 
-  if (isLoading || isAuthenticated) {
+  if (isAuthenticated) {
+    redirect("/dashboard");
+  }
+
+  if (isLoading) {
     return (
       <div className="flex flex-1 items-center justify-center">
         <p className="text-muted">Loading...</p>

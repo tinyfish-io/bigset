@@ -38,9 +38,6 @@ yarn-error.log*
 package-lock.json
 yarn.lock
 
-# convex generated
-convex/_generated/
-
 # vercel
 .vercel
 
