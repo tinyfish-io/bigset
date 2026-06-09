@@ -278,7 +278,10 @@ function ImportModal({ onClose }: { onClose: () => void }) {
     let fallback: DatasetMeta | null = null;
     try {
       const schemaParam = new URL(url.trim()).searchParams.get("schema");
-      if (schemaParam) fallback = JSON.parse(atob(schemaParam)) as DatasetMeta;
+      if (schemaParam) {
+        const bytes = Uint8Array.from(atob(schemaParam), c => c.charCodeAt(0));
+        fallback = JSON.parse(new TextDecoder().decode(bytes)) as DatasetMeta;
+      }
     } catch {}
 
     fetch(`${sourceOrigin}/api/share/${extractedId}`, {

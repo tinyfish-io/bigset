@@ -951,7 +951,13 @@ function ShareModal({
   const [copied, setCopied] = useState(false);
   const shareUrl = typeof window !== "undefined"
     ? (() => {
-        const schema = btoa(JSON.stringify({ name: datasetName, description, columns }));
+        const minimal = {
+          name: datasetName,
+          description,
+          columns: columns.map(({ name, type, isPrimaryKey }) => ({ name, type, ...(isPrimaryKey ? { isPrimaryKey } : {}) })),
+        };
+        const json = JSON.stringify(minimal);
+        const schema = btoa(String.fromCharCode(...new TextEncoder().encode(json)));
         return `${window.location.origin}/share/${datasetId}?schema=${schema}`;
       })()
     : "";
