@@ -1014,11 +1014,27 @@ fastify.post("/cli/datasets/:datasetId/stop", async (req, reply) => {
 
     const aborted = abortDataset(dataset._id);
     if (!aborted) {
-      await setDatasetPopulateStatus(
-        dataset._id,
-        "failed",
-        "Run interrupted: no active local CLI run registered",
+      req.log.warn(
+        { datasetId: dataset._id },
+        "CLI stop requested for orphaned dataset (no active run registered); forcing to failed",
       );
+      try {
+        if (dataset.status === "updating") {
+          await convex.mutation(internal.datasetRows.clearAllPendingUpdateStatus, {
+            datasetId: dataset._id,
+          });
+        }
+        await setDatasetPopulateStatus(
+          dataset._id,
+          "failed",
+          "Run interrupted: no active local CLI run registered",
+        );
+      } catch (statusErr) {
+        req.log.error(
+          { err: statusErr, datasetId: dataset._id },
+          "Failed to force-transition orphaned CLI dataset to failed",
+        );
+      }
       return reply.code(200).send({ success: true });
     }
     return reply.code(202).send({ success: true });
