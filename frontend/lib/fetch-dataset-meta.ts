@@ -7,7 +7,10 @@ export interface DatasetMeta {
   columns: { name: string; type: ColumnType; description?: string; isPrimaryKey?: boolean }[];
 }
 
-export async function fetchPublicDatasetMeta(id: string): Promise<DatasetMeta | null> {
+export async function fetchPublicDatasetMeta(
+  id: string,
+  { noCache = false } = {},
+): Promise<DatasetMeta | null> {
   const convexUrl =
     process.env.CONVEX_URL ??
     process.env.NEXT_PUBLIC_CONVEX_URL ??
@@ -19,7 +22,7 @@ export async function fetchPublicDatasetMeta(id: string): Promise<DatasetMeta | 
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ path: "datasets:get", args: { id }, format: "json" }),
       signal: AbortSignal.timeout(5000),
-      next: { revalidate: 60 },
+      ...(noCache ? { cache: "no-store" as const } : { next: { revalidate: 60 } }),
     });
     if (!res.ok) return null;
     const json = await res.json();

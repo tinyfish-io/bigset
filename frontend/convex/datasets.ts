@@ -530,19 +530,6 @@ export const importDataset = mutation({
   },
 });
 
-const columnValidator = v.object({
-  name: v.string(),
-  type: v.union(
-    v.literal("text"),
-    v.literal("number"),
-    v.literal("boolean"),
-    v.literal("url"),
-    v.literal("date"),
-  ),
-  description: v.optional(v.string()),
-  isPrimaryKey: v.optional(v.boolean()),
-});
-
 export const importDatasetFromSchema = mutation({
   args: {
     name: v.string(),

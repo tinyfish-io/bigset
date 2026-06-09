@@ -8,7 +8,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
-  const dataset = await fetchPublicDatasetMeta(id);
+  const dataset = await fetchPublicDatasetMeta(id, { noCache: true });
   if (!dataset) {
     return NextResponse.json({ error: "Dataset not found" }, { status: 404, headers: CORS });
   }
