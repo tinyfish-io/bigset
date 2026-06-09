@@ -72,6 +72,7 @@ async function writeStartScript() {
     join(packageRoot, "start.mjs"),
     `#!/usr/bin/env node
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const root = new URL(".", import.meta.url);
@@ -81,6 +82,12 @@ const frontendPort = process.env.BIGSET_FRONTEND_PORT || "3500";
 const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || \`http://127.0.0.1:\${backendPort}\`;
 const frontendUrl = \`http://127.0.0.1:\${frontendPort}\`;
 const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL || process.env.CONVEX_URL || "http://127.0.0.1:3210";
+const frontendServerPath = existsSync(fromRoot("./frontend/frontend/server.js"))
+  ? fromRoot("./frontend/frontend/server.js")
+  : fromRoot("./frontend/server.js");
+const frontendCwd = existsSync(fromRoot("./frontend/frontend/server.js"))
+  ? fromRoot("./frontend/frontend")
+  : fromRoot("./frontend");
 
 const children = [];
 
@@ -138,7 +145,7 @@ start(
 start(
   "frontend",
   process.execPath,
-  [fromRoot("./frontend/frontend/server.js")],
+  [frontendServerPath],
   {
     ...process.env,
     PORT: frontendPort,
@@ -148,7 +155,7 @@ start(
     NEXT_PUBLIC_PROD: process.env.NEXT_PUBLIC_PROD || "",
     PROD: process.env.PROD || "",
   },
-  fromRoot("./frontend/frontend"),
+  frontendCwd,
 );
 
 console.log("");
@@ -225,6 +232,12 @@ async function copyConvexRuntime() {
   }
 }
 
+function releaseFrontendAppDir() {
+  const nested = join(packageRoot, "frontend", "frontend");
+  if (existsSync(join(nested, "server.js"))) return nested;
+  return join(packageRoot, "frontend");
+}
+
 async function main() {
   await rm(workDir, { recursive: true, force: true });
   await rm(artifactPath, { force: true });
@@ -254,12 +267,13 @@ async function main() {
 
   console.log("Assembling release directory...");
   await cp(standaloneDir, join(packageRoot, "frontend"), { recursive: true });
-  await cp(join(frontendDir, "public"), join(packageRoot, "frontend", "frontend", "public"), {
+  const frontendAppDir = releaseFrontendAppDir();
+  await cp(join(frontendDir, "public"), join(frontendAppDir, "public"), {
     recursive: true,
   });
   await cp(
     join(frontendDir, ".next", "static"),
-    join(packageRoot, "frontend", "frontend", ".next", "static"),
+    join(frontendAppDir, ".next", "static"),
     { recursive: true },
   );
   await copyConvexRuntime();
