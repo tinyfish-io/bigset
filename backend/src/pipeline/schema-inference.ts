@@ -1,6 +1,8 @@
 import { generateText, Output, NoObjectGeneratedError } from "ai";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 
+import { DEFAULT_MODEL_IDS } from "../config/models.js";
+import { requireOpenRouterApiKey } from "../local-credentials.js";
 import { datasetSchemaSchema, type DatasetSchema } from "./types.js";
 
 const SYSTEM_PROMPT = `You are a data engineering assistant that converts natural-language prompts into structured dataset schemas. Given a user prompt describing a dataset they want to build, you produce a precise schema definition.
@@ -22,19 +24,21 @@ Rules:
 - Keep it simple. Include only 4-6 columns — the essentials someone would put in a quick spreadsheet for this topic. Do not add niche, speculative, or hard-to-find columns.
 - \`dataset_name\` must be snake_case.
 - All column \`name\` values must be snake_case and unique.
-- Prefer concrete column choices over speculative ones — better to omit a column than guess wildly.`;
+- Prefer concrete column choices over speculative ones — better to omit a column than guess wildly.
+- When a column is a scalar numeric rating (e.g. average score like 4.3/5 for restaurants, cafes, hotels, products, apps): name it generically (e.g. "rating" not "yelp_rating") and write a retrieval_hint explaining that review sites (Yelp, TripAdvisor, Google Maps) block direct page fetches, so the agent must extract ratings from **search result snippets**. The hint should say: "Search for \\"<entity name> rating reviews\\" and include location terms only when location is part of the entity identity. Look for ratings in snippets from TripAdvisor (\\"rated X.X of 5\\"), Yelp search listings (\\"X.X (N reviews)\\"), or aggregator sites (Birdeye, joe.coffee, giftly, Uber Eats, menufyy). Do NOT try to fetch yelp.com or tripadvisor.com directly — they block automated access. Accept ratings from any reputable source." If including a rating column, also add a "rating_source" text column so the agent records where the rating came from. Do not rename review-count or review-text fields to "rating" — keep those as distinct columns (e.g. "review_count") when the user explicitly asks for them.`;
 
-function getModel() {
-  const apiKey = process.env.OPENROUTER_API_KEY;
-  if (!apiKey) {
-    throw new Error("Missing required environment variable: OPENROUTER_API_KEY");
-  }
-  const openrouter = createOpenRouter({ apiKey });
-  return openrouter("anthropic/claude-sonnet-4-6");
+async function getModel(modelSlug?: string) {
+  const apiKey = await requireOpenRouterApiKey();
+  const openrouter = createOpenRouter({
+    apiKey,
+    baseURL: process.env.OPENROUTER_BASE_URL,
+  });
+  const resolvedSlug = modelSlug ?? DEFAULT_MODEL_IDS.SCHEMA_INFERENCE;
+  return openrouter(resolvedSlug);
 }
 
-export async function inferSchema(prompt: string): Promise<DatasetSchema> {
-  const model = getModel();
+export async function inferSchema(prompt: string, modelSlug?: string): Promise<DatasetSchema> {
+  const model = await getModel(modelSlug);
   try {
     return await callOnce(model, prompt);
   } catch (error) {

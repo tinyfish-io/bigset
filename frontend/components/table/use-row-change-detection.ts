@@ -9,10 +9,10 @@ export function useRowChangeDetection(rows: DatasetRow[]) {
   const [flashingCells, setFlashingCells] = useState<Set<string>>(new Set());
 
   useEffect(() => {
-    const flashTimers = flashTimersRef.current;
+    const timers = flashTimersRef.current;
     return () => {
-      for (const timer of flashTimers) clearTimeout(timer);
-      flashTimers.clear();
+      for (const timer of timers) clearTimeout(timer);
+      timers.clear();
     };
   }, []);
 
@@ -54,25 +54,26 @@ export function useRowChangeDetection(rows: DatasetRow[]) {
     prevRowsRef.current = nextMap;
 
     if (newFlashes.size > 0) {
-      const addTimer = setTimeout(() => {
+      const startTimer = setTimeout(() => {
         setFlashingCells((prev) => {
           const merged = new Set(prev);
           for (const key of newFlashes) merged.add(key);
           return merged;
         });
 
-        const removeTimer = setTimeout(() => {
+        flashTimersRef.current.delete(startTimer);
+
+        const clearTimer = setTimeout(() => {
           setFlashingCells((prev) => {
             const next = new Set(prev);
             for (const key of newFlashes) next.delete(key);
             return next;
           });
-          flashTimersRef.current.delete(removeTimer);
+          flashTimersRef.current.delete(clearTimer);
         }, FLASH_DURATION_MS);
-        flashTimersRef.current.add(removeTimer);
-        flashTimersRef.current.delete(addTimer);
+        flashTimersRef.current.add(clearTimer);
       }, 0);
-      flashTimersRef.current.add(addTimer);
+      flashTimersRef.current.add(startTimer);
     }
   }, [rows]);
 

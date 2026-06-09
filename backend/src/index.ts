@@ -1,4 +1,4 @@
-import Fastify, { type FastifyBaseLogger } from "fastify";
+import Fastify, { type FastifyBaseLogger, type FastifyReply } from "fastify";
 import fastifyCors from "@fastify/cors";
 import type { ClerkClient } from "@clerk/backend";
 
@@ -13,6 +13,16 @@ import { sendTransactionalEmail } from "./email/send.js";
 import { datasetReadyTemplate } from "./email/templates/dataset-ready.js";
 import { capture, shutdown as shutdownAnalytics } from "./analytics/posthog.js";
 import { EVENTS } from "./analytics/events.js";
+import { registerDataset, deregisterDataset, abortDataset } from "./abort-registry.js";
+import {
+  clearLegacyPlaintextLocalCredentials,
+  exchangeOpenRouterOAuthCode,
+  getLocalSetupStatus,
+  requireLocalSetupComplete,
+  saveLocalCredential,
+  verifyOpenRouterApiKey,
+  verifyTinyFishApiKey,
+} from "./local-credentials.js";
 
 /** Domain part of an email, for analytics (we never log full addresses). */
 function emailDomain(email: string): string {
@@ -83,6 +93,8 @@ async function sendDatasetReadyNotification({
   rowCount: number;
   workflowType?: "populate" | "update";
 }): Promise<void> {
+  if (env.IS_LOCAL_MODE) return;
+
   const baseProps = {
     datasetId,
     datasetName,
@@ -141,6 +153,57 @@ async function sendDatasetReadyNotification({
   }
 }
 
+async function ensureLocalSetupReady(reply: FastifyReply): Promise<boolean> {
+  try {
+    await requireLocalSetupComplete();
+    return true;
+  } catch {
+    await reply.code(428).send({
+      error: "Local setup is incomplete. Connect TinyFish and OpenRouter first.",
+    });
+    return false;
+  }
+}
+
+/**
+ * Shared stop-success path: set the dataset live, send the ready email.
+ *
+ * Called by both background runners when the user presses Stop. Populate
+ * only emails when at least one row was collected (a stopped run with 0
+ * rows is live but empty). Update always emails regardless of count.
+ */
+async function finaliseRunAsLive({
+  logger,
+  clerk,
+  datasetId,
+  authorizedUserId,
+  workflowType = "populate",
+}: {
+  logger: FastifyBaseLogger;
+  clerk: ClerkClient;
+  datasetId: string;
+  authorizedUserId: string;
+  workflowType?: "populate" | "update";
+}): Promise<void> {
+  const currentDataset = await convex.query(internal.datasets.getInternal, { id: datasetId });
+  if (!currentDataset) return;
+
+  await setDatasetPopulateStatus(datasetId, "live");
+
+  const rowCount = await convex.query(internal.datasetRows.countByDataset, { datasetId });
+  if (workflowType === "update" || rowCount > 0) {
+    await sendDatasetReadyNotification({
+      logger,
+      clerk,
+      userId: authorizedUserId,
+      datasetId,
+      datasetName: currentDataset.name,
+      rowCount,
+      workflowType,
+    });
+  }
+}
+
 async function beginDatasetUpdate(
   datasetId: string,
   ownerId: string,
@@ -158,14 +221,23 @@ async function runUpdateWorkflowInBackground({
   authorizedUserId,
   logger,
   clerk,
+  modelConfig,
 }: {
   input: DatasetContext;
   run: UpdateWorkflowRun;
   authorizedUserId: string;
   logger: FastifyBaseLogger;
   clerk: ClerkClient;
+  modelConfig: {
+    schemaInference: string;
+    populateOrchestrator: string;
+    investigateSubagent: string;
+  };
 }): Promise<void> {
   const datasetId = input.datasetId;
+  // registerDataset is called by the route handler before void-ing this
+  // function, so the registry entry is guaranteed visible the moment the
+  // 202 response is sent. No call needed here.
 
   try {
     const result = await run.start({
@@ -174,6 +246,7 @@ async function runUpdateWorkflowInBackground({
         authContext: {
           authorizedUserId,
           workflowRunId: run.runId,
+          modelConfig,
         },
       },
     });
@@ -217,6 +290,11 @@ async function runUpdateWorkflowInBackground({
       workflowType: "update",
     });
   } catch (err) {
+    // Note: a user-triggered stop is NOT handled here. The update workflow's
+    // refreshRowsStep detects the abort internally, clears pending row
+    // statuses, and returns normally — so run.start() returns { status:
+    // "success" } and the success path above handles the live transition.
+    // This catch only fires on genuine failures.
     const lastStatusError = statusErrorMessage(err);
     logger.error({ err, datasetId }, "Update background workflow failed");
 
@@ -238,21 +316,101 @@ async function runUpdateWorkflowInBackground({
         "Failed to transition dataset status to 'failed' after update",
       );
     }
+  } finally {
+    deregisterDataset(datasetId);
+  }
+}
+
+async function runScheduledUpdateWorkflowInBackground({
+  input,
+  run,
+  authorizedUserId,
+  logger,
+  modelConfig,
+}: {
+  input: DatasetContext;
+  run: UpdateWorkflowRun;
+  authorizedUserId: string;
+  logger: FastifyBaseLogger;
+  modelConfig: {
+    schemaInference: string;
+    populateOrchestrator: string;
+    investigateSubagent: string;
+  };
+}): Promise<void> {
+  const datasetId = input.datasetId;
+  registerDataset(datasetId);
+
+  try {
+    const result = await run.start({
+      inputData: {
+        ...input,
+        authContext: {
+          authorizedUserId,
+          workflowRunId: run.runId,
+          modelConfig,
+        },
+      },
+    });
+
+    logger.info(
+      {
+        datasetId,
+        workflowStatus: result.status,
+        steps: JSON.stringify(result.steps).slice(0, 2000),
+      },
+      "Scheduled update workflow completed",
+    );
+
+    if (result.status !== "success") {
+      throw new Error(`Workflow ended with status: ${result.status}`);
+    }
+
+    await convex.mutation(internal.datasets.completeScheduledRefreshInternal, {
+      id: datasetId,
+      now: Date.now(),
+    });
+  } catch (err) {
+    const lastStatusError = statusErrorMessage(err);
+    logger.error({ err, datasetId }, "Scheduled update workflow failed");
+
+    try {
+      await convex.mutation(internal.datasets.failScheduledRefreshInternal, {
+        id: datasetId,
+        now: Date.now(),
+        lastStatusError,
+      });
+    } catch (statusErr) {
+      logger.error(
+        { err: statusErr, datasetId },
+        "Failed to record scheduled refresh failure",
+      );
+    }
+  } finally {
+    deregisterDataset(datasetId);
   }
 }
 
 async function runPopulateWorkflowInBackground({
   input,
   run,
+  controller,
   authorizedUserId,
   logger,
   clerk,
+  modelConfig,
 }: {
   input: DatasetContext;
   run: PopulateWorkflowRun;
+  controller: AbortController;
   authorizedUserId: string;
   logger: FastifyBaseLogger;
   clerk: ClerkClient;
+  modelConfig: {
+    schemaInference: string;
+    populateOrchestrator: string;
+    investigateSubagent: string;
+  };
 }): Promise<void> {
   const datasetId = input.datasetId;
 
@@ -263,6 +421,7 @@ async function runPopulateWorkflowInBackground({
         authContext: {
           authorizedUserId,
           workflowRunId: run.runId,
+          modelConfig,
         },
       },
     });
@@ -308,6 +467,25 @@ async function runPopulateWorkflowInBackground({
       rowCount,
     });
   } catch (err) {
+    if (controller.signal.aborted) {
+      // User pressed Stop — treat whatever was collected as the final dataset.
+      logger.info({ datasetId }, "Populate workflow stopped by user; transitioning to live");
+      try {
+        await finaliseRunAsLive({ logger, clerk, datasetId, authorizedUserId });
+      } catch (stopErr) {
+        logger.error({ err: stopErr, datasetId }, "Failed to finalise stopped populate run; marking as failed");
+        // Ensure the dataset always leaves "building" — without this fallback,
+        // a failed finalisation leaves the dataset with no active registry entry
+        // and no way for /stop to act on it again.
+        try {
+          await setDatasetPopulateStatus(datasetId, "failed", "Workflow stopped but could not be finalised");
+        } catch (fallbackErr) {
+          logger.error({ err: fallbackErr, datasetId }, "Could not update dataset status after stop finalisation failure");
+        }
+      }
+      return;
+    }
+
     const lastStatusError = statusErrorMessage(err);
     logger.error(
       { err, datasetId },
@@ -333,13 +511,146 @@ async function runPopulateWorkflowInBackground({
         "Failed to transition dataset status to 'failed'",
       );
     }
+  } finally {
+    deregisterDataset(datasetId);
   }
+}
+
+async function backfillDatasetRefreshSettings(
+  logger: FastifyBaseLogger,
+): Promise<void> {
+  try {
+    const result = await convex.mutation(
+      internal.datasets.backfillRefreshSettings,
+      { defaultCadence: "daily" },
+    );
+    logger.info(result, "Dataset refresh settings backfill complete");
+  } catch (err) {
+    logger.error({ err }, "Dataset refresh settings backfill failed");
+    throw err;
+  }
+}
+
+function startLocalRefreshScheduler(
+  logger: FastifyBaseLogger,
+): ReturnType<typeof setInterval> | null {
+  if (!env.REFRESH_SCHEDULER_ENABLED) {
+    logger.info("Dataset refresh scheduler disabled");
+    return null;
+  }
+
+  let ticking = false;
+
+  async function tick(): Promise<void> {
+    if (ticking) return;
+    ticking = true;
+
+    try {
+      if (env.IS_LOCAL_MODE) {
+        const setup = await getLocalSetupStatus();
+        if (!setup.complete) return;
+      }
+
+      const now = Date.now();
+      const dueDatasets = await convex.query(
+        internal.datasets.listDueForRefreshInternal,
+        {
+          now,
+          limit: env.REFRESH_SCHEDULER_BATCH_SIZE,
+        },
+      );
+
+      for (const dueDataset of dueDatasets as Array<{ _id: string }>) {
+        let run: UpdateWorkflowRun;
+        try {
+          run = await updateWorkflow.createRun();
+        } catch (runErr) {
+          logger.error(runErr, "Failed to create scheduled update workflow run");
+          continue;
+        }
+
+        const claim = await convex.mutation(
+          internal.datasets.claimScheduledRefreshInternal,
+          {
+            id: dueDataset._id,
+            now: Date.now(),
+            runId: run.runId,
+            staleAfterMs: env.REFRESH_SCHEDULER_STALE_AFTER_MS,
+          },
+        );
+
+        if (claim.outcome !== "started") {
+          logger.debug(
+            { datasetId: dueDataset._id, outcome: claim.outcome },
+            "Skipped scheduled refresh claim",
+          );
+          continue;
+        }
+
+        const dataset = claim.dataset;
+        const { getModelConfig } = await import("./config/models.js");
+        const modelConfig = await getModelConfig(dataset.ownerId);
+
+        void runScheduledUpdateWorkflowInBackground({
+          input: {
+            datasetId: dataset.datasetId,
+            datasetName: dataset.datasetName,
+            description: dataset.description,
+            maxRowCount: dataset.maxRowCount ?? 100,
+            columns: dataset.columns,
+          },
+          run,
+          authorizedUserId: dataset.ownerId,
+          logger,
+          modelConfig,
+        });
+      }
+    } catch (err) {
+      logger.error({ err }, "Dataset refresh scheduler tick failed");
+    } finally {
+      ticking = false;
+    }
+  }
+
+  void tick();
+  const interval = setInterval(() => {
+    void tick();
+  }, env.REFRESH_SCHEDULER_POLL_MS);
+  logger.info(
+    {
+      pollMs: env.REFRESH_SCHEDULER_POLL_MS,
+      batchSize: env.REFRESH_SCHEDULER_BATCH_SIZE,
+      staleAfterMs: env.REFRESH_SCHEDULER_STALE_AFTER_MS,
+    },
+    "Dataset refresh scheduler started",
+  );
+  return interval;
 }
 
 const fastify = Fastify({ logger: true });
 
+const allowedCorsOrigins = new Set([env.CLIENT_ORIGIN]);
+if (env.IS_LOCAL_MODE) {
+  try {
+    const clientOrigin = new URL(env.CLIENT_ORIGIN);
+    if (
+      clientOrigin.hostname === "localhost" ||
+      clientOrigin.hostname === "127.0.0.1"
+    ) {
+      allowedCorsOrigins.add(
+        `${clientOrigin.protocol}//localhost${clientOrigin.port ? `:${clientOrigin.port}` : ""}`,
+      );
+      allowedCorsOrigins.add(
+        `${clientOrigin.protocol}//127.0.0.1${clientOrigin.port ? `:${clientOrigin.port}` : ""}`,
+      );
+    }
+  } catch {
+    // Keep the configured origin only if CLIENT_ORIGIN is not URL-shaped.
+  }
+}
+
 await fastify.register(fastifyCors, {
-  origin: env.CLIENT_ORIGIN,
+  origin: Array.from(allowedCorsOrigins),
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization", "Cookie"],
   credentials: true,
@@ -351,9 +662,17 @@ await fastify.register(fastifyCors, {
 // protected routes — see the example block below.
 await fastify.register(clerkAuthPlugin);
 
+await clearLegacyPlaintextLocalCredentials().catch((err) => {
+  fastify.log.warn({ err }, "Failed to clear legacy local credential plaintext");
+});
+
+await backfillDatasetRefreshSettings(fastify.log);
+const refreshScheduler = startLocalRefreshScheduler(fastify.log);
+
 // Flush queued PostHog events on graceful shutdown so a SIGTERM mid-flight
 // doesn't drop the dataset_ready_email_sent capture from the last request.
 fastify.addHook("onClose", async () => {
+  if (refreshScheduler) clearInterval(refreshScheduler);
   await shutdownAnalytics();
 });
 
@@ -363,6 +682,106 @@ fastify.addHook("onClose", async () => {
 
 fastify.get("/health", async () => ({ status: "ok" }));
 
+fastify.get("/local-setup/status", async (_req, reply) => {
+  if (!env.IS_LOCAL_MODE) {
+    return reply.code(404).send({ error: "Not found" });
+  }
+  return await getLocalSetupStatus();
+});
+
+fastify.post("/local-setup/tinyfish", async (req, reply) => {
+  if (!env.IS_LOCAL_MODE) {
+    return reply.code(404).send({ error: "Not found" });
+  }
+
+  const body = req.body as { apiKey?: string };
+  const apiKey = body?.apiKey?.trim();
+  if (!apiKey) {
+    return reply.code(400).send({ error: "TinyFish API key is required" });
+  }
+
+  try {
+    await verifyTinyFishApiKey(apiKey);
+    await saveLocalCredential("tinyfish", apiKey, "api_key");
+    return await getLocalSetupStatus();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "TinyFish verification failed";
+    req.log.warn({ err }, "TinyFish local setup verification failed");
+    return reply.code(400).send({ error: message });
+  }
+});
+
+fastify.post("/local-setup/openrouter-key", async (req, reply) => {
+  if (!env.IS_LOCAL_MODE) {
+    return reply.code(404).send({ error: "Not found" });
+  }
+
+  const body = req.body as { apiKey?: string };
+  const apiKey = body?.apiKey?.trim();
+  if (!apiKey) {
+    return reply.code(400).send({ error: "OpenRouter API key is required" });
+  }
+
+  try {
+    await verifyOpenRouterApiKey(apiKey);
+    await saveLocalCredential("openrouter", apiKey, "api_key");
+    return await getLocalSetupStatus();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "OpenRouter verification failed";
+    req.log.warn({ err }, "OpenRouter local setup verification failed");
+    return reply.code(400).send({ error: message });
+  }
+});
+
+fastify.post("/local-setup/openrouter-oauth", async (req, reply) => {
+  if (!env.IS_LOCAL_MODE) {
+    return reply.code(404).send({ error: "Not found" });
+  }
+
+  const body = req.body as { code?: string; codeVerifier?: string };
+  const code = body?.code?.trim();
+  const codeVerifier = body?.codeVerifier?.trim();
+  if (!code || !codeVerifier) {
+    return reply.code(400).send({ error: "OpenRouter OAuth code is required" });
+  }
+
+  try {
+    const apiKey = await exchangeOpenRouterOAuthCode({ code, codeVerifier });
+    await verifyOpenRouterApiKey(apiKey);
+    await saveLocalCredential("openrouter", apiKey, "oauth");
+    return await getLocalSetupStatus();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "OpenRouter OAuth failed";
+    req.log.warn({ err }, "OpenRouter OAuth setup failed");
+    return reply.code(400).send({ error: message });
+  }
+});
+
+
+fastify.post("/openrouter/refresh", { preHandler: requireAuth }, async (req, reply) => {
+  const { fetchModelsFromOpenRouter, upsertModelBatch } = await import("./config/models.js");
+  try {
+    const models = await fetchModelsFromOpenRouter();
+    await upsertModelBatch(models);
+    return { success: true, models };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Failed to refresh models";
+    req.log.error(err, "OpenRouter refresh failed");
+    return reply.code(500).send({ error: message });
+  }
+});
+
+fastify.get("/openrouter/models", async (req, reply) => {
+  const { getCachedModels } = await import("./config/models.js");
+  try {
+    const models = await getCachedModels();
+    return { models };
+  } catch (err) {
+    req.log.error(err, "Failed to load cached models");
+    return reply.code(500).send({ error: "Failed to load models" });
+  }
+});
+
 // ────────────────────────────────────────────────────────────────────────
 //  Protected routes — gated by Clerk JWT verification
 // ────────────────────────────────────────────────────────────────────────
@@ -370,14 +789,74 @@ fastify.get("/health", async () => ({ status: "ok" }));
 await fastify.register(async (instance) => {
   instance.addHook("preHandler", requireAuth);
 
-  instance.post("/infer-schema", async (req, reply) => {
-    const body = req.body as { prompt?: string };
-    if (!body?.prompt || typeof body.prompt !== "string" || !body.prompt.trim()) {
-      return reply.code(400).send({ error: "prompt is required" });
+  instance.get("/settings/models", async (req) => {
+    const { getModelConfig } = await import("./config/models.js");
+    const config = await getModelConfig(req.auth!.userId);
+    return { config };
+  });
+
+  instance.post("/settings/models", async (req, reply) => {
+    const { upsertModelConfig, validateModelSlug, getCachedModels } = await import("./config/models.js");
+    const body = req.body as {
+      schemaInference?: string | null;
+      populateOrchestrator?: string | null;
+      investigateSubagent?: string | null;
+    };
+
+    const toValidate: Array<{ role: "schemaInference" | "populateOrchestrator" | "investigateSubagent"; slug: string }> = [];
+    if (body.schemaInference) toValidate.push({ role: "schemaInference", slug: body.schemaInference });
+    if (body.populateOrchestrator) toValidate.push({ role: "populateOrchestrator", slug: body.populateOrchestrator });
+    if (body.investigateSubagent) toValidate.push({ role: "investigateSubagent", slug: body.investigateSubagent });
+
+    if (toValidate.length > 0) {
+      try {
+        const models = await getCachedModels();
+        for (const { role, slug } of toValidate) {
+          const found = models.some((m) => m.canonicalSlug === slug);
+          if (!found) {
+            return reply.code(400).send({
+              error: `Invalid model slug "${slug}" for ${role}. Refresh the model list first or choose a different model.`,
+            });
+          }
+        }
+      } catch (err) {
+        req.log.error(err, "Failed to validate model slugs — allowing save");
+      }
     }
 
     try {
-      const schema = await inferSchema(body.prompt.trim());
+      await upsertModelConfig(req.auth!.userId, {
+        schemaInference: body.schemaInference ?? undefined,
+        populateOrchestrator: body.populateOrchestrator ?? undefined,
+        investigateSubagent: body.investigateSubagent ?? undefined,
+      });
+      return { success: true };
+    } catch (err) {
+      req.log.error(err, "Failed to save model config");
+      return reply.code(500).send({ error: "Failed to save model preferences" });
+    }
+  });
+
+  instance.post("/infer-schema", async (req, reply) => {
+    const body = req.body as { prompt?: string; modelSlug?: string };
+    if (!body?.prompt || typeof body.prompt !== "string" || !body.prompt.trim()) {
+      return reply.code(400).send({ error: "prompt is required" });
+    }
+    if (!(await ensureLocalSetupReady(reply))) return;
+
+    try {
+      const auth = req.auth;
+      let modelSlug = body.modelSlug;
+
+      if (!modelSlug && auth) {
+        const { getModelConfig } = await import("./config/models.js");
+        const config = await getModelConfig(auth.userId);
+        if (config?.schemaInference) {
+          modelSlug = config.schemaInference;
+        }
+      }
+
+      const schema = await inferSchema(body.prompt.trim(), modelSlug);
       return schema;
     } catch (err) {
       req.log.error(err, "Schema inference failed");
@@ -393,6 +872,7 @@ await fastify.register(async (instance) => {
         details: parsed.error.flatten().fieldErrors,
       });
     }
+    if (!(await ensureLocalSetupReady(reply))) return;
 
     try {
       const auth = req.auth;
@@ -418,6 +898,16 @@ await fastify.register(async (instance) => {
         throw new Error(`Unexpected populate claim outcome: ${populateOutcome}`);
       }
 
+      const dataset = await convex.query(internal.datasets.getInternal, {
+        id: parsed.data.datasetId,
+      });
+      if (!dataset) {
+        return reply.code(404).send({ error: "Dataset not found" });
+      }
+
+      const { getModelConfig } = await import("./config/models.js");
+      const modelConfig = await getModelConfig(auth.userId);
+
       let run: Awaited<ReturnType<typeof populateWorkflow.createRun>>;
       try {
         run = await populateWorkflow.createRun();
@@ -427,12 +917,23 @@ await fastify.register(async (instance) => {
         return reply.code(502).send({ error: "Failed to populate dataset. Please try again." });
       }
 
+      // Register before void-ing so the abort-registry entry is visible the
+      // instant the 202 is sent, closing the TOCTOU window where a /stop
+      // arriving before registerDataset runs inside the background function
+      // would incorrectly force-transition an active run to "failed".
+      const controller = registerDataset(parsed.data.datasetId);
+
       void runPopulateWorkflowInBackground({
-        input: parsed.data,
+        input: {
+          ...parsed.data,
+          maxRowCount: dataset.maxRowCount ?? parsed.data.maxRowCount,
+        },
         run,
+        controller,
         authorizedUserId: auth.userId,
         logger: req.log,
         clerk: req.server.clerk,
+        modelConfig,
       });
 
       return reply.code(202).send({ success: true, runId: run.runId });
@@ -454,6 +955,7 @@ await fastify.register(async (instance) => {
         details: parsed.error.flatten().fieldErrors,
       });
     }
+    if (!(await ensureLocalSetupReady(reply))) return;
 
     try {
       const auth = req.auth;
@@ -491,12 +993,22 @@ await fastify.register(async (instance) => {
         return reply.code(502).send({ error: "Failed to update dataset. Please try again." });
       }
 
+      const { getModelConfig } = await import("./config/models.js");
+      const modelConfig = await getModelConfig(auth.userId);
+
+      // Register before void-ing so the abort-registry entry is visible the
+      // instant the 202 is sent, closing the TOCTOU window where a /stop
+      // arriving before registerDataset runs inside the background function
+      // would incorrectly force-transition an active run to "failed".
+      registerDataset(parsed.data.datasetId);
+
       void runUpdateWorkflowInBackground({
         input: parsed.data,
         run,
         authorizedUserId: auth.userId,
         logger: req.log,
         clerk: req.server.clerk,
+        modelConfig,
       });
 
       return reply.code(202).send({ success: true, runId: run.runId });
@@ -507,6 +1019,75 @@ await fastify.register(async (instance) => {
       }
       req.log.error(err, "Update failed");
       return reply.code(502).send({ error: "Failed to update dataset. Please try again." });
+    }
+  });
+
+  instance.post("/stop", async (req, reply) => {
+    const body = req.body as { datasetId?: string };
+    if (!body?.datasetId || typeof body.datasetId !== "string") {
+      return reply.code(400).send({ error: "datasetId is required" });
+    }
+
+    const auth = req.auth;
+    if (!auth) {
+      return reply.code(401).send({ error: "Authentication required" });
+    }
+
+    try {
+      const dataset = await convex.query(internal.datasets.getInternal, {
+        id: body.datasetId,
+      });
+      if (!dataset) {
+        return reply.code(404).send({ error: "Dataset not found" });
+      }
+      if (dataset.ownerId !== auth.userId) {
+        return reply.code(403).send({ error: "Not authorized to stop this dataset" });
+      }
+      if (dataset.status !== "building" && dataset.status !== "updating") {
+        return reply.code(409).send({ error: "Dataset is not currently running" });
+      }
+
+      const aborted = abortDataset(body.datasetId);
+      if (!aborted) {
+        // No registered signal despite the dataset being "building"/"updating".
+        // The normal finish path always sets a terminal status in Convex
+        // *before* calling deregisterDataset(), so if the status is still
+        // busy here, no running process owns this dataset — it was orphaned
+        // by a server restart. Force-transition to "failed" so the dataset
+        // is no longer stuck.
+        req.log.warn(
+          { datasetId: body.datasetId },
+          "Stop requested for orphaned dataset (no active run registered); forcing to failed",
+        );
+        try {
+          if (dataset.status === "updating") {
+            await convex.mutation(internal.datasetRows.clearAllPendingUpdateStatus, {
+              datasetId: body.datasetId,
+            });
+          }
+          await setDatasetPopulateStatus(
+            body.datasetId,
+            "failed",
+            "Run interrupted: server restarted while building/updating",
+          );
+        } catch (statusErr) {
+          req.log.error(
+            { err: statusErr, datasetId: body.datasetId },
+            "Failed to force-transition orphaned dataset to failed",
+          );
+        }
+        return reply.code(200).send({ success: true });
+      }
+      req.log.info({ datasetId: body.datasetId }, "Stop requested");
+
+      return reply.code(202).send({ success: true });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("validator") || msg.includes("Invalid")) {
+        return reply.code(400).send({ error: "Invalid datasetId" });
+      }
+      req.log.error(err, "Stop failed");
+      return reply.code(502).send({ error: "Failed to stop dataset run. Please try again." });
     }
   });
 });

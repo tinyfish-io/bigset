@@ -1,8 +1,11 @@
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
+import { convex, internal } from "../../convex.js";
 import { buildInvestigateAgent } from "../agents/investigate.js";
 import type { AuthContext } from "../workflows/populate.js";
 import type { PopulateColumn } from "../../pipeline/populate.js";
+import type { RunMetrics } from "../run-metrics.js";
+import { getSignal } from "../../abort-registry.js";
 
 const investigateInputSchema = z.object({
   entity_hint: z
@@ -72,6 +75,9 @@ export function buildSubagentTool(
   authorizedDatasetId: string,
   authContext: AuthContext,
   columns: PopulateColumn[],
+  openRouterApiKey: string,
+  maxRowCount: number,
+  metrics?: RunMetrics,
 ) {
   return createTool({
     id: "run_subagent",
@@ -80,14 +86,29 @@ export function buildSubagentTool(
     inputSchema: investigateInputSchema,
     outputSchema: investigateOutputSchema,
     execute: async ({ entity_hint, primary_keys, context, urls, notes }) => {
-      console.log(
-        `[run_subagent] spawning subagent user=${authContext.authorizedUserId} run=${authContext.workflowRunId} dataset=${authorizedDatasetId} entity="${entity_hint}" pk=${JSON.stringify(primary_keys)}`,
-      );
       try {
+        const rowCount = await convex.query(internal.datasetRows.countByDataset, {
+          datasetId: authorizedDatasetId,
+        });
+        if (rowCount >= maxRowCount) {
+          return {
+            inserted: false,
+            reason: `ROW_LIMIT_REACHED: this BigSet dataset is capped at ${maxRowCount} rows. Stop calling run_subagent and finish the run.`,
+            row_summary: undefined,
+            clues: undefined,
+          };
+        }
+
+        if (metrics) metrics.investigateCalls++;
+        console.log(
+          `[run_subagent] spawning subagent user=${authContext.authorizedUserId} run=${authContext.workflowRunId} dataset=${authorizedDatasetId} entity="${entity_hint}" pk=${JSON.stringify(primary_keys)}`,
+        );
+
         const agent = buildInvestigateAgent(
           authorizedDatasetId,
           authContext,
           columns,
+          openRouterApiKey,
         );
 
         const pkBlock = Object.entries(primary_keys)
@@ -109,16 +130,36 @@ ${pkBlock}
 Context (partial data already found):
 ${context}${urlsBlock}${notesBlock}`;
 
-        const result = await agent.generate(prompt, { maxSteps: 10 });
+        const abortSignal = getSignal(authorizedDatasetId);
+        const result = await agent.generate(prompt, { abortSignal, maxSteps: 25 });
+        if (metrics) {
+          // Use result.toolCalls (the flat accumulated list across all steps) rather
+          // than iterating result.steps[n].toolCalls. The per-step arrays are snapshots
+          // captured at step-finish time; tool-call chunks that arrive after their
+          // step-finish event end up attributed to the wrong step, causing systematic
+          // miscounts. result.toolCalls is the authoritative list maintained by Mastra's
+          // stream processor as chunks arrive.
+          metrics.countToolCalls(result.toolCalls ?? []);
+          metrics.addInvestigateResult(result);
+        }
+
         const parsed = parseInvestigateResult(result.text);
+        if (metrics && parsed.inserted) metrics.rowsInserted++;
+
         console.log(
-          `[run_subagent] done entity="${entity_hint}" inserted=${parsed.inserted} steps=${result.steps?.length ?? "?"}` +
+          `[run_subagent] done entity="${entity_hint}" inserted=${parsed.inserted} steps=${result.steps?.length ?? "?"} toolCalls=${result.toolCalls?.length ?? "?"}` +
             (parsed.row_summary ? `\n  summary: ${parsed.row_summary}` : "") +
             (parsed.reason ? `\n  reason:  ${parsed.reason}` : "") +
             (parsed.clues ? `\n  clues:   ${parsed.clues}` : ""),
         );
         return parsed;
       } catch (err) {
+        // Only propagate an AbortError if OUR signal was actually fired (i.e.
+        // the user pressed Stop). Network errors in Node.js can also surface as
+        // AbortError — re-throwing those would cause the orchestrator's
+        // agent.generate() to exit early and return a graceful empty result,
+        // producing a "0 rows" run without any user action.
+        if (err instanceof Error && err.name === "AbortError" && getSignal(authorizedDatasetId)?.aborted) throw err;
         const msg = err instanceof Error ? err.message : String(err);
         console.error(`[run_subagent] subagent error entity="${entity_hint}" err=${msg}`);
         return {

@@ -4,7 +4,12 @@ import { generateText } from "ai";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { datasetContextSchema, populateColumnSchema } from "../../pipeline/populate.js";
 import { convex, internal } from "../../convex.js";
+import { DEFAULT_MODEL_IDS } from "../../config/models.js";
+import { requireOpenRouterApiKey } from "../../local-credentials.js";
 import { buildPopulateAgent } from "../agents/populate.js";
+import { RunMetrics } from "../run-metrics.js";
+import { saveRunMetrics } from "../save-run-metrics.js";
+import { getSignal } from "../../abort-registry.js";
 
 /**
  * Server-set auth/run context threaded through every step.
@@ -28,6 +33,12 @@ import { buildPopulateAgent } from "../agents/populate.js";
 export const authContextSchema = z.object({
   authorizedUserId: z.string().min(1),
   workflowRunId: z.string().min(1),
+  modelConfig: z.object({
+    schemaInference: z.string().min(1),
+    populateOrchestrator: z.string().min(1),
+    investigateSubagent: z.string().min(1),
+  }),
+  isBenchmark: z.boolean().optional(),
 });
 export type AuthContext = z.infer<typeof authContextSchema>;
 
@@ -98,13 +109,18 @@ Respond with EXACTLY one word: scraper or search`;
 
     let classification: "scraper" | "search" = "search";
     try {
+      const apiKey = await requireOpenRouterApiKey();
       const openrouter = createOpenRouter({
-        apiKey: process.env.OPENROUTER_API_KEY!,
+        apiKey,
+        baseURL: process.env.OPENROUTER_BASE_URL,
       });
+      const modelSlug =
+        inputData.authContext?.modelConfig?.schemaInference ?? DEFAULT_MODEL_IDS.SCHEMA_INFERENCE;
       const result = await generateText({
-        model: openrouter("anthropic/claude-sonnet-4-6"),
+        model: openrouter(modelSlug),
         prompt: classificationPrompt,
         maxOutputTokens: 10,
+        abortSignal: getSignal(inputData.datasetId),
       });
       const answer = result.text.trim().toLowerCase();
       if (answer === "scraper" || answer === "search") {
@@ -113,6 +129,9 @@ Respond with EXACTLY one word: scraper or search`;
         console.warn(`[enumerate] Unexpected classification "${answer}", defaulting to "search"`);
       }
     } catch (err) {
+      // Only re-throw if OUR signal was actually fired. A spurious network
+      // AbortError should fall through and default to "search" as before.
+      if (err instanceof Error && err.name === "AbortError" && getSignal(inputData.datasetId)?.aborted) throw err;
       const msg = err instanceof Error ? err.message : String(err);
       console.error(`[enumerate] Classification failed: ${msg}, defaulting to "search"`);
     }
@@ -141,6 +160,7 @@ const buildPromptOutputSchema = z.object({
   authorizedDatasetId: z.string(),
   authContext: authContextSchema,
   columns: z.array(populateColumnSchema),
+  maxRowCount: z.number().int().min(1),
 });
 
 const buildPromptStep = createStep({
@@ -185,7 +205,9 @@ Data fields to collect:
 ${columnsDesc}${pkNote}${manifestNote}${strategyNote}
 
 Search the web broadly to find real entities that fit this dataset topic.
-For each lead you find, call run_subagent with the primary key values and any context/URLs you have found.`;
+For each lead you find, call run_subagent with the primary key values and any context/URLs you have found.
+If run_subagent returns ROW_LIMIT_REACHED, stop immediately and do not make any more tool calls.
+Stop the populate run as soon as the dataset reaches ${inputData.maxRowCount} rows.`;
 
     console.log(
       `[build-prompt] Built prompt for ${inputData.datasetName} (${inputData.columns.length} columns, strategy=${inputData.enumerationStrategy})`,
@@ -195,6 +217,7 @@ For each lead you find, call run_subagent with the primary key values and any co
       authorizedDatasetId: inputData.datasetId,
       authContext: inputData.authContext,
       columns: inputData.columns,
+      maxRowCount: inputData.maxRowCount,
     };
   },
 });
@@ -208,24 +231,66 @@ For each lead you find, call run_subagent with the primary key values and any co
  * capability scope; see tools/dataset-tools.ts). So this step does what
  * Mastra's agent-as-step adapter would do internally: build the agent,
  * call `.generate(prompt, { maxSteps })`, return the text.
+ *
+ * A RunMetrics instance is created here, threaded into every tool factory
+ * and agent builder, and saved to Convex in the finally block. The save is
+ * fire-and-forget — errors are logged but never propagate to the workflow.
  */
 const agentStep = createStep({
   id: "populate-agent",
   inputSchema: buildPromptOutputSchema,
   outputSchema: z.object({ text: z.string() }),
   execute: async ({ inputData }) => {
-    const agent = buildPopulateAgent(
-      inputData.authorizedDatasetId,
-      inputData.authContext,
-      inputData.columns,
-    );
+    const metrics = new RunMetrics();
+    const startedAt = Date.now();
+    let status: "success" | "error" = "success";
+    let errorMsg: string | undefined;
+
     try {
-      const result = await agent.generate(inputData.prompt, { maxSteps: 80 });
+      const agent = buildPopulateAgent(
+        inputData.authorizedDatasetId,
+        inputData.authContext,
+        inputData.columns,
+        await requireOpenRouterApiKey(),
+        inputData.maxRowCount,
+        metrics,
+      );
+      const abortSignal = getSignal(inputData.authorizedDatasetId);
+      const result = await agent.generate(inputData.prompt, { abortSignal, maxSteps: 80 });
+      metrics.addOrchestratorResult(result);
+      // Use result.toolCalls (flat accumulated list) — same reasoning as investigate-tool.ts.
+      metrics.countToolCalls(result.toolCalls ?? []);
       return { text: result.text };
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error(`[populate-agent] agent.generate failed: ${msg}`);
+      status = "error";
+      // Label user-initiated stops clearly in runStats; treat spurious network
+      // AbortErrors (signal not fired) as regular failures so the error message
+      // doesn't mislead operators into thinking the user pressed Stop.
+      if (err instanceof Error && err.name === "AbortError" && getSignal(inputData.authorizedDatasetId)?.aborted) {
+        errorMsg = "Stopped by user";
+      } else {
+        errorMsg = err instanceof Error ? err.message : String(err);
+      }
+      console.error(`[populate-agent] agent.generate failed: ${errorMsg}`);
       throw err;
+    } finally {
+      const finishedAt = Date.now();
+      void saveRunMetrics({
+        workflowRunId: inputData.authContext.workflowRunId,
+        datasetId: inputData.authorizedDatasetId,
+        userId: inputData.authContext.authorizedUserId,
+        startedAt,
+        finishedAt,
+        metrics,
+        status,
+        error: errorMsg,
+        isBenchmark: inputData.authContext.isBenchmark,
+      }).catch((err) =>
+        console.error(
+          `[populate-agent] metrics save failed run=${inputData.authContext.workflowRunId}:`,
+          err,
+        ),
+      );
     }
   },
 });

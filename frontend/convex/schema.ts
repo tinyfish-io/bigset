@@ -14,7 +14,24 @@ export default defineSchema({
       v.literal("failed")
     ),
     lastStatusError: v.optional(v.string()),
-    cadence: v.string(),
+    // Legacy rollout field. Existing documents may still contain this
+    // display-only label; new code reads/writes refreshCadence instead.
+    cadence: v.optional(v.string()),
+    refreshCadence: v.optional(
+      v.union(
+        v.literal("manual"),
+        v.literal("30m"),
+        v.literal("6h"),
+        v.literal("12h"),
+        v.literal("daily"),
+        v.literal("weekly")
+      )
+    ),
+    refreshEnabled: v.optional(v.boolean()),
+    nextRefreshAt: v.optional(v.number()),
+    lastRefreshAt: v.optional(v.number()),
+    lastRefreshStartedAt: v.optional(v.number()),
+    lastRefreshRunId: v.optional(v.string()),
     // Optional for backward compat with rows seeded before this field existed.
     // Treat undefined as "private" in authorization helpers.
     visibility: v.optional(
@@ -33,6 +50,9 @@ export default defineSchema({
     // with rows created before this field existed — write paths self-heal
     // on first hit, and `datasets.backfillRowCounts` migrates all at once.
     rowCount: v.optional(v.number()),
+    // User-selected target/limit for populate runs. Optional so existing
+    // datasets keep the legacy 100-row behavior until touched.
+    maxRowCount: v.optional(v.number()),
     columns: v.array(
       v.object({
         name: v.string(),
@@ -58,7 +78,8 @@ export default defineSchema({
   })
     .index("by_owner", ["ownerId"])
     .index("by_visibility", ["visibility"])
-    .index("by_seed_key", ["seedKey"]),
+    .index("by_seed_key", ["seedKey"])
+    .index("by_refresh_due", ["refreshEnabled", "nextRefreshAt"]),
 
   datasetRows: defineTable({
     datasetId: v.id("datasets"),
@@ -68,7 +89,11 @@ export default defineSchema({
     howFound: v.optional(v.string()),
     updateStatus: v.optional(v.literal("pending")),
     scrapeScript: v.optional(v.string()),
-  }).index("by_dataset", ["datasetId"]),
+  })
+    .index("by_dataset", ["datasetId"])
+    // Compound index used by clearAllPendingUpdateStatus to scan only the rows
+    // that need clearing without a full-dataset read.
+    .index("by_dataset_update_status", ["datasetId", "updateStatus"]),
 
   datasetHistory: defineTable({
     datasetRowId: v.id("datasetRows"),
@@ -97,10 +122,68 @@ export default defineSchema({
   usage: defineTable({
     userId: v.string(),
     rowsConsumed: v.number(),
-    // ms epoch of the start of the period this counter belongs to (first
-    // ms of the current UTC calendar month). Optional for forward-compat
-    // with rows written before this field existed — missing = treated as
-    // "before current period", which forces a reset on next write.
     periodStart: v.optional(v.number()),
   }).index("by_user", ["userId"]),
+
+  openRouterModels: defineTable({
+    modelName: v.string(),
+    canonicalSlug: v.string(),
+    contextLength: v.number(),
+    completionCost: v.number(),
+    promptCost: v.number(),
+  }).index("by_slug", ["canonicalSlug"]),
+
+  modelConfig: defineTable({
+    userId: v.string(),
+    schemaInference: v.optional(v.string()),
+    populateOrchestrator: v.optional(v.string()),
+    investigateSubagent: v.optional(v.string()),
+  }).index("by_user", ["userId"]),
+
+  localCredentials: defineTable({
+    service: v.union(v.literal("tinyfish"), v.literal("openrouter")),
+    keychainAccount: v.optional(v.string()),
+    connectionMethod: v.union(v.literal("api_key"), v.literal("oauth")),
+    verifiedAt: v.number(),
+    updatedAt: v.number(),
+    // Legacy only: accepted so the migration can deploy, then cleared by the
+    // backend startup purge. New code never writes this field.
+    apiKey: v.optional(v.string()),
+  }).index("by_service", ["service"]),
+
+  // One row per populate workflow run. Written once at the end of each run
+  // (success or error) by the backend agent runner — never by the frontend.
+  // Tracks tool-call counts, token usage, and timing so runs can be
+  // compared across datasets, users, and benchmark sessions.
+  runStats: defineTable({
+    workflowRunId: v.string(),
+    datasetId: v.string(),
+    userId: v.string(),
+    startedAt: v.number(),
+    finishedAt: v.number(),
+    durationMs: v.number(),
+    searchCalls: v.number(),
+    fetchCalls: v.number(),
+    investigateCalls: v.number(),
+    rowsInserted: v.number(),
+    tokensInput: v.number(),
+    tokensOutput: v.number(),
+    orchestratorTokensInput: v.number(),
+    orchestratorTokensOutput: v.number(),
+    orchestratorSteps: v.number(),
+    investigateTokensInput: v.number(),
+    investigateTokensOutput: v.number(),
+    investigateSteps: v.number(),
+    investigateRuns: v.number(),
+    status: v.union(v.literal("success"), v.literal("error")),
+    error: v.optional(v.string()),
+    isBenchmark: v.optional(v.boolean()),
+    workflowType: v.optional(
+      v.union(v.literal("populate"), v.literal("update"))
+    ),
+    rowsUpdated: v.optional(v.number()),
+  })
+    .index("by_dataset", ["datasetId"])
+    .index("by_user", ["userId"])
+    .index("by_workflow_run", ["workflowRunId"]),
 });

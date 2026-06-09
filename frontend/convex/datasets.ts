@@ -13,7 +13,12 @@ import {
   loadReadableDataset,
   requireIdentity,
 } from "./lib/authz.js";
-import { requireQuotaRemaining } from "./lib/quota.js";
+import { FREE_TIER_MONTHLY_QUOTA, requireQuotaRemaining } from "./lib/quota.js";
+import {
+  nextRefreshAtFor,
+  refreshCadenceValidator,
+  type RefreshCadence,
+} from "./lib/refreshScheduling.js";
 
 const columnValidator = v.object({
   name: v.string(),
@@ -38,13 +43,55 @@ type DatasetColumnInput = {
 type CreateDatasetInput = {
   name: string;
   description: string;
-  cadence: string;
+  refreshCadence: RefreshCadence;
+  maxRowCount: number;
   columns: DatasetColumnInput[];
   retrievalStrategy?: "search_fetch" | "browser" | "hybrid";
   sourceHint?: string;
 };
 
+function refreshCadenceFromLegacyLabel(
+  legacyCadence: string | undefined,
+  fallback: RefreshCadence,
+): RefreshCadence {
+  const normalized = legacyCadence?.trim().toLowerCase();
+  switch (normalized) {
+    case "every 30 min":
+    case "every 30 mins":
+    case "every 30 minute":
+    case "every 30 minutes":
+      return "30m";
+    case "every 6 hour":
+    case "every 6 hours":
+      return "6h";
+    case "every 12 hour":
+    case "every 12 hours":
+      return "12h";
+    case "daily":
+      return "daily";
+    case "weekly":
+      return "weekly";
+    case "manual":
+      return "manual";
+    default:
+      return fallback;
+  }
+}
+
 const PREVIEW_ROW_COUNT = 5;
+const DEFAULT_MAX_ROW_COUNT = 100;
+
+function validateMaxRowCount(maxRowCount: number): void {
+  if (
+    !Number.isInteger(maxRowCount) ||
+    maxRowCount < 1 ||
+    maxRowCount > FREE_TIER_MONTHLY_QUOTA
+  ) {
+    throw new ConvexError(
+      `Max row count must be a whole number between 1 and ${FREE_TIER_MONTHLY_QUOTA}.`,
+    );
+  }
+}
 
 function normalizeCreateDatasetInput(args: CreateDatasetInput) {
   const name = args.name.trim();
@@ -84,7 +131,8 @@ function normalizeCreateDatasetInput(args: CreateDatasetInput) {
   return {
     name,
     description: trimmedDescription,
-    cadence: args.cadence,
+    refreshCadence: args.refreshCadence,
+    maxRowCount: args.maxRowCount,
     columns,
     retrievalStrategy: args.retrievalStrategy,
     sourceHint: args.sourceHint?.trim() || undefined,
@@ -127,6 +175,7 @@ export const listMine = query({
     const datasets = await ctx.db
       .query("datasets")
       .withIndex("by_owner", (q) => q.eq("ownerId", identity.subject))
+      .order("desc")
       .collect();
 
     return Promise.all(datasets.map((ds) => attachPreview(ctx, ds)));
@@ -239,6 +288,112 @@ export const beginUpdateInternal = internalMutation({
   },
 });
 
+export const listDueForRefreshInternal = internalQuery({
+  args: {
+    now: v.number(),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("datasets")
+      .withIndex("by_refresh_due", (q) =>
+        q.eq("refreshEnabled", true).lte("nextRefreshAt", args.now),
+      )
+      .take(Math.min(args.limit ?? 10, 50));
+  },
+});
+
+export const claimScheduledRefreshInternal = internalMutation({
+  args: {
+    id: v.id("datasets"),
+    now: v.number(),
+    runId: v.string(),
+    staleAfterMs: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const dataset = await ctx.db.get(args.id);
+    if (!dataset) return { outcome: "not_found" as const };
+    if (!dataset.refreshEnabled || !dataset.refreshCadence || dataset.refreshCadence === "manual") {
+      return { outcome: "disabled" as const };
+    }
+    if (!dataset.nextRefreshAt || dataset.nextRefreshAt > args.now) {
+      return { outcome: "not_due" as const };
+    }
+    if (dataset.status === "building") {
+      return { outcome: "already_building" as const };
+    }
+    if (dataset.status === "updating") {
+      const staleScheduledRun =
+        dataset.lastRefreshStartedAt !== undefined &&
+        dataset.lastRefreshStartedAt + args.staleAfterMs <= args.now;
+      if (!staleScheduledRun) {
+        return { outcome: "already_updating" as const };
+      }
+    }
+
+    await ctx.db.patch(dataset._id, {
+      status: "updating",
+      lastStatusError: undefined,
+      lastRefreshStartedAt: args.now,
+      lastRefreshRunId: args.runId,
+    });
+
+    return {
+      outcome: "started" as const,
+      dataset: {
+        datasetId: dataset._id,
+        datasetName: dataset.name,
+        description: dataset.description,
+        columns: dataset.columns,
+        ownerId: dataset.ownerId,
+        maxRowCount: dataset.maxRowCount ?? DEFAULT_MAX_ROW_COUNT,
+      },
+    };
+  },
+});
+
+export const completeScheduledRefreshInternal = internalMutation({
+  args: {
+    id: v.id("datasets"),
+    now: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const dataset = await ctx.db.get(args.id);
+    if (!dataset) return { outcome: "not_found" as const };
+
+    const refreshCadence = dataset.refreshCadence ?? "manual";
+    await ctx.db.patch(dataset._id, {
+      status: "live",
+      lastStatusError: undefined,
+      lastRefreshAt: args.now,
+      lastRefreshStartedAt: undefined,
+      nextRefreshAt: nextRefreshAtFor(refreshCadence, args.now),
+    });
+    return { outcome: "completed" as const };
+  },
+});
+
+export const failScheduledRefreshInternal = internalMutation({
+  args: {
+    id: v.id("datasets"),
+    now: v.number(),
+    lastStatusError: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const dataset = await ctx.db.get(args.id);
+    if (!dataset) return { outcome: "not_found" as const };
+
+    const refreshCadence = dataset.refreshCadence ?? "manual";
+    await ctx.db.patch(dataset._id, {
+      status: "failed",
+      lastStatusError: args.lastStatusError,
+      lastRefreshStartedAt: undefined,
+      nextRefreshAt: nextRefreshAtFor(refreshCadence, args.now),
+    });
+    return { outcome: "failed" as const };
+  },
+});
+
 /**
  * Admin-only status transition. Used by the backend orchestration layer
  * to move a dataset between lifecycle states after a workflow completes.
@@ -281,7 +436,8 @@ export const create = mutation({
   args: {
     name: v.string(),
     description: v.string(),
-    cadence: v.string(),
+    refreshCadence: refreshCadenceValidator,
+    maxRowCount: v.number(),
     columns: v.array(columnValidator),
     retrievalStrategy: v.optional(
       v.union(
@@ -296,10 +452,11 @@ export const create = mutation({
     const identity = await requireIdentity(ctx);
     assertNotReservedOwner(identity.subject);
     const normalizedDatasetInput = normalizeCreateDatasetInput(args);
+    validateMaxRowCount(normalizedDatasetInput.maxRowCount);
     // Block dataset creation at full exhaustion — a dataset you can't
     // populate is just clutter. Row generation later will re-check, so
     // this is a UX safeguard, not the only line of defense.
-    await requireQuotaRemaining(ctx, identity.subject, 1);
+    await requireQuotaRemaining(ctx, identity.subject, normalizedDatasetInput.maxRowCount);
 
     return await ctx.db.insert("datasets", {
       ...normalizedDatasetInput,
@@ -307,7 +464,77 @@ export const create = mutation({
       status: "paused",
       visibility: "private",
       rowCount: 0,
+      refreshEnabled: args.refreshCadence !== "manual",
+      nextRefreshAt: nextRefreshAtFor(args.refreshCadence, Date.now()),
     });
+  },
+});
+
+export const updateRefreshSettings = mutation({
+  args: {
+    id: v.id("datasets"),
+    refreshCadence: refreshCadenceValidator,
+  },
+  handler: async (ctx, args) => {
+    const dataset = await loadOwnedDataset(ctx, args.id);
+    const refreshEnabled = args.refreshCadence !== "manual";
+    await ctx.db.patch(dataset._id, {
+      refreshCadence: args.refreshCadence,
+      refreshEnabled,
+      nextRefreshAt: refreshEnabled
+        ? nextRefreshAtFor(args.refreshCadence, Date.now())
+        : undefined,
+    });
+  },
+});
+
+export const updateMaxRowCount = mutation({
+  args: {
+    id: v.id("datasets"),
+    maxRowCount: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const dataset = await loadOwnedDataset(ctx, args.id);
+    validateMaxRowCount(args.maxRowCount);
+    const currentRowCount = dataset.rowCount ?? 0;
+    const additionalRowsNeeded = Math.max(0, args.maxRowCount - currentRowCount);
+    await requireQuotaRemaining(ctx, dataset.ownerId, additionalRowsNeeded);
+    await ctx.db.patch(dataset._id, {
+      maxRowCount: args.maxRowCount,
+    });
+  },
+});
+
+export const backfillRefreshSettings = internalMutation({
+  args: {
+    defaultCadence: v.optional(refreshCadenceValidator),
+  },
+  handler: async (ctx, args) => {
+    const defaultCadence = args.defaultCadence ?? "daily";
+    const now = Date.now();
+    const datasets = await ctx.db.query("datasets").collect();
+    let patched = 0;
+    let alreadyCurrent = 0;
+
+    for (const dataset of datasets) {
+      if (dataset.refreshCadence) {
+        alreadyCurrent++;
+        continue;
+      }
+
+      const refreshCadence = refreshCadenceFromLegacyLabel(
+        dataset.cadence,
+        defaultCadence,
+      );
+      await ctx.db.patch(dataset._id, {
+        refreshCadence,
+        refreshEnabled: refreshCadence !== "manual",
+        nextRefreshAt: nextRefreshAtFor(refreshCadence, now),
+      });
+      patched++;
+    }
+
+    return { patched, alreadyCurrent, total: datasets.length };
   },
 });
 

@@ -5,6 +5,8 @@ import type { Id } from "./_generated/dataModel.js";
 import { assertRowInDataset, loadReadableDataset } from "./lib/authz.js";
 import { consumeQuotaForDataset } from "./lib/quota.js";
 
+const DEFAULT_MAX_DATASET_ROWS = 100;
+
 /**
  * Authoritative row count for a dataset. O(N), so use only on the slow
  * paths: self-heal in `insert` / `remove` when the dataset doc predates
@@ -71,6 +73,17 @@ export const insert = internalMutation({
     const dataset = await ctx.db.get(args.datasetId);
     if (!dataset) throw new Error("Dataset not found");
 
+    const previousCount =
+      typeof dataset.rowCount === "number"
+        ? dataset.rowCount
+        : await actualRowCount(ctx, args.datasetId);
+    const maxRowCount = dataset.maxRowCount ?? DEFAULT_MAX_DATASET_ROWS;
+    if (previousCount >= maxRowCount) {
+      throw new Error(
+        `Row limit reached: this BigSet dataset is capped at ${maxRowCount} rows. Stop inserting rows and finish the run.`,
+      );
+    }
+
     // Dedup: reject inserts that collide on primary key columns.
     // Runs BEFORE quota so rejected dupes don't burn quota.
     const pkColumns = (dataset.columns ?? []).filter(
@@ -109,11 +122,6 @@ export const insert = internalMutation({
 
     // Quota consumption only happens for genuine new rows.
     await consumeQuotaForDataset(ctx, args.datasetId, 1);
-
-    const previousCount =
-      typeof dataset.rowCount === "number"
-        ? dataset.rowCount
-        : await actualRowCount(ctx, args.datasetId);
 
     const rowId = await ctx.db.insert("datasetRows", args);
 
@@ -305,6 +313,34 @@ export const clearUpdateStatus = internalMutation({
 });
 
 /**
+ * Bulk-clear all pending update statuses for a dataset.
+ *
+ * Called when a user stops an in-flight update workflow. Workers exit early
+ * via AbortError, so rows they never reached still have `updateStatus:
+ * "pending"`. This clears them so the UI doesn't show stale shimmer
+ * indicators after the run is marked live.
+ *
+ * Uses the `by_dataset_update_status` compound index so only the pending
+ * rows are scanned — the query never touches rows that have already been
+ * processed (updateStatus === undefined).
+ */
+export const clearAllPendingUpdateStatus = internalMutation({
+  args: { datasetId: v.id("datasets") },
+  handler: async (ctx, args) => {
+    const pendingRows = await ctx.db
+      .query("datasetRows")
+      .withIndex("by_dataset_update_status", (q) =>
+        q.eq("datasetId", args.datasetId).eq("updateStatus", "pending"),
+      )
+      .collect();
+    for (const row of pendingRows) {
+      await ctx.db.patch(row._id, { updateStatus: undefined });
+    }
+    return pendingRows.length;
+  },
+});
+
+/**
  * Admin-only row listing for a dataset. Used by the populate agent's
  * `list_rows` tool to see what's already been inserted in the dataset
  * it's authorized for (so the LLM can diff/append rather than dup).
@@ -327,4 +363,3 @@ export const listInternal = internalQuery({
       .collect();
   },
 });
-

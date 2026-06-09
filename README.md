@@ -1,9 +1,9 @@
 <p align="center">
-  <img src="assets/banner.svg" alt="BigSet" width="100%" />
+  <img src="assets/logo-dark.png" alt="BigSet" width="280" />
 </p>
 
 <p align="center">
-  <strong>Live, queryable datasets that update automatically.</strong>
+  <strong>Build and maintain any dataset from the live web, that refreshes regularly</strong>
 </p>
 
 <p align="center">
@@ -15,89 +15,226 @@
 
 ---
 
-Think of it like a spreadsheet that fills itself in — you describe the dataset you want (YC companies currently hiring, insurance quotes in your area, restaurants serving a specific brand), and BigSet builds it, keeps it fresh, and lets you query it with SQL.
+> ⚠️ **BigSet is experimental.** It works, sometimes surprisingly well, but expect rough edges. We're building in the open and shipping fast. Things will break, improve, and change. [Issues](https://github.com/tinyfish-io/bigset/issues) and feedback are very welcome.
 
-Built on [TinyFish](https://tinyfish.ai) APIs.
+---
+
+## What Is BigSet?
+
+You type a sentence:
+
+> *"YC companies that are currently hiring engineers, with their funding stage, location, and number of open roles."*
+
+BigSet infers the schema automatically, sends autonomous agents to research it on the live web, verifies what they find against real sources, deduplicates, and hands you a structured dataset. Download as CSV or XLSX.
+
+You can even set a refresh cadence (30 min, 6 hours, 12 hours, daily, weekly) and the agents re-run on schedule, pulling fresh data so the dataset never goes stale.
+
+
+Built on [TinyFish](https://www.tinyfish.ai?utm_source=github&utm_medium=organic&utm_campaign=bigset-developer-2026q2) APIs.
+
+
+## Quick set up guide (~3 mins)
+
+<p align="center">
+  <a href="https://youtu.be/ixuOBI9qUnQ">
+    <img src="assets/demo-thumb.jpg" alt="Watch the demo" width="100%" />
+  </a>
+</p>
 
 ## ✨ Why BigSet?
 
-At the end of the day, the only thing that matters is data. Every decision, every agent, every product — it all comes down to having the right data at the right time.
+At the end of the day, every interaction with the web, whether it's you or your AI agent, ultimately comes down to data. Prices, companies, jobs, research, availability, inventory. The web has all of it, scattered across millions of pages.
 
-So what if you could just… ask for it? Describe the dataset you want — in plain English — and have it built, structured, and kept fresh automatically. No scrapers to maintain. No pipelines to babysit. No waking up to broken cron jobs because some site changed a div.
+There are great tools out there for parts of this problem. Scraping frameworks that extract content from URLs you point them at. Search APIs that return ranked results. Pre-built actors for specific sites. Lead gen platforms that produce verified lists of people and companies. They work, and they work well for what they do.
 
-You describe it. BigSet collects it. Your agents query it with SQL. It stays up to date on your schedule — every 30 minutes, every hour, whatever you need. And if something breaks, a healer agent patches it before you even notice.
+But the moment you need something that cuts across those categories, or something none of them cover, you're back to square one. Stitching together search, extraction, schema design, deduplication, verification, and a cron job to keep it fresh. For every dataset. Every time. The data is right there on the web. Getting it into a table you can use is still a project.
+
+BigSet closes that gap. One sentence in, verified structured data out, refreshed on whatever cadence you set. Your agents get live data to reason over; you get a table you can actually use.
 
 Any dataset. Any source. Always fresh. That's the idea.
+
+### How It Works
+
+1. **You describe the dataset** in plain English, as vague or specific as you like
+2. **AI infers the schema**: column names, types, primary keys, where to look on the web
+3. **An orchestrator agent** discovers entities via web search
+4. **Sub-agents fan out in parallel**: each one investigates a single entity, fetches real data, and inserts a verified row
+5. **You get a structured table**: browse it in the UI, export CSV or XLSX
+6. **Set a refresh cadence** and the agents re-run on schedule, keeping the dataset current automatically
+
+## Things to Know Before You Start
+
+- **It's experimental.** Expect rough edges; schema inference isn't always perfect, and some topics work better than others.
+- **Dataset generation takes 2-5 minutes.** The agents are doing real web research: searching, fetching pages, verifying data. It's not instant, but the output is real.
+- **It works best for topics with publicly available web data.** If the information exists on public web pages, BigSet can probably find it. Data behind logins or paywalls is out of reach for now.
+- **Scheduled refresh keeps datasets current.** Set a cadence (30 min to weekly) and the agents re-run automatically. No manual re-runs.
+- **Datasets are downloadable, not queryable.** You can browse in the UI and export CSV/XLSX. SQL query support is on the roadmap.
 
 ---
 
 ## 🚀 Quick Start
 
-**Prerequisites:** [Docker](https://docs.docker.com/get-docker/), [Make](https://www.gnu.org/software/make/), and a free [Clerk](https://dashboard.clerk.com) account
+**Prerequisites:** [Node.js](https://nodejs.org/) 22+ with npm. No Docker needed.
 
-### 1. Clone and set up Clerk
+```bash
+npm install --global @adamexu/bigset
+bigset
+```
+
+That's it. The `bigset` command downloads the current local BigSet release,
+starts Convex, the backend, the frontend, and the local credential bridge, then
+prints the app URL. Open [127.0.0.1:3500](http://127.0.0.1:3500) in your web browser to use it.
+
+The first run caches release files under `~/.bigset`; after that, starting
+BigSet is designed to take only a few seconds.
+
+On first launch, BigSet sends you to setup. You'll connect two services:
+
+| Service | What it's for | Get your key |
+|---------|--------------|-------------|
+| **TinyFish** | Web search + page fetching | [tinyfish.ai/api-keys](https://agent.tinyfish.ai/api-keys?utm_source=github&utm_medium=organic&utm_campaign=bigset-developer-2026q2) |
+| **OpenRouter** | LLM calls (schema inference + agents) | [openrouter.ai/settings/keys](https://openrouter.ai/settings/keys) |
+
+Local API keys are stored in your OS keychain.
+
+For a one-off run without installing globally:
+
+```bash
+npx @adamexu/bigset
+```
+
+Useful local options:
+
+| Command | What it does |
+|---------|-------------|
+| `bigset --force` | Redownload the latest cached release |
+| `bigset --app-port 4500 --backend-port 4501` | Use alternate app/backend ports |
+| `bigset --home ~/.bigset-dev` | Use a separate local cache directory |
+
+---
+
+## Developing From Source
+
+Use this path when you're changing BigSet itself. The supported development
+workflow is still `make dev`.
+
+**Prerequisites:** [Node.js](https://nodejs.org/) 22+ with npm,
+[Docker](https://docs.docker.com/get-docker/), and
+[Make](https://www.gnu.org/software/make/).
+
+### Step 1: Clone the repo
 
 ```bash
 git clone https://github.com/tinyfish-io/bigset.git
 cd bigset
 ```
 
-Create a Clerk application at [dashboard.clerk.com](https://dashboard.clerk.com), then go to **JWT Templates** and enable the **Convex** template.
-
-### 2. Configure env
-
-```bash
-cp .env.example .env
-# Fill in NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY, CLERK_SECRET_KEY,
-# CLERK_JWT_ISSUER_DOMAIN, OPENROUTER_API_KEY, and optional service keys.
-```
-
-> **Required for the create-dataset wizard:** set `OPENROUTER_API_KEY` (used by the schema-inference pipeline). Get one at [openrouter.ai](https://openrouter.ai). Without it the wizard's "Generate Schema" step will fail.
-
-> **Optional:** to enable [PostHog](https://posthog.com) product analytics + session replay + error tracking, set `NEXT_PUBLIC_POSTHOG_KEY` and `NEXT_PUBLIC_POSTHOG_HOST`. Leave blank to disable cleanly (the app no-ops every event).
-
-### 3. Start everything
+### Step 2: Start everything
 
 ```bash
 make dev
 ```
 
-This starts all Docker services, waits for Convex to be healthy, and deploys Convex functions automatically.
-`make dev` checks that root `.env` contains real Clerk and OpenRouter values before it starts Docker.
-Once it's up:
+`make dev` creates a local `.env` if needed, installs dependencies, builds and
+starts all Docker services (Postgres, Convex, frontend, backend, Mastra), and
+deploys the Convex schema. On first run, it automatically generates the Convex
+admin key. See [How `make dev` Works](#how-make-dev-works) for the full
+breakdown.
 
-- App: http://localhost:3500
-- Convex dashboard: http://localhost:6791
-- [Mastra Studio](https://mastra.ai) (workflow inspector): http://localhost:4111
+Once everything is ready, you'll see:
 
-### 4. Generate Convex admin key (first time only)
+| Service | URL |
+|---------|-----|
+| **BigSet app** | [localhost:3500](http://localhost:3500) |
+| **Convex dashboard** | [localhost:6791](http://localhost:6791) |
+| **Mastra Studio** (workflow inspector) | [localhost:4111](http://localhost:4111) |
 
-```bash
-docker compose exec convex ./generate_admin_key.sh
-```
+Open [localhost:3500](http://localhost:3500). The setup screen will ask for
+TinyFish and OpenRouter credentials and save them to your OS keychain for this
+workspace.
 
-Paste the output into `.env` as `CONVEX_SELF_HOSTED_ADMIN_KEY`, then re-run `make dev`.
+### Step 3: Connect TinyFish and OpenRouter
 
-### 5. Load curated public datasets
+TinyFish powers web search and page fetching. OpenRouter routes LLM calls to
+the models BigSet uses for schema inference and agents.
 
-The landing page and the dashboard's "Curated" section read from a set of 9 system-owned datasets. Load them with:
+1. Create a TinyFish key at [agent.tinyfish.ai/api-keys](https://agent.tinyfish.ai/api-keys?utm_source=github&utm_medium=organic&utm_campaign=bigset-developer-2026q2)
+2. Create an OpenRouter key at [openrouter.ai/settings/keys](https://openrouter.ai/settings/keys)
+3. Paste both into BigSet's setup screen
+
+OpenRouter is pay-as-you-go; $5-10 is plenty to start.
+
+> **Note:** root `.env` is the only local env file. If you edit Convex functions in `frontend/convex/`, run `make convex-push` to deploy the changes.
+
+> **Free tier:** cloud signed-in accounts get **2,500 row operations per calendar month** (resets on the 1st, UTC). Local mode bypasses the cloud quota and uses your TinyFish/OpenRouter accounts directly.
+
+### Step 4 (optional): Load curated datasets
+
+BigSet includes 9 curated public datasets (AI companies hiring, GPU prices, model pricing, etc.) that show on the landing page:
 
 ```bash
 make seed-public-datasets
 ```
 
-The script is **idempotent** — rerunning it skips datasets that already exist (matched by a stable `seedKey`, so renaming a curated dataset never creates a duplicate). To add a 10th curated dataset, append it to `PUBLIC_DATASETS` in [frontend/convex/publicSeed.ts](frontend/convex/publicSeed.ts) with a fresh `seedKey` and rerun the command. To replace existing curated content in place, pass `force: true`:
+This is idempotent; safe to run multiple times.
 
-```bash
-cd frontend
-node ../scripts/with-root-env.mjs npx convex run publicSeed:seedPublicDatasets '{"force":true}'
-```
+---
 
-Open [localhost:3500](http://localhost:3500) and click **Get started** to sign in.
+## How `make dev` Works
 
-> **Note:** root `.env` is the only local env file. If you edit Convex functions in `frontend/convex/`, run `make convex-push` to deploy the changes.
+`make dev` is designed to handle everything — first run, subsequent runs, and recovery from bad state. You should never need to run any other setup command. Here's what it does, in order:
 
-> **Free tier:** each signed-in account gets **2,500 row operations per calendar month** (resets on the 1st, UTC). The header shows a live usage badge; system-owned curated datasets bypass the quota.
+1. **Validates your `.env`** — creates local keychain bridge settings automatically.
+2. **Installs dependencies** — runs `npm install` in both `frontend/` and `backend/`. Silent if already up to date.
+3. **Starts the local keychain bridge** — runs a host-side helper so Docker services can read/write this workspace's OS keychain entries.
+4. **Starts the database layer** — brings up Postgres and Convex (self-hosted) first, since other services depend on them.
+5. **Waits for Convex** — polls the Convex health endpoint until it's ready (up to 120s).
+6. **Ensures the admin key** — if `CONVEX_SELF_HOSTED_ADMIN_KEY` is empty in `.env`, generates one automatically and writes it. If a key exists, validates it against the running Convex instance. If the key is stale (e.g. you ran `make clean` and wiped the database), it detects the mismatch and regenerates.
+7. **Configures Convex auth** — sets `BIGSET_LOCAL_MODE=1` for the local app.
+8. **Deploys Convex schema** — pushes the table schema and functions from `frontend/convex/` to the running instance.
+9. **Starts remaining services** — brings up the frontend, backend, and Mastra. These read the now-populated `.env` including the admin key.
+10. **Streams logs** — tails all container logs so you can see what's happening. `Ctrl+C` to stop watching (containers keep running).
+
+### Commands
+
+You only need three commands:
+
+| Command | What it does |
+|---------|-------------|
+| `make dev` | Start everything (or recover from any broken state) |
+| `make down` | Stop all containers (data is preserved) |
+| `make clean` | Stop containers, delete all data, and clear the admin key |
+
+Other commands you might use during development:
+
+| Command | What it does |
+|---------|-------------|
+| `make convex-push` | Deploy Convex schema changes (run after editing `frontend/convex/`) |
+| `make seed-public-datasets` | Load 9 curated public datasets for the landing page |
+
+### What if something goes wrong?
+
+`make dev` is self-healing. If you hit a problem, the fix is almost always just running `make dev` again.
+
+| Problem | What happens |
+|---------|-------------|
+| Missing `.env` | `make dev` creates a local one automatically |
+| Stale admin key (after `make clean`) | Detected automatically, regenerated |
+| Containers already running | No-op for running services, starts any that are missing |
+| Convex won't start | Error after 120s timeout — check Docker is running |
+
+If you want a completely fresh start: `make clean` then `make dev`.
+
+---
+
+## Your `.env` at a Glance
+
+| Variable | Required | Where to get it |
+|----------|----------|----------------|
+| `CONVEX_SELF_HOSTED_ADMIN_KEY` | Auto | Auto-generated by `make dev` on first run |
+| `LOCAL_KEYCHAIN_PORT`, `LOCAL_KEYCHAIN_TOKEN`, `BIGSET_LOCAL_WORKSPACE_ID` | Auto | Auto-generated by `make dev` for local OS keychain access |
+| `RESEND_API_KEY` | Optional | For "dataset ready" emails. Leave blank to skip. |
+| `NEXT_PUBLIC_POSTHOG_KEY` | Optional | For product analytics. Leave blank to disable. |
 
 ---
 
@@ -107,9 +244,9 @@ Open [localhost:3500](http://localhost:3500) and click **Get started** to sign i
 |-------|------|
 | Frontend | Next.js 16, React 19, Tailwind 4 |
 | Backend | Fastify, TypeScript (agent runner) |
-| Auth | [Clerk](https://clerk.com) |
+| Auth | Local auth (dev); [Clerk](https://clerk.com) (cloud) |
 | Database | [Convex](https://convex.dev) (self-hosted) |
-| Data Collection | [TinyFish](https://tinyfish.ai) APIs (Search, Fetch, Browser) |
+| Data Collection | [TinyFish](https://www.tinyfish.ai?utm_source=github&utm_medium=organic&utm_campaign=bigset-developer-2026q2) APIs (Search, Fetch, Browser) |
 | AI orchestration | [Mastra](https://mastra.ai) workflows + [Vercel AI SDK](https://sdk.vercel.ai) + [OpenRouter](https://openrouter.ai) → Claude Sonnet (schema inference + populate agent) |
 | Table view | [TanStack Table](https://tanstack.com/table) + [react-window](https://github.com/bvaughn/react-window) virtualization |
 | Exports | CSV (built-in) + XLSX ([write-excel-file](https://www.npmjs.com/package/write-excel-file), dynamic-imported) |
@@ -134,6 +271,19 @@ bigset/
 
 ---
 
+## 🛣️ Roadmap
+
+We're building BigSet in the open. Here's what's coming:
+
+- [ ] **TinyFish Browser + Agent integration** — For JS-heavy sites, SPAs, and pages that need interaction to reveal data.
+- [ ] **Agent-native API** — So your agents can create, query, and consume BigSet datasets programmatically. Build datasets on the fly, export them, feed them to your agents today. Next up: agents generate and query datasets directly.
+- [ ] **SQL query layer** — Query your datasets with SQL instead of just exporting.
+- [ ] **Per-cell source provenance** — Click any cell to see exactly where the data came from.
+- [ ] **Healer agents** — Automatically detect and fix broken or stale rows.
+- [ ] **Incremental updates** — Refresh only what changed instead of rebuilding the whole dataset.
+
+---
+
 ## 🏗 Building in Public
 
 BigSet is a work in progress. We're building in the open because the best ideas come from the people who actually want to use the thing.
@@ -144,7 +294,23 @@ We'd love your feedback, ideas, or help building — come say hi:
 - 🗣 **Twitter:** [@not_simantak](https://x.com/not_simantak) for the unfiltered version
 - 🐛 **GitHub Issues:** [Report bugs or request features](https://github.com/tinyfish-io/bigset/issues)
 
+
+## Star History
+
+<p align="center">
+  <a href="https://www.star-history.com/#tinyfish-io/bigset&type=date">
+    <img src="https://api.star-history.com/svg?repos=tinyfish-io/bigset&type=date&legend=top-left" alt="Star History Chart">
+  </a>
+</p>
+
+
 ## 🤝 Contributing
+
+<a href="https://github.com/tinyfish-io/bigset/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=tinyfish-io/bigset" />
+</a>
+
+^ This awesome team is behind BigSet! We'd love to have you on board :) 
 
 Contributions are very welcome — whether it's code, feedback, or just telling us what datasets you'd want to build.
 

@@ -34,6 +34,7 @@ export const EVENTS = {
   DATASET_EXPORTED: "dataset_exported",
   DATASET_POPULATE_STARTED: "dataset_populate_started",
   DATASET_UPDATE_STARTED: "dataset_update_started",
+  DATASET_STOP_REQUESTED: "dataset_stop_requested",
 
   // Creation flow
   DATASET_CREATION_STARTED: "dataset_creation_started",

@@ -4,6 +4,10 @@ import { datasetContextSchema, populateColumnSchema } from "../../pipeline/popul
 import { convex, internal } from "../../convex.js";
 import { buildRefreshAgent } from "../agents/refresh.js";
 import { authContextSchema } from "./populate.js";
+import { requireOpenRouterApiKey } from "../../local-credentials.js";
+import { RunMetrics } from "../run-metrics.js";
+import { saveRunMetrics } from "../save-run-metrics.js";
+import { getSignal } from "../../abort-registry.js";
 
 export const updateInputSchema = datasetContextSchema.extend({
   authContext: authContextSchema,
@@ -94,11 +98,20 @@ const refreshRowsStep = createStep({
     let updatedCount = 0;
     let errors = 0;
 
+    const metrics = new RunMetrics();
+    const startedAt = Date.now();
+    const openRouterApiKey = await requireOpenRouterApiKey();
+
     const pkColumns = columns.filter((c) => c.isPrimaryKey);
 
     async function processRow(row: z.infer<typeof rowSchema>) {
       try {
-        const agent = buildRefreshAgent(datasetId, authContext, columns);
+        const agent = buildRefreshAgent(
+          datasetId,
+          authContext,
+          columns,
+          openRouterApiKey,
+        );
 
         const pkBlock =
           pkColumns.length > 0
@@ -127,12 +140,35 @@ ${sourcesBlock}
 ${row.rowSummary ? `\nPrevious summary: ${row.rowSummary}` : ""}
 ${row.howFound ? `\nPreviously found via: ${row.howFound}` : ""}`;
 
-        const result = await agent.generate(prompt, { maxSteps: 10 });
-        const text = result.text.toLowerCase();
-        if (text.includes("updated: true")) {
+        const abortSignal = getSignal(datasetId);
+        const result = await agent.generate(prompt, { abortSignal, maxSteps: 10 });
+
+        // Accumulate token usage into the investigate tier (refresh agents map
+        // to the investigate tier so the runStats schema needs no new columns).
+        metrics.addRefreshResult(result);
+
+        // Use result.toolCalls (flat accumulated list) — same reasoning as
+        // investigate-tool.ts. Per-step arrays are step-finish snapshots and
+        // can misattribute chunks that arrive after the step-finish event.
+        metrics.countToolCalls(result.toolCalls ?? []);
+
+        // Use a tolerant regex so variants like `"updated":true` or
+        // `updated : true` are all caught, not just the exact string
+        // "updated: true" that the agent is instructed to produce.
+        const updated = /\bupdated"?\s*:\s*true\b/i.test(result.text);
+        if (updated) {
           updatedCount++;
+          metrics.rowsUpdated++;
         }
+
+        console.log(
+          `[refresh-rows] Row ${row._id}: updated=${updated} steps=${result.steps?.length ?? "?"} toolCalls=${(result.toolCalls as any[])?.length ?? "?"}`,
+        );
       } catch (err) {
+        // Only re-throw if OUR signal was actually fired. Spurious network
+        // AbortErrors must not terminate a worker — they should be counted as
+        // row errors so the rest of the dataset continues refreshing.
+        if (err instanceof Error && err.name === "AbortError" && getSignal(datasetId)?.aborted) throw err;
         const msg = err instanceof Error ? err.message : String(err);
         console.error(
           `[refresh-rows] Row ${row._id} failed: ${msg}`,
@@ -158,8 +194,48 @@ ${row.howFound ? `\nPreviously found via: ${row.howFound}` : ""}`;
       `[refresh-rows] Processing ${rows.length} rows (max ${MAX_CONCURRENT} concurrent)`,
     );
     await processWithConcurrency(rows, processRow, MAX_CONCURRENT);
+    const finishedAt = Date.now();
+
+    // If the run was stopped mid-update, workers exited early via AbortError.
+    // Rows that were never processed still have updateStatus:"pending".
+    // Clear them now so the UI doesn't show stale shimmer indicators.
+    const abortSignal = getSignal(datasetId);
+    if (abortSignal?.aborted) {
+      console.log(`[refresh-rows] Run was stopped — clearing remaining pending row statuses`);
+      try {
+        await convex.mutation(internal.datasetRows.clearAllPendingUpdateStatus, {
+          datasetId,
+        });
+      } catch (cleanupErr) {
+        console.error(`[refresh-rows] Failed to clear pending update statuses: ${cleanupErr}`);
+      }
+    }
+
     console.log(
       `[refresh-rows] Done: ${updatedCount} updated, ${errors} errors, ${rows.length - updatedCount - errors} unchanged`,
+    );
+
+    // Persist metrics — fire-and-forget; never block the workflow return.
+    void saveRunMetrics({
+      workflowRunId: authContext.workflowRunId,
+      datasetId,
+      userId: authContext.authorizedUserId,
+      startedAt,
+      finishedAt,
+      metrics,
+      // Total failure: every row errored. Partial failure: some rows errored
+      // but at least one succeeded — still "success" overall, but the error
+      // field records how many failed so partial issues are visible in the data.
+      status: errors > 0 && updatedCount === 0 ? "error" : "success",
+      error: errors > 0
+        ? `${errors} of ${rows.length} row(s) failed to refresh`
+        : undefined,
+      workflowType: "update",
+    }).catch((err) =>
+      console.error(
+        `[refresh-rows] metrics save failed run=${authContext.workflowRunId}:`,
+        err,
+      ),
     );
 
     return { updatedCount, totalCount: rows.length, errors };

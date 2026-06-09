@@ -1,7 +1,9 @@
 "use client";
 
-import { useQuery, useConvexAuth } from "convex/react";
+import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import { useAppConvexAuth } from "@/lib/app-auth";
+import { isLocalMode } from "@/lib/app-mode";
 
 /**
  * Compact usage indicator in the dashboard header.
@@ -16,13 +18,13 @@ import { api } from "@/convex/_generated/api";
  * Hidden for anonymous viewers — the badge is account-scoped.
  */
 export function QuotaBadge() {
-  const { isAuthenticated } = useConvexAuth();
+  const { isAuthenticated } = useAppConvexAuth();
   const usage = useQuery(
     api.quota.getMy,
-    isAuthenticated ? {} : "skip",
+    !isLocalMode && isAuthenticated ? {} : "skip",
   );
 
-  if (!isAuthenticated || !usage) return null;
+  if (isLocalMode || !isAuthenticated || !usage) return null;
 
   const exhausted = usage.remaining === 0;
   const warning = !exhausted && usage.fractionUsed >= 0.8;

@@ -13,6 +13,7 @@
     "@clerk/backend": "^3.4.11",
     "@fastify/cors": "^11.0.0",
     "@mastra/core": "^1.36.0",
+    "@napi-rs/keyring": "^1.3.0",
     "@openrouter/ai-sdk-provider": "^2.9.0",
     "ai": "^6.0.0",
     "convex": "^1.39.1",

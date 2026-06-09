@@ -1,5 +1,12 @@
 import type { NextConfig } from "next";
 
-const nextConfig: NextConfig = {};
+const nextConfig: NextConfig = {
+  output: "standalone",
+  allowedDevOrigins: ["127.0.0.1"],
+  env: {
+    NEXT_PUBLIC_PROD: process.env.NEXT_PUBLIC_PROD ?? process.env.PROD ?? "",
+  },
+  devIndicators: false,
+};
 
 export default nextConfig;

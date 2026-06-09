@@ -3,37 +3,56 @@
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useQuery, useConvexAuth } from "convex/react";
-import { useAuth, useUser, useClerk } from "@clerk/nextjs";
+import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { DatasetTable, type DatasetMeta, type DatasetRow } from "@/components/table";
 import { useSelection } from "@/components/table/use-selection";
+import { SideSheet, CellDetail } from "@/components/SideSheet";
+import type { DatasetColumn } from "@/components/table/types";
 import { useTheme } from "@/components/ThemeToggle";
 import { StatusBadge } from "@/components/dataset/StatusBadge";
 import { downloadCSV, downloadXLSX } from "@/lib/export";
-import { populate, update } from "@/lib/backend";
+import { populate, update, stopPopulation } from "@/lib/backend";
 import { EVENTS, captureException, track } from "@/lib/analytics";
+import {
+  REFRESH_CADENCE_OPTIONS,
+  refreshCadenceLabel,
+  type RefreshCadence,
+} from "@/lib/refresh-cadence";
+import type { ProfileUser } from "@/lib/profile-user";
+import { useAppAuth, useAppClerk, useAppConvexAuth, useAppUser } from "@/lib/app-auth";
 
 type DatasetDetail = DatasetMeta & {
+  _id: Id<"datasets">;
   ownerId: string;
   rowCount?: number;
+  maxRowCount?: number;
   seedKey?: string;
   visibility?: "public" | "private";
 };
 
 export default function DatasetPage() {
   const params = useParams();
-  const { isLoading: authLoading } = useConvexAuth();
-  const { userId, getToken } = useAuth();
-  const { user } = useUser();
-  const { signOut } = useClerk();
+  const { isLoading: authLoading, isAuthenticated } = useAppConvexAuth();
+  const { userId, getToken } = useAppAuth();
+  const { user } = useAppUser();
+  const { signOut } = useAppClerk();
   const [exporting, setExporting] = useState<"csv" | "xlsx" | null>(null);
   const [populating, setPopulating] = useState(false);
   const [updating, setUpdating] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [confirmPopulate, setConfirmPopulate] = useState(false);
+  const [savingRefreshCadence, setSavingRefreshCadence] = useState(false);
+  const [savingMaxRowCount, setSavingMaxRowCount] = useState(false);
+  const [maxRowCountSaveError, setMaxRowCountSaveError] = useState<string | null>(null);
+  const [cellDetail, setCellDetail] = useState<{
+    column: DatasetColumn;
+    value: unknown;
+    sources?: string[];
+  } | null>(null);
 
   const datasetId = params.id as Id<"datasets">;
   const dataset = useQuery(
@@ -44,6 +63,12 @@ export default function DatasetPage() {
     api.datasetRows.listByDataset,
     authLoading ? "skip" : { datasetId },
   ) as DatasetRow[] | undefined;
+  const updateRefreshSettings = useMutation(api.datasets.updateRefreshSettings);
+  const updateMaxRowCount = useMutation(api.datasets.updateMaxRowCount);
+  const usage = useQuery(
+    api.quota.getMy,
+    isAuthenticated ? {} : "skip",
+  );
 
   const rowIds = useMemo(() => (rows ?? []).map((r) => r._id), [rows]);
   const selection = useSelection(rowIds);
@@ -51,6 +76,8 @@ export default function DatasetPage() {
 
   const handlePopulate = useCallback(async () => {
     if (!dataset || populating || dataset.status === "building") return;
+    // A new run is starting — discard any lingering stop-latch from the previous run.
+    setStopping(false);
     setPopulating(true);
     try {
       const token = await getToken();
@@ -60,6 +87,7 @@ export default function DatasetPage() {
         dataset._id,
         dataset.name,
         dataset.description,
+        dataset.maxRowCount ?? 100,
         dataset.columns,
         token,
       );
@@ -78,6 +106,14 @@ export default function DatasetPage() {
       setPopulating(false);
     }
   }, [dataset, populating, getToken]);
+
+  const handleCellExpand = useCallback((columnName: string, value: unknown, rowId: string) => {
+    if (!dataset || !rows) return;
+    const col = dataset.columns.find((c) => c.name === columnName);
+    if (!col) return;
+    const row = rows.find((r) => r._id === rowId);
+    setCellDetail({ column: col, value, sources: row?.sources });
+  }, [dataset, rows]);
 
   const openedFired = useRef<string | null>(null);
   const autoPopulateFired = useRef<string | null>(null);
@@ -142,6 +178,8 @@ export default function DatasetPage() {
 
   async function handleUpdate() {
     if (!dataset || !rows || updating || dataset.status === "building" || dataset.status === "updating") return;
+    // A new run is starting — discard any lingering stop-latch from the previous run.
+    setStopping(false);
     setUpdating(true);
     try {
       const token = await getToken();
@@ -160,7 +198,7 @@ export default function DatasetPage() {
       track(EVENTS.DATASET_UPDATE_STARTED, {
         datasetId: dataset._id,
         column_count: dataset.columns.length,
-        row_count: selectedRowIds?.length ?? rows.length,
+        row_count: selectedRowIds?.length ?? rows?.length ?? 0,
         selective: selectedCount > 0,
         runId: result.runId,
       });
@@ -175,6 +213,105 @@ export default function DatasetPage() {
     }
   }
 
+  async function handleRefreshCadenceChange(refreshCadence: RefreshCadence) {
+    if (!dataset || savingRefreshCadence || userId !== dataset.ownerId) return;
+    setSavingRefreshCadence(true);
+    try {
+      await updateRefreshSettings({
+        id: dataset._id,
+        refreshCadence,
+      });
+    } catch (err) {
+      console.error("[refresh cadence] failed", err);
+      captureException(err, {
+        operation: "dataset_refresh_cadence_update",
+        datasetId: dataset._id,
+      });
+    } finally {
+      setSavingRefreshCadence(false);
+    }
+  }
+
+  async function handleMaxRowCountChange(maxRowCount: number) {
+    if (!dataset || savingMaxRowCount || userId !== dataset.ownerId) return;
+    if (!Number.isInteger(maxRowCount) || maxRowCount < 1) {
+      setMaxRowCountSaveError("Max rows must be a whole number greater than 0.");
+      captureException(new Error("Invalid max row count"), {
+        operation: "dataset_max_row_count_update",
+        datasetId: dataset._id,
+      });
+      return;
+    }
+    if (usage && maxRowCount > usage.remaining) {
+      setMaxRowCountSaveError(
+        `Max rows cannot exceed your remaining monthly quota of ${usage.remaining.toLocaleString()} row operations.`,
+      );
+      return;
+    }
+
+    setMaxRowCountSaveError(null);
+    setSavingMaxRowCount(true);
+    try {
+      await updateMaxRowCount({
+        id: dataset._id,
+        maxRowCount,
+      });
+      setMaxRowCountSaveError(null);
+    } catch (err) {
+      console.error("[max rows] failed", err);
+      setMaxRowCountSaveError(
+        err instanceof Error ? err.message : "Failed to update max rows.",
+      );
+      captureException(err, {
+        operation: "dataset_max_row_count_update",
+        datasetId: dataset._id,
+      });
+    } finally {
+      setSavingMaxRowCount(false);
+    }
+  }
+
+  async function handleStop() {
+    if (!dataset || stopping) return;
+    if (dataset.status !== "building" && dataset.status !== "updating") return;
+    setStopping(true);
+    try {
+      const token = await getToken();
+      if (!token) throw new Error("Not authenticated");
+      await stopPopulation(dataset._id, token);
+      track(EVENTS.DATASET_STOP_REQUESTED, {
+        datasetId: dataset._id,
+        status: dataset.status,
+      });
+      // Do NOT clear stopping here. Keep it true until Convex confirms the
+      // dataset has left the busy state (via the isDatasetBusy effect below).
+      // This prevents the button from briefly re-enabling during the cleanup window.
+    } catch (err) {
+      console.error("[stop] failed", err);
+      captureException(err, {
+        operation: "dataset_stop",
+        datasetId: dataset._id,
+      });
+      // Request failed — clear immediately so the user can retry.
+      setStopping(false);
+    }
+  }
+
+  // Computed before the loading guard so the useEffect below can depend on it
+  // without hitting the TDZ. Optional chaining handles the pre-load undefined state.
+  const isDatasetBusy = dataset?.status === "building" || dataset?.status === "updating";
+
+  // Clear the stop latch once the dataset is confirmed not-busy by Convex.
+  // Using setTimeout defers the setState out of the synchronous effect body,
+  // satisfying the react-hooks/set-state-in-effect lint rule while preserving
+  // the same semantic: latch clears on the next tick after the status transition.
+  useEffect(() => {
+    if (!isDatasetBusy) {
+      const id = setTimeout(() => setStopping(false), 0);
+      return () => clearTimeout(id);
+    }
+  }, [isDatasetBusy]);
+
   if (authLoading || dataset === undefined || rows === undefined) {
     return (
       <div className="flex flex-1 items-center justify-center">
@@ -188,9 +325,17 @@ export default function DatasetPage() {
   // the "Dataset not found" UI.
 
   const exportDisabled = exporting !== null || rows.length === 0;
-  const isDatasetBusy = dataset.status === "building" || dataset.status === "updating";
+  const isOwner = userId === dataset.ownerId;
+  const displayDataset = {
+    ...dataset,
+    refreshCadence: dataset.refreshCadence ?? "daily",
+    refreshEnabled: dataset.refreshEnabled ?? true,
+    maxRowCount: dataset.maxRowCount ?? 100,
+  };
   const updateDisabled = updating || isDatasetBusy;
   const populateDisabled = populating || isDatasetBusy;
+  const stopDisabled = stopping || !isDatasetBusy;
+  const stopLabel = stopping ? "Stopping…" : "Stop";
   const updateLabel = dataset.status === "updating"
     ? "Updating…"
     : dataset.status === "building"
@@ -241,15 +386,34 @@ export default function DatasetPage() {
             onExport={(fmt) => { setExportOpen(false); handleExport(fmt); }}
           />
 
+          {isDatasetBusy && (
+            <button
+              type="button"
+              onClick={handleStop}
+              disabled={stopDisabled}
+              className="flex items-center gap-1.5 rounded-lg border border-amber-500/30 bg-amber-500/[0.06] px-2.5 py-1.5 text-xs font-medium text-amber-700 transition-colors hover:bg-amber-500/[0.12] disabled:opacity-40 dark:text-amber-400"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>
+              {stopLabel}
+            </button>
+          )}
+
           <SettingsDropdown
             open={settingsOpen}
             onToggle={() => setSettingsOpen((o) => !o)}
             onClose={() => setSettingsOpen(false)}
-            cadence={dataset.cadence}
+            refreshCadence={displayDataset.refreshCadence}
+            refreshCadenceDisabled={!isOwner || savingRefreshCadence}
+            maxRowCount={displayDataset.maxRowCount}
+            maxRowCountRemaining={usage?.remaining}
+            maxRowCountSaveError={maxRowCountSaveError}
+            maxRowCountDisabled={!isOwner || savingMaxRowCount}
             updateLabel={updateLabel}
             updateDisabled={updateDisabled}
             populateLabel={populateLabel}
             populateDisabled={populateDisabled}
+            onRefreshCadenceChange={handleRefreshCadenceChange}
+            onMaxRowCountChange={handleMaxRowCountChange}
             onUpdate={() => { setSettingsOpen(false); handleUpdate(); }}
             onPopulate={() => {
               setSettingsOpen(false);
@@ -294,11 +458,22 @@ export default function DatasetPage() {
       </div>
 
       <DatasetTable
-        dataset={dataset}
+        dataset={displayDataset}
         rows={rows}
         datasetId={datasetId}
         selection={selection}
+        onCellExpand={handleCellExpand}
       />
+
+      <SideSheet open={cellDetail !== null} onClose={() => setCellDetail(null)}>
+        {cellDetail && (
+          <CellDetail
+            column={cellDetail.column}
+            value={cellDetail.value}
+            sources={cellDetail.sources}
+          />
+        )}
+      </SideSheet>
 
       {confirmPopulate && (
         <ConfirmPopulateModal
@@ -401,26 +576,52 @@ function SettingsDropdown({
   open,
   onToggle,
   onClose,
-  cadence,
+  refreshCadence,
+  refreshCadenceDisabled,
+  maxRowCount,
+  maxRowCountRemaining,
+  maxRowCountSaveError,
+  maxRowCountDisabled,
   updateLabel,
   updateDisabled,
   populateLabel,
   populateDisabled,
+  onRefreshCadenceChange,
+  onMaxRowCountChange,
   onUpdate,
   onPopulate,
 }: {
   open: boolean;
   onToggle: () => void;
   onClose: () => void;
-  cadence: string;
+  refreshCadence: RefreshCadence;
+  refreshCadenceDisabled: boolean;
+  maxRowCount: number;
+  maxRowCountRemaining?: number;
+  maxRowCountSaveError: string | null;
+  maxRowCountDisabled: boolean;
   updateLabel: string;
   updateDisabled: boolean;
   populateLabel: string;
   populateDisabled: boolean;
+  onRefreshCadenceChange: (refreshCadence: RefreshCadence) => void;
+  onMaxRowCountChange: (maxRowCount: number) => void;
   onUpdate: () => void;
   onPopulate: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  const [maxRowCountInput, setMaxRowCountInput] = useState(String(maxRowCount));
+  const parsedMaxRowCount = Number(maxRowCountInput);
+  const maxRowCountValidationError =
+    !maxRowCountInput.trim()
+      ? "Required"
+      : !Number.isInteger(parsedMaxRowCount) || parsedMaxRowCount < 1
+        ? "Use a whole number"
+        : maxRowCountRemaining !== undefined && parsedMaxRowCount > maxRowCountRemaining
+          ? `Max ${maxRowCountRemaining.toLocaleString()}`
+          : null;
+  const maxRowCountChanged =
+    Number.isInteger(parsedMaxRowCount) && parsedMaxRowCount !== maxRowCount;
 
   useEffect(() => {
     if (!open) return;
@@ -430,6 +631,13 @@ function SettingsDropdown({
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
   }, [open, onClose]);
+
+  useEffect(() => {
+    if (!open) {
+      const id = setTimeout(() => setMaxRowCountInput(String(maxRowCount)), 0);
+      return () => clearTimeout(id);
+    }
+  }, [maxRowCount, open]);
 
   return (
     <div ref={ref} className="relative">
@@ -443,7 +651,7 @@ function SettingsDropdown({
       </button>
 
       {open && (
-        <div className="absolute right-0 top-full mt-1.5 w-48 rounded-xl border border-border bg-surface shadow-xl ring-1 ring-black/[0.04] z-50 overflow-hidden">
+        <div className="absolute right-0 top-full mt-1.5 w-64 rounded-xl border border-border bg-surface shadow-xl ring-1 ring-black/[0.04] z-50 overflow-hidden">
           <div className="p-1">
             <button
               onClick={onUpdate}
@@ -462,8 +670,71 @@ function SettingsDropdown({
               {populateLabel}
             </button>
           </div>
-          <div className="border-t border-border px-3 py-1.5">
-            <span className="text-[11px] italic text-muted">{cadence}</span>
+          <div className="border-t border-border p-2">
+            <div className="mb-1 text-[11px] font-medium text-muted">
+              Max rows
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                value={maxRowCountInput}
+                disabled={maxRowCountDisabled}
+                onChange={(e) => setMaxRowCountInput(e.currentTarget.value)}
+                onBlur={() => {
+                  if (!maxRowCountInput.trim()) return;
+                  const value = Number(maxRowCountInput);
+                  if (Number.isInteger(value) && value >= 1) {
+                    setMaxRowCountInput(String(value));
+                  }
+                }}
+                className="min-w-0 flex-1 rounded-lg border border-border bg-background px-2 py-1.5 text-xs text-foreground outline-none transition-colors focus:border-foreground/30 disabled:opacity-50"
+              />
+              <button
+                type="button"
+                disabled={
+                  maxRowCountDisabled ||
+                  !maxRowCountChanged ||
+                  maxRowCountValidationError !== null
+                }
+                onClick={() => onMaxRowCountChange(parsedMaxRowCount)}
+                className="rounded-lg border border-border px-2 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-foreground/[0.05] disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Save
+              </button>
+            </div>
+            <p className={`mt-1 text-[11px] ${maxRowCountValidationError || maxRowCountSaveError ? "text-red-500" : "text-muted"}`}>
+              {maxRowCountValidationError ??
+                maxRowCountSaveError ??
+                (maxRowCountRemaining !== undefined
+                  ? `${maxRowCountRemaining.toLocaleString()} row operations available`
+                  : "Applies to the next populate run")}
+            </p>
+          </div>
+          <div className="border-t border-border p-1">
+            <div className="px-2 py-1 text-[11px] font-medium text-muted">
+              Refresh cadence
+            </div>
+            {REFRESH_CADENCE_OPTIONS.map((option) => {
+              const selected = refreshCadence === option.value;
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => onRefreshCadenceChange(option.value)}
+                  disabled={refreshCadenceDisabled || selected}
+                  className="w-full flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg text-xs text-foreground hover:bg-foreground/[0.05] transition-colors disabled:cursor-default disabled:opacity-60"
+                >
+                  <span>{refreshCadenceLabel(option.value)}</span>
+                  {selected && (
+                    <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <polyline points="20 6 9 17 4 12" />
+                    </svg>
+                  )}
+                </button>
+              );
+            })}
           </div>
         </div>
       )}
@@ -479,7 +750,7 @@ function DatasetProfileMenu({
   user,
   onSignOut,
 }: {
-  user: ReturnType<typeof useUser>["user"];
+  user: ProfileUser | null | undefined;
   onSignOut: () => void;
 }) {
   const [open, setOpen] = useState(false);
