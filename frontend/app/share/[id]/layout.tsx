@@ -14,7 +14,7 @@ export async function generateMetadata({
   const description = [
     dataset.description,
     dataset.columns.length ? `${dataset.columns.length} columns` : null,
-    dataset.rowCount ? `${dataset.rowCount} rows` : null,
+    dataset.rowCount != null ? `${dataset.rowCount} rows` : null,
   ]
     .filter(Boolean)
     .join(" · ");

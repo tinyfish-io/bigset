@@ -16,6 +16,7 @@ export async function fetchPublicDatasetMeta(id: string): Promise<DatasetMeta | 
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ path: "datasets:get", args: { id }, format: "json" }),
+      signal: AbortSignal.timeout(5000),
       next: { revalidate: 60 },
     });
     if (!res.ok) return null;

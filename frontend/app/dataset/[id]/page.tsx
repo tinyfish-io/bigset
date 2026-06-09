@@ -967,10 +967,14 @@ function ShareModal({
     }
   }
 
-  function handleCopy() {
-    navigator.clipboard.writeText(shareUrl);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  async function handleCopy() {
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setSaveError("Copy failed. Select and copy the link manually.");
+    }
   }
 
   return (
