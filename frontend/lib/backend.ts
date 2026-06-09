@@ -46,7 +46,7 @@ export interface EffectiveModelConfig {
 }
 
 /**
- * User's saved model preferences — stores the canonical slug (e.g. "anthropic/claude-sonnet-4.6")
+ * User's saved model preferences — stores the provider model id (e.g. "openai/gpt-5.4-mini" or "gpt-5.4-mini")
  * for each agent role. Null means no preference saved — backend will use the env default.
  */
 export interface SavedModelConfig {
@@ -63,11 +63,17 @@ export interface OpenRouterModel {
   promptCost: number;
 }
 
+export type LlmProviderType = "openrouter" | "openai" | "anthropic" | "custom";
+
 export interface ServiceSetupStatus {
   configured: boolean;
   source: "local" | "env" | null;
   connectionMethod: "api_key" | "oauth" | null;
   verifiedAt: number | null;
+  provider?: LlmProviderType;
+  providerLabel?: string;
+  baseUrl?: string;
+  defaultModel?: string;
 }
 
 export interface LocalSetupStatus {
@@ -76,7 +82,9 @@ export interface LocalSetupStatus {
   complete: boolean;
   services: {
     tinyfish: ServiceSetupStatus;
-    openrouter: ServiceSetupStatus;
+    llm: ServiceSetupStatus;
+    llmProviders?: Record<LlmProviderType, ServiceSetupStatus>;
+    openrouter?: ServiceSetupStatus;
   };
 }
 
@@ -116,13 +124,16 @@ export async function saveTinyFishApiKey(
   return res.json();
 }
 
-export async function saveOpenRouterApiKey(
-  apiKey: string,
-): Promise<LocalSetupStatus> {
-  const res = await fetch(`${BACKEND_URL}/local-setup/openrouter-key`, {
+export async function saveLlmProviderConfig(config: {
+  provider: LlmProviderType;
+  apiKey?: string;
+  defaultModel: string;
+  baseUrl?: string;
+}): Promise<LocalSetupStatus> {
+  const res = await fetch(`${BACKEND_URL}/local-setup/llm-provider`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ apiKey }),
+    body: JSON.stringify(config),
   });
 
   if (!res.ok) {
@@ -130,6 +141,16 @@ export async function saveOpenRouterApiKey(
   }
 
   return res.json();
+}
+
+export async function saveOpenRouterApiKey(
+  apiKey: string,
+): Promise<LocalSetupStatus> {
+  return saveLlmProviderConfig({
+    provider: "openrouter",
+    apiKey,
+    defaultModel: "openai/gpt-5.4-mini",
+  });
 }
 
 export async function exchangeOpenRouterOAuth(
@@ -225,6 +246,21 @@ export async function saveModelConfig(
  */
 export async function getOpenRouterModels(): Promise<OpenRouterModel[]> {
   const res = await fetch(`${BACKEND_URL}/openrouter/models`, {
+    method: "GET",
+  });
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    const message = body?.error || `Backend error (${res.status})`;
+    throw new Error(message);
+  }
+
+  const data = await res.json();
+  return data.models ?? [];
+}
+
+export async function getLlmProviderModels(): Promise<OpenRouterModel[]> {
+  const res = await fetch(`${BACKEND_URL}/llm-provider/models`, {
     method: "GET",
   });
 

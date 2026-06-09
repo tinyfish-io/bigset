@@ -45,7 +45,8 @@ export const env = {
   LOCAL_KEYCHAIN_TIMEOUT_MS: numberFromEnv("LOCAL_KEYCHAIN_TIMEOUT_MS", 5_000),
 
   // Default models — used when a user has not saved a preference.
-  // Each must be a valid OpenRouter model slug.
+  // In production these are still interpreted as OpenRouter model slugs; in
+  // local mode the selected LLM provider's default model is used first.
   SCHEMA_INFERENCE_MODEL:
     process.env.SCHEMA_INFERENCE_MODEL ?? "anthropic/claude-sonnet-4.6",
   POPULATE_ORCHESTRATOR_MODEL:

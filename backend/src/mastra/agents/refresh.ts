@@ -1,5 +1,5 @@
 import { Agent } from "@mastra/core/agent";
-import { createOpenRouter } from "@openrouter/ai-sdk-provider";
+import { createLanguageModel, type LlmProviderConfig } from "../../config/llm.js";
 import { buildPopulateTools } from "../tools/dataset-tools.js";
 import { searchWebTool, fetchPageTool } from "../tools/web-tools.js";
 import type { AuthContext } from "../workflows/populate.js";
@@ -51,13 +51,9 @@ export function buildRefreshAgent(
   authorizedDatasetId: string,
   authContext: AuthContext,
   columns: PopulateColumn[],
-  openRouterApiKey: string,
+  llmConfig: LlmProviderConfig,
 ): Agent {
   const modelSlug = authContext.modelConfig!.investigateSubagent;
-  const openrouter = createOpenRouter({
-    apiKey: openRouterApiKey,
-    baseURL: process.env.OPENROUTER_BASE_URL,
-  });
   const { update_row } = buildPopulateTools(
     authorizedDatasetId,
     authContext,
@@ -66,7 +62,7 @@ export function buildRefreshAgent(
     id: "refresh-agent",
     name: "Dataset Refresh Agent",
     instructions: buildRefreshInstructions(columns),
-    model: openrouter(modelSlug),
+    model: createLanguageModel(llmConfig, modelSlug),
     tools: {
       update_row,
       search_web: searchWebTool,

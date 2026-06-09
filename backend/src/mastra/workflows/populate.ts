@@ -1,11 +1,11 @@
 import { createStep, createWorkflow } from "@mastra/core/workflows";
 import { z } from "zod";
 import { generateText } from "ai";
-import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { datasetContextSchema, populateColumnSchema } from "../../pipeline/populate.js";
 import { convex, internal } from "../../convex.js";
 import { DEFAULT_MODEL_IDS } from "../../config/models.js";
-import { requireOpenRouterApiKey } from "../../local-credentials.js";
+import { createLanguageModel } from "../../config/llm.js";
+import { requireLlmProviderConfig } from "../../local-credentials.js";
 import { buildPopulateAgent } from "../agents/populate.js";
 import { RunMetrics } from "../run-metrics.js";
 import { saveRunMetrics } from "../save-run-metrics.js";
@@ -109,15 +109,11 @@ Respond with EXACTLY one word: scraper or search`;
 
     let classification: "scraper" | "search" = "search";
     try {
-      const apiKey = await requireOpenRouterApiKey();
-      const openrouter = createOpenRouter({
-        apiKey,
-        baseURL: process.env.OPENROUTER_BASE_URL,
-      });
+      const llmConfig = await requireLlmProviderConfig();
       const modelSlug =
-        inputData.authContext?.modelConfig?.schemaInference ?? DEFAULT_MODEL_IDS.SCHEMA_INFERENCE;
+        inputData.authContext?.modelConfig?.schemaInference ?? llmConfig.defaultModel ?? DEFAULT_MODEL_IDS.SCHEMA_INFERENCE;
       const result = await generateText({
-        model: openrouter(modelSlug),
+        model: createLanguageModel(llmConfig, modelSlug),
         prompt: classificationPrompt,
         maxOutputTokens: 10,
         abortSignal: getSignal(inputData.datasetId),
@@ -251,7 +247,7 @@ const agentStep = createStep({
         inputData.authorizedDatasetId,
         inputData.authContext,
         inputData.columns,
-        await requireOpenRouterApiKey(),
+        await requireLlmProviderConfig(),
         inputData.maxRowCount,
         metrics,
       );

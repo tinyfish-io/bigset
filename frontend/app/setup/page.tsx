@@ -11,18 +11,24 @@ import {
 } from "lucide-react";
 import {
   getLocalSetupStatus,
-  saveOpenRouterApiKey,
+  saveLlmProviderConfig,
   saveTinyFishApiKey,
+  type LlmProviderType,
   type LocalSetupStatus,
   type ServiceSetupStatus,
 } from "@/lib/backend";
 import { isLocalMode } from "@/lib/app-mode";
+import {
+  LlmProviderBrand,
+  LlmProviderSelector,
+  llmProviderOption,
+} from "@/components/settings/llm-providers";
 
 export default function SetupPage() {
   const router = useRouter();
   const [status, setStatus] = useState<LocalSetupStatus | null>(null);
   const [loading, setLoading] = useState(true);
-  const [modal, setModal] = useState<"tinyfish" | "openrouter" | null>(null);
+  const [modal, setModal] = useState<"tinyfish" | "llm" | null>(null);
 
   useEffect(() => {
     if (!isLocalMode) {
@@ -59,8 +65,8 @@ export default function SetupPage() {
               Connect your services
             </h1>
             <p className="mt-3 text-base leading-7 text-muted">
-              Add TinyFish and OpenRouter access to start building live
-              datasets.
+              Add TinyFish and your preferred LLM provider to start building
+              live datasets.
             </p>
           </div>
 
@@ -92,18 +98,18 @@ export default function SetupPage() {
             />
 
             <ServiceCard
-              brand={<OpenRouterBrand />}
-              description="BigSet uses OpenRouter's API to power BigSet with AI model access."
-              status={status?.services.openrouter}
+              brand={<LlmProviderBrand provider={status?.services.llm.provider} />}
+              description="BigSet uses your LLM provider for schema generation and dataset-building agents."
+              status={status?.services.llm}
               primaryLabel={
-                status?.services.openrouter.configured
-                  ? "Update key"
-                  : "Add API key"
+                status?.services.llm.configured
+                  ? "Update provider"
+                  : "Choose provider"
               }
-              onPrimary={() => setModal("openrouter")}
-              helperHref="https://openrouter.ai/settings/keys"
-              helperLabel="Need an OpenRouter key?"
-              helperDescription="Open the OpenRouter keys page"
+              onPrimary={() => setModal("llm")}
+              helperHref="https://platform.openai.com/api-keys"
+              helperLabel="Bring your own model"
+              helperDescription="OpenAI, Anthropic, OpenRouter, or custom"
             />
           </div>
 
@@ -166,10 +172,11 @@ function ServiceCard({
   const connected = status?.configured ?? false;
   const detail = useMemo(() => {
     if (!connected) return "Not connected";
+    if (status?.providerLabel) return status.providerLabel;
     if (status?.connectionMethod === "oauth") return "Connected through OAuth";
     if (status?.source === "env") return "Connected through .env";
     return "Connected through API key";
-  }, [connected, status?.connectionMethod, status?.source]);
+  }, [connected, status?.connectionMethod, status?.providerLabel, status?.source]);
 
   return (
     <section className="border border-border bg-surface p-5 sm:p-6">
@@ -224,56 +231,48 @@ function ServiceCard({
   );
 }
 
-function OpenRouterBrand() {
-  return (
-    <div className="flex items-center gap-2 text-black dark:invert">
-      <svg
-        width="24"
-        height="24"
-        viewBox="0 0 512 512"
-        xmlns="http://www.w3.org/2000/svg"
-        fill="currentColor"
-        stroke="currentColor"
-        aria-hidden="true"
-      >
-        <path
-          d="M3 248.945C18 248.945 76 236 106 219C136 202 136 202 198 158C276.497 102.293 332 120.945 423 120.945"
-          strokeWidth="90"
-        />
-        <path d="M511 121.5L357.25 210.268L357.25 32.7324L511 121.5Z" />
-        <path
-          d="M0 249C15 249 73 261.945 103 278.945C133 295.945 133 295.945 195 339.945C273.497 395.652 329 377 420 377"
-          strokeWidth="90"
-        />
-        <path d="M508 376.445L354.25 287.678L354.25 465.213L508 376.445Z" />
-      </svg>
-      <span className="text-xl font-semibold tracking-tight">OpenRouter</span>
-    </div>
-  );
-}
-
 function ApiKeyModal({
   service,
   onClose,
   onSaved,
 }: {
-  service: "tinyfish" | "openrouter";
+  service: "tinyfish" | "llm";
   onClose: () => void;
   onSaved: (status: LocalSetupStatus) => void;
 }) {
   const [apiKey, setApiKey] = useState("");
+  const [provider, setProvider] = useState<LlmProviderType>("openrouter");
+  const [baseUrl, setBaseUrl] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const isTinyFish = service === "tinyfish";
+  const providerCopy = llmProviderOption(provider);
+
+  function handleProviderChange(next: LlmProviderType) {
+    setProvider(next);
+    setBaseUrl("");
+  }
 
   async function handleSubmit() {
-    if (!apiKey.trim() || saving) return;
+    if (saving) return;
+    if (isTinyFish && !apiKey.trim()) return;
+    if (!isTinyFish && provider !== "custom" && !apiKey.trim()) return;
+    if (!isTinyFish && provider === "custom" && !baseUrl.trim()) {
+      setError("Custom providers require a base URL");
+      return;
+    }
+
     setSaving(true);
     setError(null);
     try {
       const next = isTinyFish
         ? await saveTinyFishApiKey(apiKey.trim())
-        : await saveOpenRouterApiKey(apiKey.trim());
+        : await saveLlmProviderConfig({
+            provider,
+            apiKey: apiKey.trim(),
+            defaultModel: llmProviderOption(provider).defaultModel,
+            baseUrl: provider === "custom" ? baseUrl.trim() : undefined,
+          });
       onSaved(next);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Verification failed");
@@ -281,6 +280,18 @@ function ApiKeyModal({
       setSaving(false);
     }
   }
+
+  const helperHref = isTinyFish
+    ? "https://agent.tinyfish.ai/api-keys?utm_source=github&utm_medium=organic&utm_campaign=bigset-developer-2026q2"
+    : providerCopy.helperHref;
+  const helperLabel = !isTinyFish && provider === "custom" ? "Provider docs" : "Get a key";
+  const canSubmit =
+    !saving &&
+    (isTinyFish
+      ? !!apiKey.trim()
+      : provider === "custom"
+        ? !!baseUrl.trim()
+        : !!apiKey.trim());
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -298,12 +309,10 @@ function ApiKeyModal({
         <div className="flex items-center justify-between border-b border-border px-5 py-4">
           <div>
             <h2 className="text-sm font-semibold">
-              {isTinyFish ? "TinyFish API key" : "OpenRouter API key"}
+              {isTinyFish ? "TinyFish API key" : "LLM provider"}
             </h2>
             <p className="mt-1 text-xs text-muted">
-              {isTinyFish
-                ? "BigSet verifies the key and stores it in your OS keychain."
-                : "BigSet verifies the key and stores it in your OS keychain."}
+              BigSet checks the provider endpoint and stores the key in your OS keychain.
             </p>
           </div>
           <button
@@ -317,15 +326,34 @@ function ApiKeyModal({
         </div>
 
         <div className="space-y-4 px-5 py-5">
+          {!isTinyFish && (
+            <fieldset>
+              <legend className="text-xs font-medium text-muted">Provider</legend>
+              <LlmProviderSelector value={provider} onChange={handleProviderChange} />
+            </fieldset>
+          )}
+
+          {!isTinyFish && provider === "custom" && (
+            <label className="block text-xs font-medium text-muted">
+              Base URL
+              <input
+                value={baseUrl}
+                onChange={(event) => setBaseUrl(event.target.value)}
+                className="mt-2 w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground outline-none focus:border-foreground/30"
+                placeholder="http://localhost:1234 (LM Studio) or https://your-provider.example/v1"
+              />
+            </label>
+          )}
+
           <label className="block text-xs font-medium text-muted">
-            API key
+            API key{!isTinyFish && provider === "custom" ? " (optional)" : ""}
             <input
               value={apiKey}
               onChange={(event) => setApiKey(event.target.value)}
               type="password"
               autoFocus
               className="mt-2 w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground outline-none focus:border-foreground/30"
-              placeholder={isTinyFish ? "tf_..." : "sk-or-..."}
+              placeholder={isTinyFish ? "tf_..." : providerCopy.apiKeyPlaceholder}
             />
           </label>
 
@@ -337,22 +365,18 @@ function ApiKeyModal({
 
           <div className="flex items-center justify-between gap-3 pt-2">
             <a
-              href={
-                isTinyFish
-                  ? "https://agent.tinyfish.ai/api-keys?utm_source=github&utm_medium=organic&utm_campaign=bigset-developer-2026q2"
-                  : "https://openrouter.ai/settings/keys"
-              }
+              href={helperHref}
               target="_blank"
               rel="noreferrer"
               className="inline-flex items-center gap-1.5 text-xs text-muted hover:text-foreground"
             >
-              Get a key
+              {helperLabel}
               <ExternalLink className="size-3" />
             </a>
             <button
               type="button"
               onClick={handleSubmit}
-              disabled={!apiKey.trim() || saving}
+              disabled={!canSubmit}
               className="inline-flex items-center gap-2 rounded-lg border border-accent bg-accent px-4 py-2 text-xs font-semibold text-accent-text transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-30"
             >
               {saving && <Loader2 className="size-3.5 animate-spin" />}

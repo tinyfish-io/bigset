@@ -6,6 +6,7 @@ import type { AuthContext } from "../workflows/populate.js";
 import type { PopulateColumn } from "../../pipeline/populate.js";
 import type { RunMetrics } from "../run-metrics.js";
 import { getSignal } from "../../abort-registry.js";
+import type { LlmProviderConfig } from "../../config/llm.js";
 
 const investigateInputSchema = z.object({
   entity_hint: z
@@ -75,7 +76,7 @@ export function buildSubagentTool(
   authorizedDatasetId: string,
   authContext: AuthContext,
   columns: PopulateColumn[],
-  openRouterApiKey: string,
+  llmConfig: LlmProviderConfig,
   maxRowCount: number,
   metrics?: RunMetrics,
 ) {
@@ -108,7 +109,7 @@ export function buildSubagentTool(
           authorizedDatasetId,
           authContext,
           columns,
-          openRouterApiKey,
+          llmConfig,
         );
 
         const pkBlock = Object.entries(primary_keys)

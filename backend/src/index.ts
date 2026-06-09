@@ -20,9 +20,17 @@ import {
   getLocalSetupStatus,
   requireLocalSetupComplete,
   saveLocalCredential,
+  saveLocalLlmProviderConfig,
+  setActiveLocalLlmProvider,
   verifyOpenRouterApiKey,
   verifyTinyFishApiKey,
 } from "./local-credentials.js";
+import {
+  isLlmProviderType,
+  normalizeLlmProviderInput,
+  verifyLlmProviderConfig,
+  type LlmProviderInput,
+} from "./config/llm.js";
 
 /** Domain part of an email, for analytics (we never log full addresses). */
 function emailDomain(email: string): string {
@@ -159,7 +167,7 @@ async function ensureLocalSetupReady(reply: FastifyReply): Promise<boolean> {
     return true;
   } catch {
     await reply.code(428).send({
-      error: "Local setup is incomplete. Connect TinyFish and OpenRouter first.",
+      error: "Local setup is incomplete. Connect TinyFish and an LLM provider first.",
     });
     return false;
   }
@@ -711,6 +719,51 @@ fastify.post("/local-setup/tinyfish", async (req, reply) => {
   }
 });
 
+fastify.post("/local-setup/llm-provider", async (req, reply) => {
+  if (!env.IS_LOCAL_MODE) {
+    return reply.code(404).send({ error: "Not found" });
+  }
+
+  const body = (req.body ?? {}) as Partial<LlmProviderInput>;
+  const provider = body.provider;
+  if (!isLlmProviderType(provider)) {
+    return reply.code(400).send({ error: "Choose a supported LLM provider" });
+  }
+
+  try {
+    const apiKey = body.apiKey?.trim() ?? "";
+    const isNewCustomWithoutKey = provider === "custom" && !!body.baseUrl?.trim();
+
+    if (!apiKey && !isNewCustomWithoutKey) {
+      const status = await getLocalSetupStatus();
+      const savedProvider = status.services.llmProviders?.[provider];
+      if (!savedProvider?.configured) {
+        return reply.code(400).send({ error: `${savedProvider?.providerLabel ?? provider} API key is required` });
+      }
+      await setActiveLocalLlmProvider(provider);
+      return await getLocalSetupStatus();
+    }
+
+    const config = normalizeLlmProviderInput(
+      {
+        provider,
+        apiKey,
+        baseUrl: body.baseUrl,
+        defaultModel: body.defaultModel,
+      },
+      "local",
+    );
+    await verifyLlmProviderConfig(config);
+    await saveLocalLlmProviderConfig(config, "api_key");
+    return await getLocalSetupStatus();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "LLM provider verification failed";
+    req.log.warn({ err }, "LLM provider local setup verification failed");
+    return reply.code(400).send({ error: message });
+  }
+});
+
+// Backward-compatible endpoint for older setup UI builds.
 fastify.post("/local-setup/openrouter-key", async (req, reply) => {
   if (!env.IS_LOCAL_MODE) {
     return reply.code(404).send({ error: "Not found" });
@@ -782,6 +835,18 @@ fastify.get("/openrouter/models", async (req, reply) => {
   }
 });
 
+fastify.get("/llm-provider/models", async (req, reply) => {
+  const { fetchModelsForCurrentLlmProvider } = await import("./config/models.js");
+  try {
+    const models = await fetchModelsForCurrentLlmProvider();
+    return { models };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Failed to load models";
+    req.log.error(err, "Failed to load current LLM provider models");
+    return reply.code(500).send({ error: message });
+  }
+});
+
 // ────────────────────────────────────────────────────────────────────────
 //  Protected routes — gated by Clerk JWT verification
 // ────────────────────────────────────────────────────────────────────────
@@ -796,27 +861,30 @@ await fastify.register(async (instance) => {
   });
 
   instance.post("/settings/models", async (req, reply) => {
-    const { upsertModelConfig, validateModelSlug, getCachedModels } = await import("./config/models.js");
+    const { upsertModelConfig, fetchModelsForCurrentLlmProvider } = await import("./config/models.js");
     const body = req.body as {
       schemaInference?: string | null;
       populateOrchestrator?: string | null;
       investigateSubagent?: string | null;
     };
+    const config = {
+      schemaInference: typeof body.schemaInference === "string" ? body.schemaInference.trim() || undefined : undefined,
+      populateOrchestrator: typeof body.populateOrchestrator === "string" ? body.populateOrchestrator.trim() || undefined : undefined,
+      investigateSubagent: typeof body.investigateSubagent === "string" ? body.investigateSubagent.trim() || undefined : undefined,
+    };
 
     const toValidate: Array<{ role: "schemaInference" | "populateOrchestrator" | "investigateSubagent"; slug: string }> = [];
-    if (body.schemaInference) toValidate.push({ role: "schemaInference", slug: body.schemaInference });
-    if (body.populateOrchestrator) toValidate.push({ role: "populateOrchestrator", slug: body.populateOrchestrator });
-    if (body.investigateSubagent) toValidate.push({ role: "investigateSubagent", slug: body.investigateSubagent });
+    if (config.schemaInference) toValidate.push({ role: "schemaInference", slug: config.schemaInference });
+    if (config.populateOrchestrator) toValidate.push({ role: "populateOrchestrator", slug: config.populateOrchestrator });
+    if (config.investigateSubagent) toValidate.push({ role: "investigateSubagent", slug: config.investigateSubagent });
 
     if (toValidate.length > 0) {
       try {
-        const models = await getCachedModels();
+        const models = await fetchModelsForCurrentLlmProvider();
         for (const { role, slug } of toValidate) {
           const found = models.some((m) => m.canonicalSlug === slug);
           if (!found) {
-            return reply.code(400).send({
-              error: `Invalid model slug "${slug}" for ${role}. Refresh the model list first or choose a different model.`,
-            });
+            req.log.warn({ role, slug }, "Saving model slug that was not returned by the current LLM provider");
           }
         }
       } catch (err) {
@@ -826,9 +894,9 @@ await fastify.register(async (instance) => {
 
     try {
       await upsertModelConfig(req.auth!.userId, {
-        schemaInference: body.schemaInference ?? undefined,
-        populateOrchestrator: body.populateOrchestrator ?? undefined,
-        investigateSubagent: body.investigateSubagent ?? undefined,
+        schemaInference: config.schemaInference,
+        populateOrchestrator: config.populateOrchestrator,
+        investigateSubagent: config.investigateSubagent,
       });
       return { success: true };
     } catch (err) {
