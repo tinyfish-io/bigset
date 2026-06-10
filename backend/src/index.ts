@@ -1,6 +1,7 @@
 import Fastify, { type FastifyBaseLogger, type FastifyReply } from "fastify";
 import fastifyCors from "@fastify/cors";
 import type { ClerkClient } from "@clerk/backend";
+import { z } from "zod";
 
 import { env } from "./env.js";
 import clerkAuthPlugin, { requireAuth, getUserEmail } from "./clerk-auth.js";
@@ -15,6 +16,7 @@ import { capture, shutdown as shutdownAnalytics } from "./analytics/posthog.js";
 import { EVENTS } from "./analytics/events.js";
 import { registerDataset, deregisterDataset, abortDataset } from "./abort-registry.js";
 import {
+  LOCAL_USER_ID,
   clearLegacyPlaintextLocalCredentials,
   exchangeOpenRouterOAuthCode,
   getLocalSetupStatus,
@@ -46,6 +48,45 @@ type DatasetUpdateBeginOutcome =
   | "already_building"
   | "already_updating";
 type UpdateWorkflowRun = Awaited<ReturnType<typeof updateWorkflow.createRun>>;
+
+const refreshCadenceSchema = z.enum(["manual", "30m", "6h", "12h", "daily", "weekly"]);
+const cliCreateDatasetSchema = z.object({
+  prompt: z.string().trim().min(1),
+  maxRowCount: z.number().int().min(1).max(2500).default(100),
+  refreshCadence: refreshCadenceSchema.default("manual"),
+});
+const cliDatasetIdParamsSchema = z.object({
+  datasetId: z.string().min(1),
+});
+
+function cliDatasetNameFromSchemaName(name: string): string {
+  return name
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function mapSchemaTypeToDatasetType(
+  type: "string" | "url" | "date" | "number" | "boolean" | "enum",
+): "text" | "number" | "boolean" | "url" | "date" {
+  if (type === "url" || type === "date" || type === "number" || type === "boolean") {
+    return type;
+  }
+  return "text";
+}
+
+function requireLocalCli(reply: FastifyReply): string | null {
+  if (!env.IS_LOCAL_MODE) {
+    void reply.code(404).send({ error: "Not found" });
+    return null;
+  }
+  if (!env.CONVEX_ADMIN_KEY) {
+    void reply.code(500).send({ error: "CONVEX_SELF_HOSTED_ADMIN_KEY is required" });
+    return null;
+  }
+  return LOCAL_USER_ID;
+}
 
 function statusErrorMessage(err: unknown): string {
   const message = err instanceof Error ? err.message : String(err);
@@ -779,6 +820,243 @@ fastify.get("/openrouter/models", async (req, reply) => {
   } catch (err) {
     req.log.error(err, "Failed to load cached models");
     return reply.code(500).send({ error: "Failed to load models" });
+  }
+});
+
+// ────────────────────────────────────────────────────────────────────────
+//  Local trusted CLI routes
+// ────────────────────────────────────────────────────────────────────────
+
+fastify.get("/cli/datasets", async (_req, reply) => {
+  const ownerId = requireLocalCli(reply);
+  if (!ownerId) return;
+
+  try {
+    const datasets = await convex.query(internal.datasets.listByOwnerInternal, {
+      ownerId,
+    });
+    return { datasets };
+  } catch (err) {
+    fastify.log.error(err, "CLI dataset list failed");
+    return reply.code(502).send({ error: "Failed to list datasets" });
+  }
+});
+
+fastify.post("/cli/datasets", async (req, reply) => {
+  const ownerId = requireLocalCli(reply);
+  if (!ownerId) return;
+  if (!(await ensureLocalSetupReady(reply))) return;
+
+  const parsed = cliCreateDatasetSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return reply.code(400).send({
+      error: "Invalid request",
+      details: parsed.error.flatten().fieldErrors,
+    });
+  }
+
+  try {
+    const schema = await inferSchema(parsed.data.prompt);
+    const columns = schema.columns.map((column) => ({
+      name: column.name,
+      type: mapSchemaTypeToDatasetType(column.type),
+      description: column.retrieval_hint,
+      isPrimaryKey: column.is_primary_key || undefined,
+    }));
+
+    const datasetId = await convex.mutation(
+      internal.datasets.createForOwnerInternal,
+      {
+        ownerId,
+        name: cliDatasetNameFromSchemaName(schema.dataset_name),
+        description: parsed.data.prompt,
+        refreshCadence: parsed.data.refreshCadence,
+        maxRowCount: parsed.data.maxRowCount,
+        columns,
+        retrievalStrategy: schema.retrieval_strategy,
+        sourceHint: schema.source_hint,
+      },
+    );
+
+    const dataset = await convex.query(internal.datasets.getOwnedInternal, {
+      id: datasetId,
+      ownerId,
+    });
+
+    return reply.code(201).send({ dataset, schema });
+  } catch (err) {
+    req.log.error(err, "CLI dataset create failed");
+    return reply.code(502).send({ error: "Failed to create dataset" });
+  }
+});
+
+fastify.get("/cli/datasets/:datasetId", async (req, reply) => {
+  const ownerId = requireLocalCli(reply);
+  if (!ownerId) return;
+
+  const params = cliDatasetIdParamsSchema.safeParse(req.params);
+  if (!params.success) {
+    return reply.code(400).send({ error: "datasetId is required" });
+  }
+
+  try {
+    const dataset = await convex.query(internal.datasets.getOwnedInternal, {
+      id: params.data.datasetId,
+      ownerId,
+    });
+    if (!dataset) return reply.code(404).send({ error: "Dataset not found" });
+    return { dataset };
+  } catch (err) {
+    req.log.error(err, "CLI dataset get failed");
+    return reply.code(400).send({ error: "Invalid datasetId" });
+  }
+});
+
+fastify.get("/cli/datasets/:datasetId/rows", async (req, reply) => {
+  const ownerId = requireLocalCli(reply);
+  if (!ownerId) return;
+
+  const params = cliDatasetIdParamsSchema.safeParse(req.params);
+  if (!params.success) {
+    return reply.code(400).send({ error: "datasetId is required" });
+  }
+
+  try {
+    const rows = await convex.query(
+      internal.datasetRows.listByOwnedDatasetInternal,
+      {
+        datasetId: params.data.datasetId,
+        ownerId,
+      },
+    );
+    if (!rows) return reply.code(404).send({ error: "Dataset not found" });
+    return { rows };
+  } catch (err) {
+    req.log.error(err, "CLI rows get failed");
+    return reply.code(400).send({ error: "Invalid datasetId" });
+  }
+});
+
+fastify.post("/cli/datasets/:datasetId/populate", async (req, reply) => {
+  const ownerId = requireLocalCli(reply);
+  if (!ownerId) return;
+  if (!(await ensureLocalSetupReady(reply))) return;
+
+  const params = cliDatasetIdParamsSchema.safeParse(req.params);
+  if (!params.success) {
+    return reply.code(400).send({ error: "datasetId is required" });
+  }
+
+  let claimedDatasetId: string | null = null;
+  try {
+    const dataset = await convex.query(internal.datasets.getOwnedInternal, {
+      id: params.data.datasetId,
+      ownerId,
+    });
+    if (!dataset) return reply.code(404).send({ error: "Dataset not found" });
+
+    const populateOutcome = await beginDatasetPopulate(dataset._id, ownerId);
+    if (populateOutcome === "already_building") {
+      return reply.code(409).send({ error: "Dataset is already being populated" });
+    }
+    if (populateOutcome === "already_updating") {
+      return reply.code(409).send({ error: "Dataset is already being updated" });
+    }
+    if (populateOutcome !== "started") {
+      return reply.code(409).send({ error: `Cannot populate dataset: ${populateOutcome}` });
+    }
+    claimedDatasetId = dataset._id;
+
+    const { getModelConfig } = await import("./config/models.js");
+    const modelConfig = await getModelConfig(ownerId);
+    const run = await populateWorkflow.createRun();
+    const controller = registerDataset(dataset._id);
+
+    void runPopulateWorkflowInBackground({
+      input: {
+        datasetId: dataset._id,
+        datasetName: dataset.name,
+        description: dataset.description,
+        maxRowCount: dataset.maxRowCount ?? 100,
+        columns: dataset.columns,
+      },
+      run,
+      controller,
+      authorizedUserId: ownerId,
+      logger: req.log,
+      clerk: req.server.clerk,
+      modelConfig,
+    });
+
+    return reply.code(202).send({ success: true, runId: run.runId });
+  } catch (err) {
+    req.log.error(err, "CLI populate failed");
+    if (claimedDatasetId) {
+      try {
+        await setDatasetPopulateStatus(
+          claimedDatasetId,
+          "failed",
+          statusErrorMessage(err),
+        );
+      } catch (statusErr) {
+        req.log.error(
+          { err: statusErr, datasetId: claimedDatasetId },
+          "Failed to release CLI populate dataset claim",
+        );
+      }
+    }
+    return reply.code(502).send({ error: "Failed to populate dataset" });
+  }
+});
+
+fastify.post("/cli/datasets/:datasetId/stop", async (req, reply) => {
+  const ownerId = requireLocalCli(reply);
+  if (!ownerId) return;
+
+  const params = cliDatasetIdParamsSchema.safeParse(req.params);
+  if (!params.success) {
+    return reply.code(400).send({ error: "datasetId is required" });
+  }
+
+  try {
+    const dataset = await convex.query(internal.datasets.getOwnedInternal, {
+      id: params.data.datasetId,
+      ownerId,
+    });
+    if (!dataset) return reply.code(404).send({ error: "Dataset not found" });
+    if (dataset.status !== "building" && dataset.status !== "updating") {
+      return reply.code(409).send({ error: "Dataset is not currently running" });
+    }
+
+    const aborted = abortDataset(dataset._id);
+    if (!aborted) {
+      req.log.warn(
+        { datasetId: dataset._id },
+        "CLI stop requested for orphaned dataset (no active run registered); forcing to failed",
+      );
+      try {
+        if (dataset.status === "updating") {
+          await convex.mutation(internal.datasetRows.clearAllPendingUpdateStatus, {
+            datasetId: dataset._id,
+          });
+        }
+        await setDatasetPopulateStatus(
+          dataset._id,
+          "failed",
+          "Run interrupted: no active local CLI run registered",
+        );
+      } catch (statusErr) {
+        req.log.error(
+          { err: statusErr, datasetId: dataset._id },
+          "Failed to force-transition orphaned CLI dataset to failed",
+        );
+      }
+      return reply.code(200).send({ success: true });
+    }
+    return reply.code(202).send({ success: true });
+  } catch (err) {
+    req.log.error(err, "CLI stop failed");
+    return reply.code(502).send({ error: "Failed to stop dataset run" });
   }
 });
 
