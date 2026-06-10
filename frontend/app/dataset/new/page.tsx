@@ -55,6 +55,23 @@ function mapBackendColumn(col: InferredColumn, index: number): ProposedColumn {
   };
 }
 
+function getSchemaValidationError(datasetName: string, columns: ProposedColumn[]): string | null {
+  if (!datasetName.trim()) return "Dataset name is required.";
+  if (columns.length === 0) return "Add at least one column.";
+
+  const seenColumnNames = new Set<string>();
+  for (const column of columns) {
+    const normalizedName = column.name.trim().toLowerCase();
+    if (!normalizedName) return "Every column needs a name.";
+    if (seenColumnNames.has(normalizedName)) {
+      return `Column names must be unique. "${column.name.trim()}" is duplicated.`;
+    }
+    seenColumnNames.add(normalizedName);
+  }
+
+  return null;
+}
+
 function TypeSelector({ value, onChange }: { value: ColumnType; onChange: (v: ColumnType) => void }) {
   return (
     <div className="relative inline-flex">
@@ -172,6 +189,12 @@ export default function NewDatasetPage() {
 
   async function handleConfirm() {
     if (isCreating) return;
+    const validationError = getSchemaValidationError(datasetName, columns);
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
+
     const maxRowCount = Number(maxRowCountInput);
     if (!Number.isInteger(maxRowCount) || maxRowCount < 1) {
       setError("Max rows must be a whole number greater than 0.");
@@ -186,20 +209,22 @@ export default function NewDatasetPage() {
     setIsCreating(true);
     setError(null);
     let datasetId: string;
+    const normalizedColumns = columns.map((column) => ({
+      name: column.name.trim(),
+      type: column.type,
+      description: column.description.trim() || undefined,
+      isPrimaryKey: column.isPrimaryKey || undefined,
+    }));
+
     try {
       datasetId = await createDataset({
-        name: datasetName,
-        description: prompt,
+        name: datasetName.trim(),
+        description: prompt.trim(),
         refreshCadence,
         maxRowCount,
-        columns: columns.map((c) => ({
-          name: c.name,
-          type: c.type,
-          description: c.description || undefined,
-          isPrimaryKey: c.isPrimaryKey || undefined,
-        })),
+        columns: normalizedColumns,
         retrievalStrategy: retrievalStrategy ?? undefined,
-        sourceHint: sourceHint || undefined,
+        sourceHint: sourceHint.trim() || undefined,
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to create dataset";
@@ -214,7 +239,7 @@ export default function NewDatasetPage() {
     try {
       track(EVENTS.DATASET_CREATED, {
         datasetId,
-        column_count: columns.length,
+        column_count: normalizedColumns.length,
         refreshCadence,
         maxRowCount,
       });

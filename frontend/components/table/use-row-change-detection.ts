@@ -60,6 +60,7 @@ export function useRowChangeDetection(rows: DatasetRow[]) {
           for (const key of newFlashes) merged.add(key);
           return merged;
         });
+
         flashTimersRef.current.delete(startTimer);
 
         const clearTimer = setTimeout(() => {

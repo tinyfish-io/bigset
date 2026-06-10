@@ -107,7 +107,6 @@ export function initAnalytics(): boolean {
 
     loaded: () => {
       if (process.env.NODE_ENV === "development") {
-        // eslint-disable-next-line no-console
         console.info("[analytics] posthog initialized");
       }
     },
@@ -160,7 +159,6 @@ export function track(
   if (typeof window === "undefined") return;
   if (!initialized) {
     if (process.env.NODE_ENV === "development") {
-      // eslint-disable-next-line no-console
       console.debug("[analytics] (no-op)", name, properties ?? {});
     }
     return;
@@ -182,7 +180,6 @@ export function captureException(
   if (typeof window === "undefined") return;
   if (!initialized) {
     if (process.env.NODE_ENV === "development") {
-      // eslint-disable-next-line no-console
       console.debug("[analytics] (no-op exception)", error, properties);
     }
     return;

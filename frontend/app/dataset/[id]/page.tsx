@@ -6,7 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
-import { DatasetTable } from "@/components/table";
+import { DatasetTable, type DatasetMeta, type DatasetRow } from "@/components/table";
 import { useSelection } from "@/components/table/use-selection";
 import { SideSheet, CellDetail } from "@/components/SideSheet";
 import type { DatasetColumn } from "@/components/table/types";
@@ -22,6 +22,15 @@ import {
 } from "@/lib/refresh-cadence";
 import type { ProfileUser } from "@/lib/profile-user";
 import { useAppAuth, useAppClerk, useAppConvexAuth, useAppUser } from "@/lib/app-auth";
+
+type DatasetDetail = DatasetMeta & {
+  _id: Id<"datasets">;
+  ownerId: string;
+  rowCount?: number;
+  maxRowCount?: number;
+  seedKey?: string;
+  visibility?: "public" | "private";
+};
 
 export default function DatasetPage() {
   const params = useParams();
@@ -49,11 +58,11 @@ export default function DatasetPage() {
   const dataset = useQuery(
     api.datasets.get,
     authLoading ? "skip" : { id: datasetId },
-  );
+  ) as DatasetDetail | undefined;
   const rows = useQuery(
     api.datasetRows.listByDataset,
     authLoading ? "skip" : { datasetId },
-  );
+  ) as DatasetRow[] | undefined;
   const updateRefreshSettings = useMutation(api.datasets.updateRefreshSettings);
   const updateMaxRowCount = useMutation(api.datasets.updateMaxRowCount);
   const usage = useQuery(
@@ -168,7 +177,7 @@ export default function DatasetPage() {
   }
 
   async function handleUpdate() {
-    if (!dataset || updating || dataset.status === "building" || dataset.status === "updating") return;
+    if (!dataset || !rows || updating || dataset.status === "building" || dataset.status === "updating") return;
     // A new run is starting — discard any lingering stop-latch from the previous run.
     setStopping(false);
     setUpdating(true);

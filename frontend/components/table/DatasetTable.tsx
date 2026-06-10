@@ -140,7 +140,7 @@ export function DatasetTable({
 
   const headers = table.getHeaderGroups()[0]?.headers ?? [];
   const tableRows = table.getRowModel().rows;
-  const columnWidths = useMemo(() => headers.map((h) => h.getSize()), [headers]);
+  const columnWidths = headers.map((header) => header.getSize());
   const isBuilding = dataset.status === "building";
   const { flashingCells, pendingRowIds } = useRowChangeDetection(rows);
   const displayCount = isBuilding ? Math.max(tableRows.length, GHOST_ROW_COUNT) : tableRows.length;
