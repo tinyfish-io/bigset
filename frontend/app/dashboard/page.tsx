@@ -3,8 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useQuery, useConvexAuth } from "convex/react";
-import { useUser, useClerk } from "@clerk/nextjs";
+import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import {
   DatasetCard,
@@ -12,29 +11,34 @@ import {
 } from "@/components/dataset/DatasetCard";
 import { useTheme } from "@/components/ThemeToggle";
 import { QuotaBadge } from "@/components/QuotaBadge";
+import { LocalUtilityMenu } from "@/components/LocalUtilityMenu";
 import { EVENTS, track } from "@/lib/analytics";
 import type { ProfileUser } from "@/lib/profile-user";
+import { useAppClerk, useAppConvexAuth, useAppUser } from "@/lib/app-auth";
+import { isLocalMode } from "@/lib/app-mode";
 
 export default function DashboardPage() {
-  const { isAuthenticated, isLoading } = useConvexAuth();
-  const { user } = useUser();
-  const { signOut } = useClerk();
+  const { isAuthenticated, isLoading } = useAppConvexAuth();
+  const { user } = useAppUser();
+  const { signOut } = useAppClerk();
   const [search, setSearch] = useState("");
 
   const mine = useQuery(
     api.datasets.listMine,
     isAuthenticated ? {} : "skip",
   );
-  // Public datasets are open to anonymous users too, so no `skip` gate.
-  const curated = useQuery(api.datasets.listPublic, {});
+  const showCurated = !isLocalMode;
+  const curated = useQuery(
+    api.datasets.listPublic,
+    showCurated ? {} : "skip",
+  );
 
-  // Quota state drives the "+ New Dataset" button — disabled when the
-  // user is at their free-tier limit. `undefined` while loading.
+  // Quota limits are cloud-only. Local mode can create datasets without this gate.
   const usage = useQuery(
     api.quota.getMy,
-    isAuthenticated ? {} : "skip",
+    !isLocalMode && isAuthenticated ? {} : "skip",
   );
-  const atLimit = usage !== undefined && usage.remaining === 0;
+  const atLimit = !isLocalMode && usage !== undefined && usage.remaining === 0;
 
   // Fire dashboard_viewed once per mount when both queries have resolved,
   // so we attach accurate counts. `dashboardFired` prevents the effect
@@ -45,15 +49,15 @@ export default function DashboardPage() {
       !dashboardFired.current &&
       isAuthenticated &&
       mine !== undefined &&
-      curated !== undefined
+      (!showCurated || curated !== undefined)
     ) {
       dashboardFired.current = true;
       track(EVENTS.DASHBOARD_VIEWED, {
         owned_count: mine.length,
-        curated_count: curated.length,
+        curated_count: showCurated ? (curated?.length ?? 0) : 0,
       });
     }
-  }, [isAuthenticated, mine, curated]);
+  }, [isAuthenticated, mine, curated, showCurated]);
 
   const { filteredMine, filteredCurated } = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -85,9 +89,15 @@ export default function DashboardPage() {
         <img src="/BigSetLogo.png" alt="BigSet" className="h-[30px] dark:hidden" />
         <img src="/BigSetLogoDarkBG.png" alt="BigSet" className="h-[30px] hidden dark:block" />
         <div className="flex items-center gap-4">
-          <QuotaBadge />
-          <div className="w-px h-4 bg-border" />
-          <ProfileMenu user={user} onSignOut={() => signOut()} />
+          {isLocalMode ? (
+            <LocalUtilityMenu />
+          ) : (
+            <>
+              <QuotaBadge />
+              <div className="w-px h-4 bg-border" />
+              <ProfileMenu user={user} onSignOut={() => signOut()} />
+            </>
+          )}
         </div>
       </header>
 
@@ -187,19 +197,23 @@ export default function DashboardPage() {
           }
         />
 
-        <div className="h-12" />
+        {!isLocalMode && (
+          <>
+            <div className="h-12" />
 
-        <Section
-          eyebrow="Curated by BigSet"
-          heading="Explore live datasets"
-          isLoading={curated === undefined}
-          datasets={filteredCurated as unknown as DatasetCardData[]}
-          emptyState={
-            search
-              ? `No curated datasets match "${search}".`
-              : "Curated datasets coming soon."
-          }
-        />
+            <Section
+              eyebrow="Curated by BigSet"
+              heading="Explore live datasets"
+              isLoading={curated === undefined}
+              datasets={filteredCurated as unknown as DatasetCardData[]}
+              emptyState={
+                search
+                  ? `No curated datasets match "${search}".`
+                  : "Curated datasets coming soon."
+              }
+            />
+          </>
+        )}
       </main>
     </div>
   );
@@ -300,14 +314,16 @@ function ProfileMenu({
 
       {open && (
         <div id="profile-menu" role="menu" className="absolute right-0 top-full mt-1.5 w-52 rounded-xl border border-border bg-surface shadow-xl ring-1 ring-black/[0.04] z-50 overflow-hidden">
-          <div className="px-3 py-2 border-b border-border">
-            <p className="text-xs font-medium text-foreground truncate">{name}</p>
-            {email && (
-              <p data-ph-mask-text="true" className="text-[11px] text-muted truncate mt-0.5">
-                {email}
-              </p>
-            )}
-          </div>
+          {!isLocalMode && (
+            <div className="px-3 py-2 border-b border-border">
+              <p className="text-xs font-medium text-foreground truncate">{name}</p>
+              {email && (
+                <p data-ph-mask-text="true" className="text-[11px] text-muted truncate mt-0.5">
+                  {email}
+                </p>
+              )}
+            </div>
+          )}
           <div className="p-1">
             <button
               onClick={toggleTheme}
@@ -335,20 +351,22 @@ function ProfileMenu({
               </svg>
               Settings
             </button>
-            <button
-              onClick={() => {
-                setOpen(false);
-                onSignOut();
-              }}
-              className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs text-red-500 hover:bg-red-500/[0.08] transition-colors"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
-                <polyline points="16 17 21 12 16 7" />
-                <line x1="21" y1="12" x2="9" y2="12" />
-              </svg>
-              Sign out
-            </button>
+            {!isLocalMode && (
+              <button
+                onClick={() => {
+                  setOpen(false);
+                  onSignOut();
+                }}
+                className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs text-red-500 hover:bg-red-500/[0.08] transition-colors"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                  <polyline points="16 17 21 12 16 7" />
+                  <line x1="21" y1="12" x2="9" y2="12" />
+                </svg>
+                Sign out
+              </button>
+            )}
           </div>
         </div>
       )}

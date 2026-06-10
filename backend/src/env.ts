@@ -19,6 +19,9 @@ function numberFromEnv(name: string, fallback: number): number {
 }
 
 export const env = {
+  PROD: process.env.PROD,
+  IS_PROD: process.env.PROD === "1",
+  IS_LOCAL_MODE: process.env.PROD !== "1",
   CLIENT_ORIGIN: process.env.CLIENT_ORIGIN || "http://localhost:3500",
   CONVEX_URL: required("CONVEX_URL"),
   PORT: numberFromEnv("PORT", 3501),
@@ -36,6 +39,10 @@ export const env = {
     process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY,
 
   OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY,
+  BIGSET_LOCAL_WORKSPACE_ID: required("BIGSET_LOCAL_WORKSPACE_ID"),
+  LOCAL_KEYCHAIN_URL: process.env.LOCAL_KEYCHAIN_URL,
+  LOCAL_KEYCHAIN_TOKEN: process.env.LOCAL_KEYCHAIN_TOKEN,
+  LOCAL_KEYCHAIN_TIMEOUT_MS: numberFromEnv("LOCAL_KEYCHAIN_TIMEOUT_MS", 5_000),
 
   // Default models — used when a user has not saved a preference.
   // Each must be a valid OpenRouter model slug.
@@ -78,4 +85,5 @@ export const env = {
     "REFRESH_SCHEDULER_STALE_AFTER_MS",
     6 * 60 * 60 * 1000,
   ),
+
 };

@@ -44,6 +44,22 @@ export const listByDataset = query({
   },
 });
 
+export const listByOwnedDatasetInternal = internalQuery({
+  args: {
+    datasetId: v.id("datasets"),
+    ownerId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const dataset = await ctx.db.get(args.datasetId);
+    if (!dataset || dataset.ownerId !== args.ownerId) return null;
+
+    return await ctx.db
+      .query("datasetRows")
+      .withIndex("by_dataset", (q) => q.eq("datasetId", args.datasetId))
+      .collect();
+  },
+});
+
 /**
  * Filtered row query — applies a single column=value filter server-side
  * before returning rows.

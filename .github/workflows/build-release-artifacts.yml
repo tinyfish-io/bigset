@@ -1,0 +1,101 @@
+---
+name: Build Release Artifacts
+
+on:  # yamllint disable-line rule:truthy
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing release tag to upload assets to. Leave empty to only upload workflow artifacts.
+        required: false
+        type: string
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: darwin-arm64
+            runner: macos-15
+          - platform: darwin-x64
+            runner: macos-15-intel
+          - platform: linux-arm64
+            runner: ubuntu-24.04-arm
+          - platform: linux-x64
+            runner: ubuntu-24.04
+          - platform: win32-arm64
+            runner: windows-11-arm
+          - platform: win32-x64
+            runner: windows-2025
+
+    env:
+      ARTIFACT_NAME: bigset-build-${{ matrix.platform }}.zip
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "24"
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm install --silent
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm install --silent
+
+      - name: Build release
+        run: node scripts/build-release.mjs
+
+      - name: Rename artifact
+        run: node -e "const fs = require('fs'); fs.renameSync('dist/bigset-build.zip', 'dist/' + process.env.ARTIFACT_NAME);"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ${{ matrix.platform }}
+          path: dist/${{ env.ARTIFACT_NAME }}
+          if-no-files-found: error
+
+      - name: Validate release tag
+        if: github.event_name == 'release' || inputs.release_tag != ''
+        shell: bash
+        run: |
+          if [[ -z "$RELEASE_TAG" ]]; then
+            echo "Release tag is required when uploading release assets." >&2
+            exit 1
+          fi
+          if [[ ! "$RELEASE_TAG" =~ ^[A-Za-z0-9][A-Za-z0-9._/@+-]*$ ]]; then
+            echo "Release tag contains unsupported characters." >&2
+            exit 1
+          fi
+
+      - name: Upload release asset
+        if: github.event_name == 'release' || inputs.release_tag != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$RELEASE_TAG" "dist/$ARTIFACT_NAME" --clobber
+
+      - name: Upload legacy release asset
+        if: (github.event_name == 'release' || inputs.release_tag != '') && matrix.platform == 'darwin-arm64'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node -e "const fs = require('fs'); fs.copyFileSync('dist/' + process.env.ARTIFACT_NAME, 'dist/bigset-build.zip');"
+          gh release upload "$RELEASE_TAG" "dist/bigset-build.zip" --clobber

@@ -3,8 +3,7 @@
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useMutation, useQuery, useConvexAuth } from "convex/react";
-import { useAuth, useUser, useClerk } from "@clerk/nextjs";
+import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { DatasetTable } from "@/components/table";
@@ -23,14 +22,15 @@ import {
   type RefreshCadence,
 } from "@/lib/refresh-cadence";
 import type { ProfileUser } from "@/lib/profile-user";
+import { useAppAuth, useAppClerk, useAppConvexAuth, useAppUser } from "@/lib/app-auth";
 import { toast } from "@/components/Toaster";
 
 export default function DatasetPage() {
   const params = useParams();
-  const { isLoading: authLoading, isAuthenticated } = useConvexAuth();
-  const { userId, getToken } = useAuth();
-  const { user } = useUser();
-  const { signOut } = useClerk();
+  const { isLoading: authLoading, isAuthenticated } = useAppConvexAuth();
+  const { userId, getToken } = useAppAuth();
+  const { user } = useAppUser();
+  const { signOut } = useAppClerk();
   const [exporting, setExporting] = useState<"csv" | "xlsx" | null>(null);
   const [populating, setPopulating] = useState(false);
   const [updating, setUpdating] = useState(false);
@@ -745,7 +745,10 @@ function SettingsDropdown({
   }, [open, onClose]);
 
   useEffect(() => {
-    if (!open) setMaxRowCountInput(String(maxRowCount));
+    if (!open) {
+      const id = setTimeout(() => setMaxRowCountInput(String(maxRowCount)), 0);
+      return () => clearTimeout(id);
+    }
   }, [maxRowCount, open]);
 
   return (

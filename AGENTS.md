@@ -8,7 +8,6 @@
 
 ## What not to do
 
-- Do not add Clerk, Auth0, or any third-party auth service. We use Better Auth (self-hosted).
 - Do not add API routes to the frontend. All API logic belongs in the backend.
 - Do not hardcode ports. Read from env vars (`PORT`, `CLIENT_ORIGIN`, `BETTER_AUTH_URL`).
 - Do not commit `.env` files or secrets.

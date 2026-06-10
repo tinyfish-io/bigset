@@ -1,7 +1,7 @@
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
-
-const FETCH_TIMEOUT_MS = 30_000;
+import { FETCH_TIMEOUT_MS } from "../../fetch-timeout.js";
+import { getTinyFishApiKey, tinyFishHeaders } from "../../local-credentials.js";
 
 const searchResultSchema = z.object({
   title: z.string(),
@@ -24,7 +24,7 @@ export const searchWebTool = createTool({
     if (!query?.trim())
       return { error: "query is required and cannot be empty." };
 
-    const apiKey = process.env.TINYFISH_API_KEY;
+    const apiKey = await getTinyFishApiKey();
     if (!apiKey)
       return { error: "TINYFISH_API_KEY is not configured. Web search is unavailable — use synthetic data instead." };
 
@@ -35,7 +35,7 @@ export const searchWebTool = createTool({
     const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
     try {
       const res = await fetch(url, {
-        headers: { "X-API-Key": apiKey, "X-TF-Request-Origin": "bigset" },
+        headers: tinyFishHeaders(apiKey),
         signal: controller.signal,
       });
       clearTimeout(timeout);
@@ -90,7 +90,7 @@ export const fetchPageTool = createTool({
     if (!targetUrl.startsWith("http://") && !targetUrl.startsWith("https://"))
       return { error: `Invalid URL "${targetUrl}". Must start with http:// or https://.` };
 
-    const apiKey = process.env.TINYFISH_API_KEY;
+    const apiKey = await getTinyFishApiKey();
     if (!apiKey)
       return { error: "TINYFISH_API_KEY is not configured. Page fetch is unavailable — use data from search snippets instead." };
 
@@ -103,8 +103,7 @@ export const fetchPageTool = createTool({
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-API-Key": apiKey,
-          "X-TF-Request-Origin": "bigset",
+          ...tinyFishHeaders(apiKey),
         },
         body: JSON.stringify({ urls: [targetUrl], format: "markdown" }),
         signal: controller.signal,
