@@ -406,6 +406,62 @@ export const create = mutation({
   },
 });
 
+export const createForOwnerInternal = internalMutation({
+  args: {
+    ownerId: v.string(),
+    name: v.string(),
+    description: v.string(),
+    refreshCadence: refreshCadenceValidator,
+    maxRowCount: v.number(),
+    columns: v.array(columnValidator),
+    retrievalStrategy: v.optional(
+      v.union(
+        v.literal("search_fetch"),
+        v.literal("browser"),
+        v.literal("hybrid")
+      )
+    ),
+    sourceHint: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    assertNotReservedOwner(args.ownerId);
+    validateMaxRowCount(args.maxRowCount);
+    await requireQuotaRemaining(ctx, args.ownerId, args.maxRowCount);
+
+    return await ctx.db.insert("datasets", {
+      ...args,
+      status: "paused",
+      visibility: "private",
+      rowCount: 0,
+      refreshEnabled: args.refreshCadence !== "manual",
+      nextRefreshAt: nextRefreshAtFor(args.refreshCadence, Date.now()),
+    });
+  },
+});
+
+export const listByOwnerInternal = internalQuery({
+  args: { ownerId: v.string() },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("datasets")
+      .withIndex("by_owner", (q) => q.eq("ownerId", args.ownerId))
+      .order("desc")
+      .collect();
+  },
+});
+
+export const getOwnedInternal = internalQuery({
+  args: {
+    id: v.id("datasets"),
+    ownerId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const dataset = await ctx.db.get(args.id);
+    if (!dataset || dataset.ownerId !== args.ownerId) return null;
+    return dataset;
+  },
+});
+
 export const updateRefreshSettings = mutation({
   args: {
     id: v.id("datasets"),
