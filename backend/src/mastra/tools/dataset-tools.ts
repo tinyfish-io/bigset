@@ -58,6 +58,21 @@ const writeResultSchema = z.object({
 const ROW_NOT_FOUND_MSG =
   "Row not found. It may have been deleted, or the id belongs to a different dataset. Use list_rows to see valid row ids.";
 
+const rowDataCellSchema = z.object({
+  column: z.string().min(1),
+  value: z.string(),
+});
+
+type RowDataCell = z.infer<typeof rowDataCellSchema>;
+
+function rowDataCellsToRecord(data: RowDataCell[]): Record<string, string> {
+  const row: Record<string, string> = {};
+  for (const cell of data) {
+    row[cell.column] = cell.value;
+  }
+  return row;
+}
+
 function cleanDataKeys(data: Record<string, unknown>): Record<string, unknown> {
   const cleaned: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(data)) {
@@ -126,7 +141,12 @@ export function buildPopulateTools(
     description:
       "Insert a single row into the dataset you are populating. Call this each time you have a row ready — don't wait to batch them.",
     inputSchema: z.object({
-      data: z.record(z.string(), z.any()),
+      data: z
+        .array(rowDataCellSchema)
+        .min(1)
+        .describe(
+          'Row values as {"column": "column_name", "value": "cell value"} entries. Use an empty string for unknown values.',
+        ),
       sources: z
         .array(z.string())
         .optional()
@@ -142,14 +162,14 @@ export function buildPopulateTools(
     }),
     outputSchema: writeResultSchema,
     execute: async ({ data, sources, row_summary, how_found }) => {
-      if (!data || Object.keys(data).length === 0)
+      if (!data || data.length === 0)
         return {
           success: false,
           error:
-            'data is required and must have at least one key. Pass an object like { "Column Name": value }.',
+            'data is required and must include at least one entry like { "column": "column_name", "value": "cell value" }.',
         };
 
-      const cleanedData = cleanDataKeys(data);
+      const cleanedData = cleanDataKeys(rowDataCellsToRecord(data));
       console.log(
         `[insert_row] ${logCtx} cols=${Object.keys(cleanedData).length} sources=${sources?.length ?? 0}`,
       );
@@ -257,10 +277,15 @@ export function buildPopulateTools(
   const updateRowTool = createTool({
     id: "update_row",
     description:
-      "Update an existing row by its ID. Pass the full updated data object. Changes are tracked in history.",
+      "Update an existing row by its ID. Pass the full updated row data. Changes are tracked in history.",
     inputSchema: z.object({
       rowId: z.string(),
-      data: z.record(z.string(), z.any()),
+      data: z
+        .array(rowDataCellSchema)
+        .min(1)
+        .describe(
+          'Full row values as {"column": "column_name", "value": "cell value"} entries. Use an empty string for unknown values.',
+        ),
       sources: z
         .array(z.string())
         .optional()
@@ -277,13 +302,13 @@ export function buildPopulateTools(
     outputSchema: writeResultSchema,
     execute: async ({ rowId, data, sources, row_summary, how_found }) => {
       if (!rowId) return { success: false, error: "rowId is required." };
-      if (!data || Object.keys(data).length === 0)
+      if (!data || data.length === 0)
         return {
           success: false,
-          error: "data is required. Pass the full updated row data object.",
+          error: "data is required. Pass the full updated row data entries.",
         };
 
-      const cleanedData = cleanDataKeys(data);
+      const cleanedData = cleanDataKeys(rowDataCellsToRecord(data));
       console.log(
         `[update_row] ${logCtx} row=${rowId} cols=${Object.keys(cleanedData).length}`,
       );

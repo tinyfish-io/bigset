@@ -1,9 +1,9 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
-import { getModelConfig, saveModelConfig, getOpenRouterModels, refreshOpenRouterModels, type EffectiveModelConfig, type OpenRouterModel } from "@/lib/backend";
+import { getLocalSetupStatus, getLlmProviderModels, getModelConfig, saveModelConfig, refreshOpenRouterModels, type EffectiveModelConfig, type LlmProviderType, type LocalSetupStatus, type OpenRouterModel } from "@/lib/backend";
 import { SettingsPageLayout } from "@/components/settings/SettingsPageLayout";
 import { SettingsHeader } from "@/components/settings/SettingsHeader";
 import { SettingsTile } from "@/components/settings/SettingsTile";
@@ -12,6 +12,17 @@ import { ModelSideSheet } from "@/components/settings/ModelSideSheet";
 import { MODEL_ROLES, type ModelRole } from "@/components/settings/types";
 import { SkeletonList } from "@/components/settings/Skeleton";
 import { useAppAuth } from "@/lib/app-auth";
+import { isLocalMode } from "@/lib/app-mode";
+
+function modelListCacheKey(status: LocalSetupStatus): string {
+  const llm = status.services.llm;
+  return [
+    llm.provider ?? "openrouter",
+    llm.baseUrl ?? "",
+    llm.defaultModel ?? "",
+    llm.verifiedAt ?? "",
+  ].join("|");
+}
 
 export default function ModelSettingsPage() {
   const { getToken } = useAppAuth();
@@ -21,21 +32,70 @@ export default function ModelSettingsPage() {
   const [isLoadingConfig, setIsLoadingConfig] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [sheetModels, setSheetModels] = useState<OpenRouterModel[]>([]);
+  const [sheetModelsCacheKey, setSheetModelsCacheKey] = useState<string | null>(null);
   const [activeSheet, setActiveSheet] = useState<{ role: ModelRole } | null>(null);
+  const [llmProvider, setLlmProvider] = useState<LlmProviderType | null>(
+    isLocalMode ? null : "openrouter",
+  );
+  const [activeModelListCacheKey, setActiveModelListCacheKey] = useState(
+    isLocalMode ? "" : "openrouter|||",
+  );
+  const activeModelListCacheKeyRef = useRef(activeModelListCacheKey);
   const [isSavingModel, setIsSavingModel] = useState(false);
+  const [modelConfigReloadKey, setModelConfigReloadKey] = useState(0);
 
-  const isLoading = convexModels === undefined || isLoadingConfig;
+  const needsOpenRouterCache = !isLocalMode || llmProvider === "openrouter";
+  const isLoading =
+    (needsOpenRouterCache && convexModels === undefined) ||
+    isLoadingConfig ||
+    (isLocalMode && llmProvider === null);
+
+  const syncLlmProvider = useCallback((status: LocalSetupStatus) => {
+    const nextCacheKey = modelListCacheKey(status);
+    activeModelListCacheKeyRef.current = nextCacheKey;
+    setLlmProvider(status.services.llm.provider ?? "openrouter");
+    setActiveModelListCacheKey(nextCacheKey);
+  }, []);
+
+  const handleLocalCredentialsStatus = useCallback(
+    (status: LocalSetupStatus) => {
+      syncLlmProvider(status);
+      setSheetModels([]);
+      setSheetModelsCacheKey(null);
+      setModelConfigReloadKey((key) => key + 1);
+    },
+    [syncLlmProvider],
+  );
 
   useEffect(() => {
+    let active = true;
+
     getToken()
       .then((token) => {
         if (!token) throw new Error("Not authenticated");
         return getModelConfig(token);
       })
-      .then((config) => setEffectiveConfig(config))
-      .catch(() => setEffectiveConfig(null))
-      .finally(() => setIsLoadingConfig(false));
-  }, [getToken]);
+      .then((config) => {
+        if (active) setEffectiveConfig(config);
+      })
+      .catch(() => {
+        if (active) setEffectiveConfig(null);
+      })
+      .finally(() => {
+        if (active) setIsLoadingConfig(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [getToken, modelConfigReloadKey]);
+
+  useEffect(() => {
+    if (!isLocalMode) return;
+    getLocalSetupStatus()
+      .then(syncLlmProvider)
+      .catch(() => setLlmProvider("openrouter"));
+  }, [syncLlmProvider]);
 
   const models: OpenRouterModel[] = convexModels
     ? convexModels.map((m) => ({
@@ -46,19 +106,28 @@ export default function ModelSettingsPage() {
         promptCost: m.promptCost,
       }))
     : [];
+  const sideSheetModels =
+    sheetModels.length > 0
+      ? sheetModels
+      : llmProvider === "openrouter"
+        ? models
+        : [];
 
   function getSelectedModel(role: ModelRole): string {
     return effectiveConfig?.[role.key as keyof typeof effectiveConfig] ?? "";
   }
 
-  async function handleModelSelect(role: ModelRole, model: OpenRouterModel) {
+  async function saveModelForRole(role: ModelRole, modelId: string) {
+    const nextModelId = modelId.trim();
+    if (!nextModelId) return;
+
     setIsSavingModel(true);
     try {
       const token = await getToken();
       if (!token) throw new Error("Not authenticated");
-      await saveModelConfig({ [role.key]: model.canonicalSlug }, token);
+      await saveModelConfig({ [role.key]: nextModelId }, token);
       setEffectiveConfig((prev: EffectiveModelConfig | null) =>
-        prev ? { ...prev, [role.key]: model.canonicalSlug } : null
+        prev ? { ...prev, [role.key]: nextModelId } : null
       );
       setActiveSheet(null);
     } catch {
@@ -69,9 +138,16 @@ export default function ModelSettingsPage() {
   }
 
   function openSideSheet(role: ModelRole) {
-    if (sheetModels.length === 0) {
-      getOpenRouterModels()
-        .then((models) => setSheetModels(models))
+    const cacheKey = activeModelListCacheKeyRef.current || activeModelListCacheKey;
+    if (sheetModels.length === 0 || sheetModelsCacheKey !== cacheKey) {
+      setSheetModels([]);
+      setSheetModelsCacheKey(cacheKey);
+      getLlmProviderModels()
+        .then((models) => {
+          if (activeModelListCacheKeyRef.current !== cacheKey) return;
+          setSheetModels(models);
+          setSheetModelsCacheKey(cacheKey);
+        })
         .catch(() => {
           // we will add toast later
         });
@@ -117,11 +193,15 @@ export default function ModelSettingsPage() {
   return (
     <SettingsPageLayout navItems={navItems}>
       <div className="w-full max-w-4xl">
-        <LocalCredentialsPanel />
+        <LocalCredentialsPanel onStatusChange={handleLocalCredentialsStatus} />
 
         <SettingsHeader
           title="Model Settings"
-          subtitle="Configure AI models for different tasks. Models are fetched from OpenRouter."
+          subtitle={
+            llmProvider === "openrouter"
+              ? "Configure AI models for different tasks. Models are fetched from OpenRouter."
+              : "Configure AI models for different tasks. Models are fetched from your selected provider."
+          }
         />
 
         <div className="space-y-2">
@@ -147,18 +227,23 @@ export default function ModelSettingsPage() {
           onClose={() => !isSavingModel && setActiveSheet(null)}
           title={`Select ${activeSheet.role.label} Model`}
           selectedModel={getSelectedModel(activeSheet.role)}
-          models={sheetModels.length > 0 ? sheetModels : models}
-          onSelect={(slug) => {
-            const sourceModels = sheetModels.length > 0 ? sheetModels : models;
-            const model = sourceModels.find((m) => m.canonicalSlug === slug);
-            if (model) handleModelSelect(activeSheet.role, model);
-          }}
+          models={sideSheetModels}
+          onSelect={(slug) => saveModelForRole(activeSheet.role, slug)}
           onRefresh={async () => {
             setRefreshing(true);
             try {
-              const token = await getToken();
-              if (!token) throw new Error("Not authenticated");
-              const models = await refreshOpenRouterModels(token);
+              const provider = llmProvider ?? "openrouter";
+              const cacheKey = activeModelListCacheKeyRef.current || activeModelListCacheKey;
+              let models: OpenRouterModel[];
+              if (provider === "openrouter") {
+                const token = await getToken();
+                if (!token) throw new Error("Not authenticated");
+                models = await refreshOpenRouterModels(token);
+              } else {
+                models = await getLlmProviderModels();
+              }
+              if (activeModelListCacheKeyRef.current !== cacheKey) return;
+              setSheetModelsCacheKey(cacheKey);
               setSheetModels(models);
             } catch {
               // we will add toast later
@@ -170,6 +255,8 @@ export default function ModelSettingsPage() {
           isSaving={isSavingModel}
         />
       )}
+
+
     </SettingsPageLayout>
   );
 }
