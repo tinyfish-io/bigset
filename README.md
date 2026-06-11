@@ -111,6 +111,70 @@ Useful local options:
 | `bigset --app-port 4500 --backend-port 4501` | Use alternate app/backend ports |
 | `bigset --home ~/.bigset-dev` | Use a separate local cache directory |
 
+### CLI dataset commands
+
+Once `bigset` is running and setup is complete, you can create and export
+datasets directly from your terminal.
+
+Create a dataset:
+
+```bash
+bigset create "fintech startups in the bay area"
+```
+
+Create a dataset, wait for population to finish, and export CSV:
+
+```bash
+bigset create "fintech startups in the bay area" --rows 10 --wait --csv fintech.csv
+```
+
+List datasets:
+
+```bash
+bigset list
+```
+
+Inspect an existing dataset:
+
+```bash
+bigset status <datasetId>
+bigset rows <datasetId> --json
+```
+
+Export an existing dataset:
+
+```bash
+bigset export <datasetId> --csv out.csv
+```
+
+Manage a run:
+
+```bash
+bigset populate <datasetId>
+bigset stop <datasetId>
+```
+
+Useful create flags:
+
+| Flag | What it does |
+|------|-------------|
+| `--rows <n>` | Maximum rows to collect |
+| `--wait` | Keep the command open until population finishes |
+| `--csv <path>` | Write populated rows to a CSV file |
+| `--skip-populate` | Create the dataset without starting population |
+| `--cadence manual\|30m\|6h\|12h\|daily\|weekly` | Set refresh cadence |
+| `--backend-port <port>` | Target a non-default local backend port |
+
+Agents such as Codex or Claude Code can use the same commands. A typical agent
+workflow is:
+
+```bash
+bigset create "AI infrastructure startups hiring backend engineers" --rows 30 --wait --csv ai-infra-hiring.csv
+```
+
+The agent can then inspect `ai-infra-hiring.csv` and summarize or transform the
+results.
+
 ---
 
 ## Developing From Source
