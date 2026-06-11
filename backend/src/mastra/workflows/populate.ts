@@ -37,6 +37,8 @@ export const authContextSchema = z.object({
     schemaInference: z.string().min(1),
     populateOrchestrator: z.string().min(1),
     investigateSubagent: z.string().min(1),
+    rowExtractorConcurrency: z.number().int().min(1).max(100).default(5),
+    rowExtractorBrowserAttempts: z.number().int().min(1).max(10).default(2),
   }),
   isBenchmark: z.boolean().optional(),
 });

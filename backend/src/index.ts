@@ -1147,11 +1147,21 @@ await fastify.register(async (instance) => {
       schemaInference?: string | null;
       populateOrchestrator?: string | null;
       investigateSubagent?: string | null;
+      rowExtractorConcurrency?: number | null;
+      rowExtractorBrowserAttempts?: number | null;
     };
     const config = {
       schemaInference: typeof body.schemaInference === "string" ? body.schemaInference.trim() || undefined : undefined,
       populateOrchestrator: typeof body.populateOrchestrator === "string" ? body.populateOrchestrator.trim() || undefined : undefined,
       investigateSubagent: typeof body.investigateSubagent === "string" ? body.investigateSubagent.trim() || undefined : undefined,
+      rowExtractorConcurrency:
+        typeof body.rowExtractorConcurrency === "number"
+          ? body.rowExtractorConcurrency
+          : undefined,
+      rowExtractorBrowserAttempts:
+        typeof body.rowExtractorBrowserAttempts === "number"
+          ? body.rowExtractorBrowserAttempts
+          : undefined,
     };
 
     const toValidate: Array<{ role: "schemaInference" | "populateOrchestrator" | "investigateSubagent"; slug: string }> = [];
@@ -1178,6 +1188,8 @@ await fastify.register(async (instance) => {
         schemaInference: config.schemaInference,
         populateOrchestrator: config.populateOrchestrator,
         investigateSubagent: config.investigateSubagent,
+        rowExtractorConcurrency: config.rowExtractorConcurrency,
+        rowExtractorBrowserAttempts: config.rowExtractorBrowserAttempts,
       });
       return { success: true };
     } catch (err) {

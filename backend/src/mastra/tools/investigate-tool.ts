@@ -115,6 +115,7 @@ export function buildSubagentTool(
           primaryKeys: primaryKeyRecord,
           urls,
           context,
+          browserAttempts: authContext.modelConfig.rowExtractorBrowserAttempts,
         });
         if (extractorResult.status === "inserted") {
           if (metrics) metrics.rowsInserted++;

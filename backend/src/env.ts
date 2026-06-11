@@ -53,6 +53,11 @@ export const env = {
     process.env.POPULATE_ORCHESTRATOR_MODEL ?? "qwen/qwen3.7-max",
   INVESTIGATE_SUBAGENT_MODEL:
     process.env.INVESTIGATE_SUBAGENT_MODEL ?? "qwen/qwen3.7-max",
+  ROW_EXTRACTOR_CONCURRENCY: numberFromEnv("ROW_EXTRACTOR_CONCURRENCY", 5),
+  ROW_EXTRACTOR_BROWSER_ATTEMPTS: numberFromEnv(
+    "ROW_EXTRACTOR_BROWSER_ATTEMPTS",
+    2,
+  ),
 
   // Resend (transactional email). Optional — when RESEND_API_KEY is unset
   // the email module no-ops with a log line, so local dev works without

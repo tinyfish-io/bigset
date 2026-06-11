@@ -8,6 +8,7 @@ import { requireLlmProviderConfig } from "../../local-credentials.js";
 import { RunMetrics } from "../run-metrics.js";
 import { saveRunMetrics } from "../save-run-metrics.js";
 import { getSignal } from "../../abort-registry.js";
+import { tryRefreshRowExtractor } from "../../row-extractors/try-row-extractor.js";
 
 export const updateInputSchema = datasetContextSchema.extend({
   authContext: authContextSchema,
@@ -69,8 +70,6 @@ const refreshOutputSchema = z.object({
   errors: z.number(),
 });
 
-const MAX_CONCURRENT = 5;
-
 async function processWithConcurrency<T>(
   items: T[],
   handler: (item: T) => Promise<void>,
@@ -100,17 +99,62 @@ const refreshRowsStep = createStep({
 
     const metrics = new RunMetrics();
     const startedAt = Date.now();
-    const llmConfig = await requireLlmProviderConfig();
+    let llmConfigPromise: ReturnType<typeof requireLlmProviderConfig> | undefined;
+    const getLlmConfig = () => {
+      llmConfigPromise ??= requireLlmProviderConfig();
+      return llmConfigPromise;
+    };
 
     const pkColumns = columns.filter((c) => c.isPrimaryKey);
+    const maxConcurrent = authContext.modelConfig.rowExtractorConcurrency;
 
     async function processRow(row: z.infer<typeof rowSchema>) {
       try {
+        const primaryKeyRecord = Object.fromEntries(
+          pkColumns
+            .map((column) => [column.name, String(row.data[column.name] ?? "").trim()])
+            .filter(([, value]) => value.length > 0),
+        );
+
+        const extractorResult = await tryRefreshRowExtractor({
+          datasetId,
+          rowId: row._id,
+          columns,
+          primaryKeys: primaryKeyRecord,
+          existingData: row.data,
+          urls: row.sources,
+          context: [row.rowSummary, row.howFound].filter(Boolean).join("\n"),
+          browserAttempts: authContext.modelConfig.rowExtractorBrowserAttempts,
+        });
+
+        if (extractorResult.status === "updated") {
+          updatedCount++;
+          metrics.rowsUpdated++;
+          console.log(
+            `[refresh-rows] Row ${row._id}: updated=true via=row_extractor reason="${extractorResult.reason}"`,
+          );
+          return;
+        }
+
+        if (extractorResult.status === "unchanged") {
+          console.log(
+            `[refresh-rows] Row ${row._id}: updated=false via=row_extractor reason="${extractorResult.reason}"`,
+          );
+          return;
+        }
+
+        if (extractorResult.status === "failed") {
+          if (getSignal(datasetId)?.aborted) throwAbortError();
+          console.warn(
+            `[refresh-rows] Row ${row._id}: row extractor failed; falling back to refresh agent: ${extractorResult.reason}`,
+          );
+        }
+
         const agent = buildRefreshAgent(
           datasetId,
           authContext,
           columns,
-          llmConfig,
+          await getLlmConfig(),
         );
 
         const pkBlock =
@@ -191,9 +235,9 @@ ${row.howFound ? `\nPreviously found via: ${row.howFound}` : ""}`;
     }
 
     console.log(
-      `[refresh-rows] Processing ${rows.length} rows (max ${MAX_CONCURRENT} concurrent)`,
+      `[refresh-rows] Processing ${rows.length} rows (max ${maxConcurrent} concurrent)`,
     );
-    await processWithConcurrency(rows, processRow, MAX_CONCURRENT);
+    await processWithConcurrency(rows, processRow, maxConcurrent);
     const finishedAt = Date.now();
 
     // If the run was stopped mid-update, workers exited early via AbortError.
@@ -241,6 +285,12 @@ ${row.howFound ? `\nPreviously found via: ${row.howFound}` : ""}`;
     return { updatedCount, totalCount: rows.length, errors };
   },
 });
+
+function throwAbortError(): never {
+  const err = new Error("Run was stopped");
+  err.name = "AbortError";
+  throw err;
+}
 
 export const updateWorkflow = createWorkflow({
   id: "update-workflow",

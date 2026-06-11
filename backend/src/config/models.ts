@@ -35,6 +35,46 @@ export const DEFAULT_MODEL_IDS = {
   INVESTIGATE_SUBAGENT: env.INVESTIGATE_SUBAGENT_MODEL,
 } as const;
 
+const ROW_EXTRACTOR_CONCURRENCY_MIN = 1;
+export const ROW_EXTRACTOR_CONCURRENCY_MAX = 100;
+const ROW_EXTRACTOR_BROWSER_ATTEMPTS_MIN = 1;
+export const ROW_EXTRACTOR_BROWSER_ATTEMPTS_MAX = 10;
+
+export function normalizeRowExtractorConcurrency(value: unknown): number {
+  return normalizeIntegerSetting(
+    value,
+    5,
+    ROW_EXTRACTOR_CONCURRENCY_MIN,
+    ROW_EXTRACTOR_CONCURRENCY_MAX,
+  );
+}
+
+export function normalizeRowExtractorBrowserAttempts(value: unknown): number {
+  return normalizeIntegerSetting(
+    value,
+    2,
+    ROW_EXTRACTOR_BROWSER_ATTEMPTS_MIN,
+    ROW_EXTRACTOR_BROWSER_ATTEMPTS_MAX,
+  );
+}
+
+function normalizeIntegerSetting(
+  value: unknown,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(min, Math.trunc(parsed)));
+}
+
+const DEFAULT_ROW_EXTRACTOR_CONCURRENCY = normalizeRowExtractorConcurrency(
+  env.ROW_EXTRACTOR_CONCURRENCY,
+);
+const DEFAULT_ROW_EXTRACTOR_BROWSER_ATTEMPTS =
+  normalizeRowExtractorBrowserAttempts(env.ROW_EXTRACTOR_BROWSER_ATTEMPTS);
+
 const OPENAI_MODEL_EXCLUDE_PATTERNS = [
   "audio",
   "babbage",
@@ -454,6 +494,8 @@ export async function upsertModelConfig(
     schemaInference?: string;
     populateOrchestrator?: string;
     investigateSubagent?: string;
+    rowExtractorConcurrency?: number;
+    rowExtractorBrowserAttempts?: number;
   }
 ): Promise<void> {
   const llmConfig = await getLlmProviderConfig();
@@ -463,6 +505,14 @@ export async function upsertModelConfig(
     schemaInference: config.schemaInference ?? undefined,
     populateOrchestrator: config.populateOrchestrator ?? undefined,
     investigateSubagent: config.investigateSubagent ?? undefined,
+    rowExtractorConcurrency:
+      config.rowExtractorConcurrency !== undefined
+        ? normalizeRowExtractorConcurrency(config.rowExtractorConcurrency)
+        : undefined,
+    rowExtractorBrowserAttempts:
+      config.rowExtractorBrowserAttempts !== undefined
+        ? normalizeRowExtractorBrowserAttempts(config.rowExtractorBrowserAttempts)
+        : undefined,
   });
 }
 
@@ -477,6 +527,8 @@ export async function getModelConfig(
   schemaInference: string;
   populateOrchestrator: string;
   investigateSubagent: string;
+  rowExtractorConcurrency: number;
+  rowExtractorBrowserAttempts: number;
 }> {
   const llmConfig = await getLlmProviderConfig();
   const config = await convex.query(internal.modelConfig.getInternal, {
@@ -501,6 +553,13 @@ export async function getModelConfig(
       "investigateSubagent",
       DEFAULT_MODEL_IDS.INVESTIGATE_SUBAGENT,
       llmConfig,
+    ),
+    rowExtractorConcurrency: normalizeRowExtractorConcurrency(
+      config?.rowExtractorConcurrency ?? DEFAULT_ROW_EXTRACTOR_CONCURRENCY,
+    ),
+    rowExtractorBrowserAttempts: normalizeRowExtractorBrowserAttempts(
+      config?.rowExtractorBrowserAttempts ??
+        DEFAULT_ROW_EXTRACTOR_BROWSER_ATTEMPTS,
     ),
   };
 }

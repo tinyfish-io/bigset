@@ -43,6 +43,8 @@ export interface EffectiveModelConfig {
   schemaInference: string;
   populateOrchestrator: string;
   investigateSubagent: string;
+  rowExtractorConcurrency: number;
+  rowExtractorBrowserAttempts: number;
 }
 
 /**
@@ -53,6 +55,8 @@ export interface SavedModelConfig {
   schemaInference: string | null;
   populateOrchestrator: string | null;
   investigateSubagent: string | null;
+  rowExtractorConcurrency: number | null;
+  rowExtractorBrowserAttempts: number | null;
 }
 
 export interface OpenRouterModel {
@@ -106,6 +110,48 @@ export interface LocalSetupStatus {
 
 const BACKEND_URL =
   process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:3501";
+const DEFAULT_ROW_EXTRACTOR_CONCURRENCY = 5;
+const DEFAULT_ROW_EXTRACTOR_BROWSER_ATTEMPTS = 2;
+
+function normalizeIntegerSetting(
+  value: unknown,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(min, Math.trunc(parsed)));
+}
+
+function normalizeEffectiveModelConfig(
+  config: Partial<EffectiveModelConfig> | null | undefined,
+): EffectiveModelConfig {
+  return {
+    schemaInference:
+      typeof config?.schemaInference === "string" ? config.schemaInference : "",
+    populateOrchestrator:
+      typeof config?.populateOrchestrator === "string"
+        ? config.populateOrchestrator
+        : "",
+    investigateSubagent:
+      typeof config?.investigateSubagent === "string"
+        ? config.investigateSubagent
+        : "",
+    rowExtractorConcurrency: normalizeIntegerSetting(
+      config?.rowExtractorConcurrency,
+      DEFAULT_ROW_EXTRACTOR_CONCURRENCY,
+      1,
+      100,
+    ),
+    rowExtractorBrowserAttempts: normalizeIntegerSetting(
+      config?.rowExtractorBrowserAttempts,
+      DEFAULT_ROW_EXTRACTOR_BROWSER_ATTEMPTS,
+      1,
+      10,
+    ),
+  };
+}
 
 async function errorMessage(res: Response): Promise<string> {
   const body = await res.json().catch(() => null);
@@ -214,7 +260,7 @@ export async function getModelConfig(token: string): Promise<EffectiveModelConfi
   }
 
   const data = await res.json();
-  return data.config;
+  return normalizeEffectiveModelConfig(data.config);
 }
 
 /**

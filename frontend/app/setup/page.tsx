@@ -57,6 +57,8 @@ function emptyModelConfig(): EffectiveModelConfig {
     schemaInference: "",
     populateOrchestrator: "",
     investigateSubagent: "",
+    rowExtractorConcurrency: 5,
+    rowExtractorBrowserAttempts: 2,
   };
 }
 
@@ -166,7 +168,7 @@ export default function SetupPage() {
 
   function modelForRole(role: ModelRole): string {
     const key = role.key as keyof EffectiveModelConfig;
-    return modelConfig?.[key] ?? "";
+    return String(modelConfig?.[key] ?? "");
   }
 
   function openModelSheet(role: ModelRole) {
