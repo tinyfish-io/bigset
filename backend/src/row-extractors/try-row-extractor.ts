@@ -14,6 +14,7 @@ export interface TryRowExtractorInput {
   primaryKeys: Record<string, string>;
   urls?: string[];
   context?: string;
+  browserAttempts?: number;
 }
 
 export interface TryRefreshRowExtractorInput extends TryRowExtractorInput {
@@ -72,7 +73,7 @@ const ENABLED_VALUES = new Set(["1", "true", "yes", "on"]);
 const GITHUB_HOSTS = new Set(["github.com", "www.github.com"]);
 const BROWSER_TIMEOUT_MS = 45_000;
 const CDP_CONNECT_TIMEOUT_MS = 45_000;
-const BROWSER_ATTEMPTS = 2;
+const DEFAULT_BROWSER_ATTEMPTS = 2;
 const GITHUB_EXTRACTOR_HOW_FOUND =
   "Opened the GitHub repository URL with TinyFish Browser and extracted repository facts from the rendered page.";
 const GITHUB_REFRESH_HOW_FOUND =
@@ -94,7 +95,11 @@ export async function tryRowExtractor(
   }
 
   try {
-    const facts = await extractGitHubRepoFacts(url, input.datasetId);
+    const facts = await extractGitHubRepoFacts(
+      url,
+      input.datasetId,
+      input.browserAttempts,
+    );
     const row = buildGitHubRow(input.columns, input.primaryKeys, facts);
     if (!row) {
       return {
@@ -145,7 +150,11 @@ export async function tryRefreshRowExtractor(
   }
 
   try {
-    const facts = await extractGitHubRepoFacts(url, input.datasetId);
+    const facts = await extractGitHubRepoFacts(
+      url,
+      input.datasetId,
+      input.browserAttempts,
+    );
     const row = buildGitHubRow(input.columns, input.primaryKeys, facts);
     if (!row) {
       return {
@@ -239,25 +248,34 @@ function parseGitHubRepoUrl(value: string): { owner: string; repo: string } | nu
 async function extractGitHubRepoFacts(
   url: string,
   datasetId: string,
+  browserAttempts: number | undefined,
 ): Promise<GitHubRepoFacts> {
   const apiKey = await getTinyFishApiKey();
   if (!apiKey) throw new Error("TINYFISH_API_KEY is not configured");
 
+  const attempts = normalizedBrowserAttempts(browserAttempts);
   let lastError: unknown;
-  for (let attempt = 1; attempt <= BROWSER_ATTEMPTS; attempt++) {
+  for (let attempt = 1; attempt <= attempts; attempt++) {
     try {
       return await extractGitHubRepoFactsOnce(apiKey, url, datasetId);
     } catch (err) {
       lastError = err;
-      if (getSignal(datasetId)?.aborted || attempt === BROWSER_ATTEMPTS) break;
+      if (getSignal(datasetId)?.aborted || attempt === attempts) break;
       const msg = err instanceof Error ? err.message : String(err);
       console.warn(
-        `[row_extractor] GitHub browser attempt ${attempt} failed; retrying: ${msg}`,
+        `[row_extractor] GitHub browser attempt ${attempt}/${attempts} failed; retrying: ${msg}`,
       );
     }
   }
 
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
+function normalizedBrowserAttempts(value: number | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return DEFAULT_BROWSER_ATTEMPTS;
+  }
+  return Math.min(10, Math.max(1, Math.trunc(value)));
 }
 
 async function extractGitHubRepoFactsOnce(

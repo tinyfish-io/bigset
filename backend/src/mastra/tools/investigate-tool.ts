@@ -108,6 +108,7 @@ export function buildSubagentTool(
           primaryKeys: primary_keys,
           urls,
           context,
+          browserAttempts: authContext.modelConfig.rowExtractorBrowserAttempts,
         });
         if (extractorResult.status === "inserted") {
           if (metrics) metrics.rowsInserted++;
