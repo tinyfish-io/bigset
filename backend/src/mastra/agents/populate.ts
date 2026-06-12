@@ -6,6 +6,13 @@ import type { AuthContext } from "../workflows/populate.js";
 import type { PopulateColumn } from "../../pipeline/populate.js";
 import type { RunMetrics } from "../run-metrics.js";
 
+export interface PopulateAgentDatasetContext {
+  datasetName: string;
+  description: string;
+  retrievalStrategy?: "search_fetch" | "browser" | "hybrid";
+  sourceHint?: string;
+}
+
 function buildInstructions(maxRowCount: number): string {
   return `You are an expert dataset builder. You conduct research using your web tools.
 You do broad research to see which rows to add, and then you spin up sub-agents that can do the deep research and fill in each row for you.
@@ -42,6 +49,7 @@ export function buildPopulateAgent(
   columns: PopulateColumn[],
   llmConfig: LlmProviderConfig,
   maxRowCount: number,
+  datasetContext: PopulateAgentDatasetContext,
   metrics?: RunMetrics,
 ): Agent {
   const modelSlug = authContext.modelConfig!.populateOrchestrator;
@@ -60,6 +68,7 @@ export function buildPopulateAgent(
         columns,
         llmConfig,
         maxRowCount,
+        datasetContext,
         metrics,
       ),
     },

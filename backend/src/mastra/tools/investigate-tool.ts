@@ -50,6 +50,13 @@ const investigateOutputSchema = z.object({
   reason: z.string(),
 });
 
+interface DatasetContextForExtractor {
+  datasetName: string;
+  description: string;
+  retrievalStrategy?: "search_fetch" | "browser" | "hybrid";
+  sourceHint?: string;
+}
+
 function parseInvestigateResult(
   text: string,
 ): z.infer<typeof investigateOutputSchema> {
@@ -82,6 +89,7 @@ export function buildSubagentTool(
   columns: PopulateColumn[],
   llmConfig: LlmProviderConfig,
   maxRowCount: number,
+  datasetContext: DatasetContextForExtractor,
   metrics?: RunMetrics,
 ) {
   return createTool({
@@ -115,7 +123,12 @@ export function buildSubagentTool(
           primaryKeys: primaryKeyRecord,
           urls,
           context,
+          datasetName: datasetContext.datasetName,
+          description: datasetContext.description,
+          retrievalStrategy: datasetContext.retrievalStrategy,
+          sourceHint: datasetContext.sourceHint,
           browserAttempts: authContext.modelConfig.rowExtractorBrowserAttempts,
+          extractorBuilderModel: authContext.modelConfig.extractorBuilder,
         });
         if (extractorResult.status === "inserted") {
           if (metrics) metrics.rowsInserted++;
@@ -140,6 +153,10 @@ export function buildSubagentTool(
         if (extractorResult.status === "failed") {
           console.warn(
             `[run_subagent] row extractor failed entity="${entity_hint}" reason="${extractorResult.reason}"`,
+          );
+        } else if (extractorResult.status === "miss") {
+          console.log(
+            `[run_subagent] row extractor missed entity="${entity_hint}" reason="${extractorResult.reason}"`,
           );
         }
 

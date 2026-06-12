@@ -18,6 +18,7 @@ Your job is to:
    - \`hybrid\` — unclear; the pipeline will try search_fetch first and fall back to browser.
 5. Set \`source_hint\` to a specific URL whenever possible (e.g. \`https://www.ycombinator.com/companies?industry=Fintech\`). Avoid vague descriptions.
 6. Write a \`retrieval_hint\` for each column describing where/how the value can be found later. Downstream agents will use this to fill the column for each row.
+7. For each column where a value has a known shape, include \`validation_regex\` and \`normalization_hint\`. These are extractor contracts, not UI decoration. Examples: ratings, prices, dates, URL/slug shapes, repository slugs, app package names, counts, currencies, availability labels. Omit \`validation_regex\` only when the value is genuinely free-form text.
 
 Rules:
 
@@ -25,6 +26,8 @@ Rules:
 - \`dataset_name\` must be snake_case.
 - All column \`name\` values must be snake_case and unique.
 - Prefer concrete column choices over speculative ones — better to omit a column than guess wildly.
+- Validation regexes must validate the normalized final value, not raw page text. Keep them practical and anchored, e.g. "^[0-5](\\\\.\\\\d)?$" for a normalized rating or "^[^/\\\\s]+/[^/\\\\s]+$" for an owner/repo slug.
+- \`normalization_hint\` should tell the extractor how to convert raw page text into the stored value, e.g. "Convert '4.6 out of 5 stars' to '4.6'" or "Strip commas and convert 1.2k to 1200".
 - When a column is a scalar numeric rating (e.g. average score like 4.3/5 for restaurants, cafes, hotels, products, apps): name it generically (e.g. "rating" not "yelp_rating") and write a retrieval_hint explaining that review sites (Yelp, TripAdvisor, Google Maps) block direct page fetches, so the agent must extract ratings from **search result snippets**. The hint should say: "Search for \\"<entity name> rating reviews\\" and include location terms only when location is part of the entity identity. Look for ratings in snippets from TripAdvisor (\\"rated X.X of 5\\"), Yelp search listings (\\"X.X (N reviews)\\"), or aggregator sites (Birdeye, joe.coffee, giftly, Uber Eats, menufyy). Do NOT try to fetch yelp.com or tripadvisor.com directly — they block automated access. Accept ratings from any reputable source." If including a rating column, also add a "rating_source" text column so the agent records where the rating came from. Do not rename review-count or review-text fields to "rating" — keep those as distinct columns (e.g. "review_count") when the user explicitly asks for them.`;
 
 async function getModel(modelSlug?: string) {

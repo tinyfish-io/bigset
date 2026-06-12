@@ -65,6 +65,9 @@ export default defineSchema({
         ),
         description: v.optional(v.string()),
         isPrimaryKey: v.optional(v.boolean()),
+        nullable: v.optional(v.boolean()),
+        validationRegex: v.optional(v.string()),
+        normalizationHint: v.optional(v.string()),
       })
     ),
     retrievalStrategy: v.optional(
@@ -158,11 +161,25 @@ export default defineSchema({
     schemaInference: v.optional(v.string()),
     populateOrchestrator: v.optional(v.string()),
     investigateSubagent: v.optional(v.string()),
+    extractorBuilder: v.optional(v.string()),
     rowExtractorConcurrency: v.optional(v.number()),
     rowExtractorBrowserAttempts: v.optional(v.number()),
   })
     .index("by_user", ["userId"])
     .index("by_user_provider", ["userId", "provider"]),
+
+  datasetExtractors: defineTable({
+    datasetId: v.id("datasets"),
+    siteKey: v.string(),
+    columnsHash: v.string(),
+    script: v.string(),
+    status: v.union(v.literal("active"), v.literal("failed")),
+    model: v.optional(v.string()),
+    probeSummary: v.optional(v.string()),
+    lastError: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_dataset_site", ["datasetId", "siteKey"]),
 
   localCredentials: defineTable({
     service: v.union(

@@ -41,7 +41,8 @@ export type LlmProviderType = (typeof LLM_PROVIDER_TYPES)[number];
 export type ModelRoleKey =
   | "schemaInference"
   | "populateOrchestrator"
-  | "investigateSubagent";
+  | "investigateSubagent"
+  | "extractorBuilder";
 
 export interface LlmProviderConfig {
   provider: LlmProviderType;
@@ -85,81 +86,97 @@ export const LLM_PROVIDER_DEFAULT_MODELS_BY_ROLE: Record<
     schemaInference: env.SCHEMA_INFERENCE_MODEL,
     populateOrchestrator: env.POPULATE_ORCHESTRATOR_MODEL,
     investigateSubagent: env.INVESTIGATE_SUBAGENT_MODEL,
+    extractorBuilder: env.EXTRACTOR_BUILDER_MODEL,
   },
   openai: {
     schemaInference: "gpt-5.4-mini",
     populateOrchestrator: "gpt-5.4-mini",
     investigateSubagent: "gpt-5.4-mini",
+    extractorBuilder: "gpt-5.4-mini",
   },
   anthropic: {
     schemaInference: "claude-sonnet-4-6",
     populateOrchestrator: "claude-haiku-4-5-20251001",
     investigateSubagent: "claude-haiku-4-5-20251001",
+    extractorBuilder: "claude-haiku-4-5-20251001",
   },
   google: {
     schemaInference: "gemini-3.5-flash",
     populateOrchestrator: "gemini-3.5-flash",
     investigateSubagent: "gemini-3.5-flash",
+    extractorBuilder: "gemini-3.5-flash",
   },
   xai: {
     schemaInference: "grok-4.3",
     populateOrchestrator: "grok-4.3",
     investigateSubagent: "grok-4.3",
+    extractorBuilder: "grok-4.3",
   },
   deepseek: {
     schemaInference: "deepseek-chat",
     populateOrchestrator: "deepseek-chat",
     investigateSubagent: "deepseek-chat",
+    extractorBuilder: "deepseek-chat",
   },
   qwen: {
     schemaInference: "qwen-plus",
     populateOrchestrator: "qwen-plus",
     investigateSubagent: "qwen-plus",
+    extractorBuilder: "qwen-plus",
   },
   mistral: {
     schemaInference: "mistral-large-latest",
     populateOrchestrator: "mistral-large-latest",
     investigateSubagent: "mistral-large-latest",
+    extractorBuilder: "mistral-large-latest",
   },
   groq: {
     schemaInference: "openai/gpt-oss-120b",
     populateOrchestrator: "openai/gpt-oss-120b",
     investigateSubagent: "openai/gpt-oss-120b",
+    extractorBuilder: "openai/gpt-oss-120b",
   },
   togetherai: {
     schemaInference: "Qwen/Qwen3.5-397B-A17B",
     populateOrchestrator: "Qwen/Qwen3.5-397B-A17B",
     investigateSubagent: "Qwen/Qwen3.5-397B-A17B",
+    extractorBuilder: "Qwen/Qwen3.5-397B-A17B",
   },
   deepinfra: {
     schemaInference: "meta-llama/Llama-3.3-70B-Instruct-Turbo",
     populateOrchestrator: "meta-llama/Llama-3.3-70B-Instruct-Turbo",
     investigateSubagent: "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+    extractorBuilder: "meta-llama/Llama-3.3-70B-Instruct-Turbo",
   },
   fireworks: {
     schemaInference: "accounts/fireworks/models/kimi-k2p5",
     populateOrchestrator: "accounts/fireworks/models/kimi-k2p5",
     investigateSubagent: "accounts/fireworks/models/kimi-k2p5",
+    extractorBuilder: "accounts/fireworks/models/kimi-k2p5",
   },
   huggingface: {
     schemaInference: "deepseek-ai/DeepSeek-V3-0324",
     populateOrchestrator: "deepseek-ai/DeepSeek-V3-0324",
     investigateSubagent: "deepseek-ai/DeepSeek-V3-0324",
+    extractorBuilder: "deepseek-ai/DeepSeek-V3-0324",
   },
   ollama: {
     schemaInference: "",
     populateOrchestrator: "",
     investigateSubagent: "",
+    extractorBuilder: "",
   },
   lmstudio: {
     schemaInference: "",
     populateOrchestrator: "",
     investigateSubagent: "",
+    extractorBuilder: "",
   },
   custom: {
     schemaInference: "",
     populateOrchestrator: "",
     investigateSubagent: "",
+    extractorBuilder: "",
   },
 };
 

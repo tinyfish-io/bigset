@@ -31,6 +31,9 @@ const columnValidator = v.object({
   ),
   description: v.optional(v.string()),
   isPrimaryKey: v.optional(v.boolean()),
+  nullable: v.optional(v.boolean()),
+  validationRegex: v.optional(v.string()),
+  normalizationHint: v.optional(v.string()),
 });
 
 function refreshCadenceFromLegacyLabel(
@@ -282,6 +285,8 @@ export const claimScheduledRefreshInternal = internalMutation({
         datasetName: dataset.name,
         description: dataset.description,
         columns: dataset.columns,
+        retrievalStrategy: dataset.retrievalStrategy,
+        sourceHint: dataset.sourceHint,
         ownerId: dataset.ownerId,
         maxRowCount: dataset.maxRowCount ?? DEFAULT_MAX_ROW_COUNT,
       },

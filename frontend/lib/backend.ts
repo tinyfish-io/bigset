@@ -15,6 +15,8 @@ export interface InferredColumn {
   is_enumerable: boolean;
   retrieval_hint: string;
   nullable: boolean;
+  validation_regex?: string;
+  normalization_hint?: string;
 }
 
 export interface PopulateColumn {
@@ -22,6 +24,9 @@ export interface PopulateColumn {
   type: "text" | "number" | "boolean" | "url" | "date";
   description?: string;
   isPrimaryKey?: boolean;
+  nullable?: boolean;
+  validationRegex?: string;
+  normalizationHint?: string;
 }
 
 export interface PopulateStartResult {
@@ -36,13 +41,14 @@ export interface WorkflowResult {
 
 /**
  * The effective model config — always complete, never null.
- * schemaInference / populateOrchestrator / investigateSubagent are always strings
+ * schemaInference / populateOrchestrator / investigateSubagent / extractorBuilder are always strings
  * (user preference or system default from env).
  */
 export interface EffectiveModelConfig {
   schemaInference: string;
   populateOrchestrator: string;
   investigateSubagent: string;
+  extractorBuilder: string;
   rowExtractorConcurrency: number;
   rowExtractorBrowserAttempts: number;
 }
@@ -55,6 +61,7 @@ export interface SavedModelConfig {
   schemaInference: string | null;
   populateOrchestrator: string | null;
   investigateSubagent: string | null;
+  extractorBuilder: string | null;
   rowExtractorConcurrency: number | null;
   rowExtractorBrowserAttempts: number | null;
 }
@@ -138,6 +145,8 @@ function normalizeEffectiveModelConfig(
       typeof config?.investigateSubagent === "string"
         ? config.investigateSubagent
         : "",
+    extractorBuilder:
+      typeof config?.extractorBuilder === "string" ? config.extractorBuilder : "",
     rowExtractorConcurrency: normalizeIntegerSetting(
       config?.rowExtractorConcurrency,
       DEFAULT_ROW_EXTRACTOR_CONCURRENCY,

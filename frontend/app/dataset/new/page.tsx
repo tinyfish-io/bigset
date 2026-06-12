@@ -22,6 +22,9 @@ interface ProposedColumn {
   type: ColumnType;
   description: string;
   isPrimaryKey: boolean;
+  nullable?: boolean;
+  validationRegex?: string;
+  normalizationHint?: string;
 }
 
 type Step = "describe" | "generating" | "review";
@@ -52,6 +55,9 @@ function mapBackendColumn(col: InferredColumn, index: number): ProposedColumn {
     type: BACKEND_TYPE_MAP[col.type],
     description: col.retrieval_hint,
     isPrimaryKey: col.is_primary_key,
+    nullable: col.nullable,
+    validationRegex: col.validation_regex,
+    normalizationHint: col.normalization_hint,
   };
 }
 
@@ -197,6 +203,9 @@ export default function NewDatasetPage() {
           type: c.type,
           description: c.description || undefined,
           isPrimaryKey: c.isPrimaryKey || undefined,
+          nullable: c.nullable,
+          validationRegex: c.validationRegex || undefined,
+          normalizationHint: c.normalizationHint || undefined,
         })),
         retrievalStrategy: retrievalStrategy ?? undefined,
         sourceHint: sourceHint || undefined,

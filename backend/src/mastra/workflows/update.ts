@@ -93,7 +93,16 @@ const refreshRowsStep = createStep({
   inputSchema: markAndFetchOutputSchema,
   outputSchema: refreshOutputSchema,
   execute: async ({ inputData }) => {
-    const { datasetId, columns, authContext, rows } = inputData;
+    const {
+      datasetId,
+      columns,
+      authContext,
+      rows,
+      datasetName,
+      description,
+      retrievalStrategy,
+      sourceHint,
+    } = inputData;
     let updatedCount = 0;
     let errors = 0;
 
@@ -124,7 +133,12 @@ const refreshRowsStep = createStep({
           existingData: row.data,
           urls: row.sources,
           context: [row.rowSummary, row.howFound].filter(Boolean).join("\n"),
+          datasetName,
+          description,
+          retrievalStrategy,
+          sourceHint,
           browserAttempts: authContext.modelConfig.rowExtractorBrowserAttempts,
+          extractorBuilderModel: authContext.modelConfig.extractorBuilder,
         });
 
         if (extractorResult.status === "updated") {
@@ -141,6 +155,12 @@ const refreshRowsStep = createStep({
             `[refresh-rows] Row ${row._id}: updated=false via=row_extractor reason="${extractorResult.reason}"`,
           );
           return;
+        }
+
+        if (extractorResult.status === "miss") {
+          console.log(
+            `[refresh-rows] Row ${row._id}: row extractor missed; falling back to refresh agent: ${extractorResult.reason}`,
+          );
         }
 
         if (extractorResult.status === "failed") {

@@ -33,6 +33,7 @@ export const DEFAULT_MODEL_IDS = {
   SCHEMA_INFERENCE: env.SCHEMA_INFERENCE_MODEL,
   POPULATE_ORCHESTRATOR: env.POPULATE_ORCHESTRATOR_MODEL,
   INVESTIGATE_SUBAGENT: env.INVESTIGATE_SUBAGENT_MODEL,
+  EXTRACTOR_BUILDER: env.EXTRACTOR_BUILDER_MODEL,
 } as const;
 
 const ROW_EXTRACTOR_CONCURRENCY_MIN = 1;
@@ -316,6 +317,7 @@ export const MODEL_ROLES = [
   { key: "schemaInference", label: "Schema Inference" },
   { key: "populateOrchestrator", label: "Populate Orchestrator" },
   { key: "investigateSubagent", label: "Investigate Subagent" },
+  { key: "extractorBuilder", label: "Extractor Builder" },
 ] as const;
 
 /**
@@ -463,7 +465,11 @@ export async function fetchModelsForCurrentLlmProvider(): Promise<OpenRouterMode
  */
 export async function validateModelSlug(
   slug: string,
-  role: "schemaInference" | "populateOrchestrator" | "investigateSubagent"
+  role:
+    | "schemaInference"
+    | "populateOrchestrator"
+    | "investigateSubagent"
+    | "extractorBuilder"
 ): Promise<void> {
   const models = await getCachedModels();
   const found = models.some((m) => m.canonicalSlug === slug);
@@ -494,6 +500,7 @@ export async function upsertModelConfig(
     schemaInference?: string;
     populateOrchestrator?: string;
     investigateSubagent?: string;
+    extractorBuilder?: string;
     rowExtractorConcurrency?: number;
     rowExtractorBrowserAttempts?: number;
   }
@@ -505,6 +512,7 @@ export async function upsertModelConfig(
     schemaInference: config.schemaInference ?? undefined,
     populateOrchestrator: config.populateOrchestrator ?? undefined,
     investigateSubagent: config.investigateSubagent ?? undefined,
+    extractorBuilder: config.extractorBuilder ?? undefined,
     rowExtractorConcurrency:
       config.rowExtractorConcurrency !== undefined
         ? normalizeRowExtractorConcurrency(config.rowExtractorConcurrency)
@@ -527,6 +535,7 @@ export async function getModelConfig(
   schemaInference: string;
   populateOrchestrator: string;
   investigateSubagent: string;
+  extractorBuilder: string;
   rowExtractorConcurrency: number;
   rowExtractorBrowserAttempts: number;
 }> {
@@ -552,6 +561,12 @@ export async function getModelConfig(
       config?.investigateSubagent,
       "investigateSubagent",
       DEFAULT_MODEL_IDS.INVESTIGATE_SUBAGENT,
+      llmConfig,
+    ),
+    extractorBuilder: modelForProvider(
+      config?.extractorBuilder,
+      "extractorBuilder",
+      DEFAULT_MODEL_IDS.EXTRACTOR_BUILDER,
       llmConfig,
     ),
     rowExtractorConcurrency: normalizeRowExtractorConcurrency(

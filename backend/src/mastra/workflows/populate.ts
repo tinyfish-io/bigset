@@ -37,6 +37,7 @@ export const authContextSchema = z.object({
     schemaInference: z.string().min(1),
     populateOrchestrator: z.string().min(1),
     investigateSubagent: z.string().min(1),
+    extractorBuilder: z.string().min(1),
     rowExtractorConcurrency: z.number().int().min(1).max(100).default(5),
     rowExtractorBrowserAttempts: z.number().int().min(1).max(10).default(2),
   }),
@@ -159,6 +160,10 @@ const buildPromptOutputSchema = z.object({
   authContext: authContextSchema,
   columns: z.array(populateColumnSchema),
   maxRowCount: z.number().int().min(1),
+  datasetName: z.string(),
+  description: z.string(),
+  retrievalStrategy: z.enum(["search_fetch", "browser", "hybrid"]).optional(),
+  sourceHint: z.string().optional(),
 });
 
 const buildPromptStep = createStep({
@@ -217,6 +222,10 @@ Stop the populate run as soon as the dataset reaches ${inputData.maxRowCount} ro
       authContext: inputData.authContext,
       columns: inputData.columns,
       maxRowCount: inputData.maxRowCount,
+      datasetName: inputData.datasetName,
+      description: inputData.description,
+      retrievalStrategy: inputData.retrievalStrategy,
+      sourceHint: inputData.sourceHint,
     };
   },
 });
@@ -252,6 +261,12 @@ const agentStep = createStep({
         inputData.columns,
         await requireLlmProviderConfig(),
         inputData.maxRowCount,
+        {
+          datasetName: inputData.datasetName,
+          description: inputData.description,
+          retrievalStrategy: inputData.retrievalStrategy,
+          sourceHint: inputData.sourceHint,
+        },
         metrics,
       );
       const abortSignal = getSignal(inputData.authorizedDatasetId);

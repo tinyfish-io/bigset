@@ -56,6 +56,14 @@ type DatasetUpdateBeginOutcome =
   | "already_building"
   | "already_updating";
 type UpdateWorkflowRun = Awaited<ReturnType<typeof updateWorkflow.createRun>>;
+type RuntimeModelConfig = {
+  schemaInference: string;
+  populateOrchestrator: string;
+  investigateSubagent: string;
+  extractorBuilder: string;
+  rowExtractorConcurrency: number;
+  rowExtractorBrowserAttempts: number;
+};
 
 const refreshCadenceSchema = z.enum(["manual", "30m", "6h", "12h", "daily", "weekly"]);
 const cliCreateDatasetSchema = z.object({
@@ -277,11 +285,7 @@ async function runUpdateWorkflowInBackground({
   authorizedUserId: string;
   logger: FastifyBaseLogger;
   clerk: ClerkClient;
-  modelConfig: {
-    schemaInference: string;
-    populateOrchestrator: string;
-    investigateSubagent: string;
-  };
+  modelConfig: RuntimeModelConfig;
 }): Promise<void> {
   const datasetId = input.datasetId;
   // registerDataset is called by the route handler before void-ing this
@@ -381,11 +385,7 @@ async function runScheduledUpdateWorkflowInBackground({
   run: UpdateWorkflowRun;
   authorizedUserId: string;
   logger: FastifyBaseLogger;
-  modelConfig: {
-    schemaInference: string;
-    populateOrchestrator: string;
-    investigateSubagent: string;
-  };
+  modelConfig: RuntimeModelConfig;
 }): Promise<void> {
   const datasetId = input.datasetId;
   registerDataset(datasetId);
@@ -455,11 +455,7 @@ async function runPopulateWorkflowInBackground({
   authorizedUserId: string;
   logger: FastifyBaseLogger;
   clerk: ClerkClient;
-  modelConfig: {
-    schemaInference: string;
-    populateOrchestrator: string;
-    investigateSubagent: string;
-  };
+  modelConfig: RuntimeModelConfig;
 }): Promise<void> {
   const datasetId = input.datasetId;
 
@@ -647,6 +643,8 @@ function startLocalRefreshScheduler(
             description: dataset.description,
             maxRowCount: dataset.maxRowCount ?? 100,
             columns: dataset.columns,
+            retrievalStrategy: dataset.retrievalStrategy,
+            sourceHint: dataset.sourceHint,
           },
           run,
           authorizedUserId: dataset.ownerId,
@@ -930,6 +928,9 @@ fastify.post("/cli/datasets", async (req, reply) => {
       type: mapSchemaTypeToDatasetType(column.type),
       description: column.retrieval_hint,
       isPrimaryKey: column.is_primary_key || undefined,
+      nullable: column.nullable,
+      validationRegex: column.validation_regex || undefined,
+      normalizationHint: column.normalization_hint || undefined,
     }));
 
     const datasetId = await convex.mutation(
@@ -1047,6 +1048,8 @@ fastify.post("/cli/datasets/:datasetId/populate", async (req, reply) => {
         description: dataset.description,
         maxRowCount: dataset.maxRowCount ?? 100,
         columns: dataset.columns,
+        retrievalStrategy: dataset.retrievalStrategy,
+        sourceHint: dataset.sourceHint,
       },
       run,
       controller,
@@ -1147,6 +1150,7 @@ await fastify.register(async (instance) => {
       schemaInference?: string | null;
       populateOrchestrator?: string | null;
       investigateSubagent?: string | null;
+      extractorBuilder?: string | null;
       rowExtractorConcurrency?: number | null;
       rowExtractorBrowserAttempts?: number | null;
     };
@@ -1154,6 +1158,7 @@ await fastify.register(async (instance) => {
       schemaInference: typeof body.schemaInference === "string" ? body.schemaInference.trim() || undefined : undefined,
       populateOrchestrator: typeof body.populateOrchestrator === "string" ? body.populateOrchestrator.trim() || undefined : undefined,
       investigateSubagent: typeof body.investigateSubagent === "string" ? body.investigateSubagent.trim() || undefined : undefined,
+      extractorBuilder: typeof body.extractorBuilder === "string" ? body.extractorBuilder.trim() || undefined : undefined,
       rowExtractorConcurrency:
         typeof body.rowExtractorConcurrency === "number"
           ? body.rowExtractorConcurrency
@@ -1164,10 +1169,18 @@ await fastify.register(async (instance) => {
           : undefined,
     };
 
-    const toValidate: Array<{ role: "schemaInference" | "populateOrchestrator" | "investigateSubagent"; slug: string }> = [];
+    const toValidate: Array<{
+      role:
+        | "schemaInference"
+        | "populateOrchestrator"
+        | "investigateSubagent"
+        | "extractorBuilder";
+      slug: string;
+    }> = [];
     if (config.schemaInference) toValidate.push({ role: "schemaInference", slug: config.schemaInference });
     if (config.populateOrchestrator) toValidate.push({ role: "populateOrchestrator", slug: config.populateOrchestrator });
     if (config.investigateSubagent) toValidate.push({ role: "investigateSubagent", slug: config.investigateSubagent });
+    if (config.extractorBuilder) toValidate.push({ role: "extractorBuilder", slug: config.extractorBuilder });
 
     if (toValidate.length > 0) {
       try {
@@ -1188,6 +1201,7 @@ await fastify.register(async (instance) => {
         schemaInference: config.schemaInference,
         populateOrchestrator: config.populateOrchestrator,
         investigateSubagent: config.investigateSubagent,
+        extractorBuilder: config.extractorBuilder,
         rowExtractorConcurrency: config.rowExtractorConcurrency,
         rowExtractorBrowserAttempts: config.rowExtractorBrowserAttempts,
       });
@@ -1288,6 +1302,8 @@ await fastify.register(async (instance) => {
         input: {
           ...parsed.data,
           maxRowCount: dataset.maxRowCount ?? parsed.data.maxRowCount,
+          retrievalStrategy: dataset.retrievalStrategy ?? parsed.data.retrievalStrategy,
+          sourceHint: dataset.sourceHint ?? parsed.data.sourceHint,
         },
         run,
         controller,
@@ -1345,6 +1361,13 @@ await fastify.register(async (instance) => {
         throw new Error(`Unexpected update claim outcome: ${updateOutcome}`);
       }
 
+      const dataset = await convex.query(internal.datasets.getInternal, {
+        id: parsed.data.datasetId,
+      });
+      if (!dataset) {
+        return reply.code(404).send({ error: "Dataset not found" });
+      }
+
       let run: UpdateWorkflowRun;
       try {
         run = await updateWorkflow.createRun();
@@ -1364,7 +1387,12 @@ await fastify.register(async (instance) => {
       registerDataset(parsed.data.datasetId);
 
       void runUpdateWorkflowInBackground({
-        input: parsed.data,
+        input: {
+          ...parsed.data,
+          maxRowCount: dataset.maxRowCount ?? parsed.data.maxRowCount,
+          retrievalStrategy: dataset.retrievalStrategy ?? parsed.data.retrievalStrategy,
+          sourceHint: dataset.sourceHint ?? parsed.data.sourceHint,
+        },
         run,
         authorizedUserId: auth.userId,
         logger: req.log,

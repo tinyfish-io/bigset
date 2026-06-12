@@ -91,6 +91,7 @@ export const upsert = mutation({
     schemaInference: v.optional(v.string()),
     populateOrchestrator: v.optional(v.string()),
     investigateSubagent: v.optional(v.string()),
+    extractorBuilder: v.optional(v.string()),
     rowExtractorConcurrency: v.optional(v.number()),
     rowExtractorBrowserAttempts: v.optional(v.number()),
   },
@@ -106,12 +107,14 @@ export const upsert = mutation({
       schemaInference?: string;
       populateOrchestrator?: string;
       investigateSubagent?: string;
+      extractorBuilder?: string;
       rowExtractorConcurrency?: number;
       rowExtractorBrowserAttempts?: number;
     } = { provider };
     if (args.schemaInference !== undefined) patch.schemaInference = args.schemaInference;
     if (args.populateOrchestrator !== undefined) patch.populateOrchestrator = args.populateOrchestrator;
     if (args.investigateSubagent !== undefined) patch.investigateSubagent = args.investigateSubagent;
+    if (args.extractorBuilder !== undefined) patch.extractorBuilder = args.extractorBuilder;
     if (args.rowExtractorConcurrency !== undefined) patch.rowExtractorConcurrency = args.rowExtractorConcurrency;
     if (args.rowExtractorBrowserAttempts !== undefined) patch.rowExtractorBrowserAttempts = args.rowExtractorBrowserAttempts;
 
@@ -149,6 +152,7 @@ export const upsertInternal = internalMutation({
     schemaInference: v.optional(v.string()),
     populateOrchestrator: v.optional(v.string()),
     investigateSubagent: v.optional(v.string()),
+    extractorBuilder: v.optional(v.string()),
     rowExtractorConcurrency: v.optional(v.number()),
     rowExtractorBrowserAttempts: v.optional(v.number()),
   },
@@ -161,12 +165,14 @@ export const upsertInternal = internalMutation({
       schemaInference?: string;
       populateOrchestrator?: string;
       investigateSubagent?: string;
+      extractorBuilder?: string;
       rowExtractorConcurrency?: number;
       rowExtractorBrowserAttempts?: number;
     } = { provider };
     if (args.schemaInference !== undefined) patch.schemaInference = args.schemaInference;
     if (args.populateOrchestrator !== undefined) patch.populateOrchestrator = args.populateOrchestrator;
     if (args.investigateSubagent !== undefined) patch.investigateSubagent = args.investigateSubagent;
+    if (args.extractorBuilder !== undefined) patch.extractorBuilder = args.extractorBuilder;
     if (args.rowExtractorConcurrency !== undefined) patch.rowExtractorConcurrency = args.rowExtractorConcurrency;
     if (args.rowExtractorBrowserAttempts !== undefined) patch.rowExtractorBrowserAttempts = args.rowExtractorBrowserAttempts;
 

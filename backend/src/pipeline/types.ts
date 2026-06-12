@@ -27,6 +27,8 @@ export const columnDefinitionSchema = z.object({
   is_enumerable: z.boolean(),
   retrieval_hint: z.string(),
   nullable: z.boolean(),
+  validation_regex: z.string().optional(),
+  normalization_hint: z.string().optional(),
 });
 export type ColumnDefinition = z.infer<typeof columnDefinitionSchema>;
 

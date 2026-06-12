@@ -7,6 +7,9 @@ export const populateColumnSchema = z.object({
   type: z.enum(["text", "number", "boolean", "url", "date"]),
   description: z.optional(z.string()),
   isPrimaryKey: z.optional(z.boolean()),
+  nullable: z.optional(z.boolean()),
+  validationRegex: z.optional(z.string()),
+  normalizationHint: z.optional(z.string()),
 });
 export type PopulateColumn = z.infer<typeof populateColumnSchema>;
 
@@ -17,5 +20,7 @@ export const datasetContextSchema = z.object({
   maxRowCount: z.number().int().min(1).max(FREE_TIER_MONTHLY_QUOTA).default(100),
   columns: z.array(populateColumnSchema).min(1),
   rowIds: z.array(z.string()).min(1).optional(),
+  retrievalStrategy: z.enum(["search_fetch", "browser", "hybrid"]).optional(),
+  sourceHint: z.string().optional(),
 });
 export type DatasetContext = z.infer<typeof datasetContextSchema>;

@@ -81,8 +81,16 @@ export default function ModelSettingsPage() {
       .then((config) => {
         if (active) {
           setEffectiveConfig(config);
-          setExtractorConcurrency(config.rowExtractorConcurrency);
-          setExtractorAttempts(config.rowExtractorBrowserAttempts);
+          setExtractorConcurrency(
+            Number.isFinite(config.rowExtractorConcurrency)
+              ? config.rowExtractorConcurrency
+              : 5,
+          );
+          setExtractorAttempts(
+            Number.isFinite(config.rowExtractorBrowserAttempts)
+              ? config.rowExtractorBrowserAttempts
+              : 2,
+          );
         }
       })
       .catch(() => {

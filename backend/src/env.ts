@@ -53,6 +53,8 @@ export const env = {
     process.env.POPULATE_ORCHESTRATOR_MODEL ?? "qwen/qwen3.7-max",
   INVESTIGATE_SUBAGENT_MODEL:
     process.env.INVESTIGATE_SUBAGENT_MODEL ?? "qwen/qwen3.7-max",
+  EXTRACTOR_BUILDER_MODEL:
+    process.env.EXTRACTOR_BUILDER_MODEL ?? "anthropic/claude-sonnet-4.6",
   ROW_EXTRACTOR_CONCURRENCY: numberFromEnv("ROW_EXTRACTOR_CONCURRENCY", 5),
   ROW_EXTRACTOR_BROWSER_ATTEMPTS: numberFromEnv(
     "ROW_EXTRACTOR_BROWSER_ATTEMPTS",
