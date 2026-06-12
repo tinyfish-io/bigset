@@ -12,6 +12,7 @@ import { ModelSideSheet } from "@/components/settings/ModelSideSheet";
 import { MODEL_ROLES, type ModelRole } from "@/components/settings/types";
 import { SkeletonList } from "@/components/settings/Skeleton";
 import { useAppAuth } from "@/lib/app-auth";
+import { isLocalMode } from "@/lib/app-mode";
 
 export default function ModelSettingsPage() {
   const { getToken } = useAppAuth();
@@ -23,6 +24,9 @@ export default function ModelSettingsPage() {
   const [sheetModels, setSheetModels] = useState<OpenRouterModel[]>([]);
   const [activeSheet, setActiveSheet] = useState<{ role: ModelRole } | null>(null);
   const [isSavingModel, setIsSavingModel] = useState(false);
+  const [isSavingExtractorSettings, setIsSavingExtractorSettings] = useState(false);
+  const [extractorConcurrency, setExtractorConcurrency] = useState(5);
+  const [extractorAttempts, setExtractorAttempts] = useState(2);
 
   const isLoading = convexModels === undefined || isLoadingConfig;
 
@@ -32,7 +36,11 @@ export default function ModelSettingsPage() {
         if (!token) throw new Error("Not authenticated");
         return getModelConfig(token);
       })
-      .then((config) => setEffectiveConfig(config))
+      .then((config) => {
+        setEffectiveConfig(config);
+        setExtractorConcurrency(config.rowExtractorConcurrency);
+        setExtractorAttempts(config.rowExtractorBrowserAttempts);
+      })
       .catch(() => setEffectiveConfig(null))
       .finally(() => setIsLoadingConfig(false));
   }, [getToken]);
@@ -48,7 +56,7 @@ export default function ModelSettingsPage() {
     : [];
 
   function getSelectedModel(role: ModelRole): string {
-    return effectiveConfig?.[role.key as keyof typeof effectiveConfig] ?? "";
+    return String(effectiveConfig?.[role.key as keyof typeof effectiveConfig] ?? "");
   }
 
   async function handleModelSelect(role: ModelRole, model: OpenRouterModel) {
@@ -65,6 +73,34 @@ export default function ModelSettingsPage() {
       // we will add toast later
     } finally {
       setIsSavingModel(false);
+    }
+  }
+
+  async function saveExtractorSettings() {
+    setIsSavingExtractorSettings(true);
+    try {
+      const token = await getToken();
+      if (!token) throw new Error("Not authenticated");
+      await saveModelConfig(
+        {
+          rowExtractorConcurrency: extractorConcurrency,
+          rowExtractorBrowserAttempts: extractorAttempts,
+        },
+        token,
+      );
+      setEffectiveConfig((prev: EffectiveModelConfig | null) =>
+        prev
+          ? {
+              ...prev,
+              rowExtractorConcurrency: extractorConcurrency,
+              rowExtractorBrowserAttempts: extractorAttempts,
+            }
+          : prev,
+      );
+    } catch {
+      // we will add toast later
+    } finally {
+      setIsSavingExtractorSettings(false);
     }
   }
 
@@ -139,6 +175,72 @@ export default function ModelSettingsPage() {
             ))
           )}
         </div>
+
+        {isLocalMode && !isLoading && (
+          <section className="mt-10">
+            <SettingsHeader
+              title="Row Extractors"
+              subtitle="Tune local browser extraction for dataset refreshes and primary-key hydration."
+            />
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <label className="block">
+                <span className="text-sm font-medium text-foreground">
+                  Browser concurrency
+                </span>
+                <input
+                  type="number"
+                  min={1}
+                  max={100}
+                  step={1}
+                  value={extractorConcurrency}
+                  onChange={(event) =>
+                    setExtractorConcurrency(
+                      Math.min(
+                        100,
+                        Math.max(1, Number(event.target.value) || 1),
+                      ),
+                    )
+                  }
+                  className="mt-2 h-10 w-full border border-border bg-background px-3 text-sm text-foreground outline-none focus:border-foreground"
+                />
+              </label>
+
+              <label className="block">
+                <span className="text-sm font-medium text-foreground">
+                  Browser attempts
+                </span>
+                <input
+                  type="number"
+                  min={1}
+                  max={10}
+                  step={1}
+                  value={extractorAttempts}
+                  onChange={(event) =>
+                    setExtractorAttempts(
+                      Math.min(
+                        10,
+                        Math.max(1, Number(event.target.value) || 1),
+                      ),
+                    )
+                  }
+                  className="mt-2 h-10 w-full border border-border bg-background px-3 text-sm text-foreground outline-none focus:border-foreground"
+                />
+              </label>
+            </div>
+
+            <div className="mt-4 flex justify-end">
+              <button
+                type="button"
+                onClick={saveExtractorSettings}
+                disabled={isSavingExtractorSettings}
+                className="h-9 border border-border px-4 text-sm font-medium text-foreground disabled:opacity-50"
+              >
+                {isSavingExtractorSettings ? "Saving..." : "Save"}
+              </button>
+            </div>
+          </section>
+        )}
       </div>
 
       {activeSheet && (

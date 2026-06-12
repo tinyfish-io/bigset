@@ -1079,12 +1079,27 @@ await fastify.register(async (instance) => {
       schemaInference?: string | null;
       populateOrchestrator?: string | null;
       investigateSubagent?: string | null;
+      rowExtractorConcurrency?: number | null;
+      rowExtractorBrowserAttempts?: number | null;
+    };
+    const config = {
+      schemaInference: typeof body.schemaInference === "string" ? body.schemaInference.trim() || undefined : undefined,
+      populateOrchestrator: typeof body.populateOrchestrator === "string" ? body.populateOrchestrator.trim() || undefined : undefined,
+      investigateSubagent: typeof body.investigateSubagent === "string" ? body.investigateSubagent.trim() || undefined : undefined,
+      rowExtractorConcurrency:
+        typeof body.rowExtractorConcurrency === "number"
+          ? body.rowExtractorConcurrency
+          : undefined,
+      rowExtractorBrowserAttempts:
+        typeof body.rowExtractorBrowserAttempts === "number"
+          ? body.rowExtractorBrowserAttempts
+          : undefined,
     };
 
     const toValidate: Array<{ role: "schemaInference" | "populateOrchestrator" | "investigateSubagent"; slug: string }> = [];
-    if (body.schemaInference) toValidate.push({ role: "schemaInference", slug: body.schemaInference });
-    if (body.populateOrchestrator) toValidate.push({ role: "populateOrchestrator", slug: body.populateOrchestrator });
-    if (body.investigateSubagent) toValidate.push({ role: "investigateSubagent", slug: body.investigateSubagent });
+    if (config.schemaInference) toValidate.push({ role: "schemaInference", slug: config.schemaInference });
+    if (config.populateOrchestrator) toValidate.push({ role: "populateOrchestrator", slug: config.populateOrchestrator });
+    if (config.investigateSubagent) toValidate.push({ role: "investigateSubagent", slug: config.investigateSubagent });
 
     if (toValidate.length > 0) {
       try {
@@ -1104,9 +1119,11 @@ await fastify.register(async (instance) => {
 
     try {
       await upsertModelConfig(req.auth!.userId, {
-        schemaInference: body.schemaInference ?? undefined,
-        populateOrchestrator: body.populateOrchestrator ?? undefined,
-        investigateSubagent: body.investigateSubagent ?? undefined,
+        schemaInference: config.schemaInference,
+        populateOrchestrator: config.populateOrchestrator,
+        investigateSubagent: config.investigateSubagent,
+        rowExtractorConcurrency: config.rowExtractorConcurrency,
+        rowExtractorBrowserAttempts: config.rowExtractorBrowserAttempts,
       });
       return { success: true };
     } catch (err) {

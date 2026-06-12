@@ -138,6 +138,8 @@ export default defineSchema({
     schemaInference: v.optional(v.string()),
     populateOrchestrator: v.optional(v.string()),
     investigateSubagent: v.optional(v.string()),
+    rowExtractorConcurrency: v.optional(v.number()),
+    rowExtractorBrowserAttempts: v.optional(v.number()),
   }).index("by_user", ["userId"]),
 
   localCredentials: defineTable({
