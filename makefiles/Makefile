@@ -33,7 +33,9 @@ dev: validate-dev-env install-deps start-local-keychain
 	@echo "  Mastra Studio:    http://localhost:4111"
 	@echo "  Convex Dashboard: http://localhost:6791"
 	@echo ""
-	docker compose -f docker-compose.dev.yml logs -f
+	@echo "Streaming app logs (frontend, backend, mastra)."
+	@echo "For Convex logs: docker compose -f docker-compose.dev.yml logs -f convex"
+	docker compose -f docker-compose.dev.yml logs -f frontend backend mastra
 
 validate-dev-env:
 	@if [ ! -f .env ]; then \

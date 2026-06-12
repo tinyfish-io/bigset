@@ -70,6 +70,35 @@ export default defineSchema({
         normalizationHint: v.optional(v.string()),
       })
     ),
+    codificationProfile: v.optional(
+      v.object({
+        version: v.literal(1),
+        mode: v.union(
+          v.literal("disabled"),
+          v.literal("candidate"),
+          v.literal("required"),
+          v.literal("unknown")
+        ),
+        reason: v.string(),
+        primaryKeyShape: v.union(
+          v.literal("url"),
+          v.literal("slug"),
+          v.literal("name"),
+          v.literal("id"),
+          v.literal("mixed"),
+          v.literal("unknown")
+        ),
+        families: v.array(
+          v.object({
+            label: v.string(),
+            sourceHost: v.optional(v.string()),
+            sourcePathPrefix: v.optional(v.string()),
+            urlTemplate: v.optional(v.string()),
+            primaryKeyRegex: v.optional(v.string()),
+          })
+        ),
+      })
+    ),
     retrievalStrategy: v.optional(
       v.union(
         v.literal("search_fetch"),

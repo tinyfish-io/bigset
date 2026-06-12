@@ -6,7 +6,12 @@ import Link from "next/link";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { EVENTS, track } from "@/lib/analytics";
-import { inferSchema, type InferredColumn } from "@/lib/backend";
+import {
+  inferSchema,
+  type CodificationProfile,
+  type InferredCodificationProfile,
+  type InferredColumn,
+} from "@/lib/backend";
 import { useAppAuth, useAppConvexAuth } from "@/lib/app-auth";
 import {
   REFRESH_CADENCE_OPTIONS,
@@ -61,6 +66,24 @@ function mapBackendColumn(col: InferredColumn, index: number): ProposedColumn {
   };
 }
 
+function mapCodificationProfile(
+  profile: InferredCodificationProfile,
+): CodificationProfile {
+  return {
+    version: 1,
+    mode: profile.mode,
+    reason: profile.reason,
+    primaryKeyShape: profile.primary_key_shape,
+    families: profile.families.map((family) => ({
+      label: family.label,
+      sourceHost: family.source_host,
+      sourcePathPrefix: family.source_path_prefix,
+      urlTemplate: family.url_template,
+      primaryKeyRegex: family.primary_key_regex,
+    })),
+  };
+}
+
 function TypeSelector({ value, onChange }: { value: ColumnType; onChange: (v: ColumnType) => void }) {
   return (
     <div className="relative inline-flex">
@@ -100,6 +123,8 @@ export default function NewDatasetPage() {
     "search_fetch" | "browser" | "hybrid" | null
   >(null);
   const [sourceHint, setSourceHint] = useState("");
+  const [codificationProfile, setCodificationProfile] =
+    useState<CodificationProfile | null>(null);
   const { getToken } = useAppAuth();
 
   const createDataset = useMutation(api.datasets.create);
@@ -149,6 +174,7 @@ export default function NewDatasetPage() {
       );
       setRetrievalStrategy(schema.retrieval_strategy);
       setSourceHint(schema.source_hint);
+      setCodificationProfile(mapCodificationProfile(schema.codification_profile));
       track(EVENTS.DATASET_SCHEMA_GENERATED, {
         column_count: schema.columns.length,
       });
@@ -209,6 +235,7 @@ export default function NewDatasetPage() {
         })),
         retrievalStrategy: retrievalStrategy ?? undefined,
         sourceHint: sourceHint || undefined,
+        codificationProfile: codificationProfile ?? undefined,
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to create dataset";

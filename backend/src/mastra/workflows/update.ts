@@ -9,6 +9,7 @@ import { RunMetrics } from "../run-metrics.js";
 import { saveRunMetrics } from "../save-run-metrics.js";
 import { getSignal } from "../../abort-registry.js";
 import { tryRefreshRowExtractor } from "../../row-extractors/try-row-extractor.js";
+import { AGENT_MAX_OUTPUT_TOKENS } from "../../config/agent-output-tokens.js";
 
 export const updateInputSchema = datasetContextSchema.extend({
   authContext: authContextSchema,
@@ -137,6 +138,7 @@ const refreshRowsStep = createStep({
           description,
           retrievalStrategy,
           sourceHint,
+          codificationProfile: inputData.codificationProfile,
           browserAttempts: authContext.modelConfig.rowExtractorBrowserAttempts,
           extractorBuilderModel: authContext.modelConfig.extractorBuilder,
         });
@@ -205,7 +207,13 @@ ${row.rowSummary ? `\nPrevious summary: ${row.rowSummary}` : ""}
 ${row.howFound ? `\nPreviously found via: ${row.howFound}` : ""}`;
 
         const abortSignal = getSignal(datasetId);
-        const result = await agent.generate(prompt, { abortSignal, maxSteps: 10 });
+        const result = await agent.generate(prompt, {
+          abortSignal,
+          maxSteps: 10,
+          modelSettings: {
+            maxOutputTokens: AGENT_MAX_OUTPUT_TOKENS.REFRESH_AGENT,
+          },
+        });
 
         // Accumulate token usage into the investigate tier (refresh agents map
         // to the investigate tier so the runStats schema needs no new columns).

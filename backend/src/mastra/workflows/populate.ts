@@ -1,10 +1,15 @@
 import { createStep, createWorkflow } from "@mastra/core/workflows";
 import { z } from "zod";
 import { generateText } from "ai";
-import { datasetContextSchema, populateColumnSchema } from "../../pipeline/populate.js";
+import {
+  codificationProfileSchema,
+  datasetContextSchema,
+  populateColumnSchema,
+} from "../../pipeline/populate.js";
 import { convex, internal } from "../../convex.js";
 import { DEFAULT_MODEL_IDS } from "../../config/models.js";
 import { createLanguageModel } from "../../config/llm.js";
+import { AGENT_MAX_OUTPUT_TOKENS } from "../../config/agent-output-tokens.js";
 import { requireLlmProviderConfig } from "../../local-credentials.js";
 import { buildPopulateAgent } from "../agents/populate.js";
 import { RunMetrics } from "../run-metrics.js";
@@ -164,6 +169,7 @@ const buildPromptOutputSchema = z.object({
   description: z.string(),
   retrievalStrategy: z.enum(["search_fetch", "browser", "hybrid"]).optional(),
   sourceHint: z.string().optional(),
+  codificationProfile: z.optional(codificationProfileSchema),
 });
 
 const buildPromptStep = createStep({
@@ -226,6 +232,7 @@ Stop the populate run as soon as the dataset reaches ${inputData.maxRowCount} ro
       description: inputData.description,
       retrievalStrategy: inputData.retrievalStrategy,
       sourceHint: inputData.sourceHint,
+      codificationProfile: inputData.codificationProfile,
     };
   },
 });
@@ -266,11 +273,18 @@ const agentStep = createStep({
           description: inputData.description,
           retrievalStrategy: inputData.retrievalStrategy,
           sourceHint: inputData.sourceHint,
+          codificationProfile: inputData.codificationProfile,
         },
         metrics,
       );
       const abortSignal = getSignal(inputData.authorizedDatasetId);
-      const result = await agent.generate(inputData.prompt, { abortSignal, maxSteps: 80 });
+      const result = await agent.generate(inputData.prompt, {
+        abortSignal,
+        maxSteps: 80,
+        modelSettings: {
+          maxOutputTokens: AGENT_MAX_OUTPUT_TOKENS.POPULATE_ORCHESTRATOR,
+        },
+      });
       metrics.addOrchestratorResult(result);
       // Use result.toolCalls (flat accumulated list) — same reasoning as investigate-tool.ts.
       metrics.countToolCalls(result.toolCalls ?? []);

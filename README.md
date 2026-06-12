@@ -256,7 +256,7 @@ This is idempotent; safe to run multiple times.
 7. **Configures Convex auth** — sets `BIGSET_LOCAL_MODE=1` for the local app.
 8. **Deploys Convex schema** — pushes the table schema and functions from `frontend/convex/` to the running instance.
 9. **Starts remaining services** — brings up the frontend, backend, and Mastra. These read the now-populated `.env` including the admin key.
-10. **Streams logs** — tails all container logs so you can see what's happening. `Ctrl+C` to stop watching (containers keep running).
+10. **Streams app logs** — tails frontend, backend, and Mastra logs. `Ctrl+C` to stop watching (containers keep running). Convex logs are still available with `docker compose -f docker-compose.dev.yml logs -f convex`.
 
 ### Commands
 

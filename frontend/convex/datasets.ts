@@ -36,6 +36,34 @@ const columnValidator = v.object({
   normalizationHint: v.optional(v.string()),
 });
 
+const codificationProfileValidator = v.object({
+  version: v.literal(1),
+  mode: v.union(
+    v.literal("disabled"),
+    v.literal("candidate"),
+    v.literal("required"),
+    v.literal("unknown"),
+  ),
+  reason: v.string(),
+  primaryKeyShape: v.union(
+    v.literal("url"),
+    v.literal("slug"),
+    v.literal("name"),
+    v.literal("id"),
+    v.literal("mixed"),
+    v.literal("unknown"),
+  ),
+  families: v.array(
+    v.object({
+      label: v.string(),
+      sourceHost: v.optional(v.string()),
+      sourcePathPrefix: v.optional(v.string()),
+      urlTemplate: v.optional(v.string()),
+      primaryKeyRegex: v.optional(v.string()),
+    }),
+  ),
+});
+
 function refreshCadenceFromLegacyLabel(
   legacyCadence: string | undefined,
   fallback: RefreshCadence,
@@ -287,6 +315,7 @@ export const claimScheduledRefreshInternal = internalMutation({
         columns: dataset.columns,
         retrievalStrategy: dataset.retrievalStrategy,
         sourceHint: dataset.sourceHint,
+        codificationProfile: dataset.codificationProfile,
         ownerId: dataset.ownerId,
         maxRowCount: dataset.maxRowCount ?? DEFAULT_MAX_ROW_COUNT,
       },
@@ -389,6 +418,7 @@ export const create = mutation({
       )
     ),
     sourceHint: v.optional(v.string()),
+    codificationProfile: v.optional(codificationProfileValidator),
   },
   handler: async (ctx, args) => {
     const identity = await requireIdentity(ctx);
@@ -427,6 +457,7 @@ export const createForOwnerInternal = internalMutation({
       )
     ),
     sourceHint: v.optional(v.string()),
+    codificationProfile: v.optional(codificationProfileValidator),
   },
   handler: async (ctx, args) => {
     assertNotReservedOwner(args.ownerId);
@@ -464,6 +495,21 @@ export const getOwnedInternal = internalQuery({
     const dataset = await ctx.db.get(args.id);
     if (!dataset || dataset.ownerId !== args.ownerId) return null;
     return dataset;
+  },
+});
+
+export const setCodificationProfileInternal = internalMutation({
+  args: {
+    id: v.id("datasets"),
+    codificationProfile: codificationProfileValidator,
+  },
+  handler: async (ctx, args) => {
+    const dataset = await ctx.db.get(args.id);
+    if (!dataset) return { outcome: "not_found" as const };
+    await ctx.db.patch(dataset._id, {
+      codificationProfile: args.codificationProfile,
+    });
+    return { outcome: "updated" as const };
   },
 });
 

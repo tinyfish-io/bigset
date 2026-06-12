@@ -7,6 +7,10 @@ import { env } from "./env.js";
 import clerkAuthPlugin, { requireAuth, getUserEmail } from "./clerk-auth.js";
 import { inferSchema } from "./pipeline/schema-inference.js";
 import { datasetContextSchema, type DatasetContext } from "./pipeline/populate.js";
+import {
+  normalizeCodificationProfile,
+  schemaCodificationProfileToRuntime,
+} from "./pipeline/codification.js";
 import { populateWorkflow } from "./mastra/workflows/populate.js";
 import { updateWorkflow } from "./mastra/workflows/update.js";
 import { convex, internal } from "./convex.js";
@@ -131,6 +135,30 @@ async function beginDatasetPopulate(
   });
 
   return claim.outcome;
+}
+
+async function withCodificationProfile(
+  input: DatasetContext,
+  logger: FastifyBaseLogger,
+): Promise<DatasetContext> {
+  if (input.codificationProfile) return input;
+
+  const codificationProfile = normalizeCodificationProfile(undefined, input);
+  try {
+    await convex.mutation(internal.datasets.setCodificationProfileInternal, {
+      id: input.datasetId,
+      codificationProfile,
+    });
+  } catch (err) {
+    logger.warn(
+      { err, datasetId: input.datasetId },
+      "Failed to persist legacy codification profile; continuing with in-memory profile",
+    );
+  }
+  return {
+    ...input,
+    codificationProfile,
+  };
 }
 
 async function sendDatasetReadyNotification({
@@ -635,9 +663,8 @@ function startLocalRefreshScheduler(
         const dataset = claim.dataset;
         const { getModelConfig } = await import("./config/models.js");
         const modelConfig = await getModelConfig(dataset.ownerId);
-
-        void runScheduledUpdateWorkflowInBackground({
-          input: {
+        const input = await withCodificationProfile(
+          {
             datasetId: dataset.datasetId,
             datasetName: dataset.datasetName,
             description: dataset.description,
@@ -645,7 +672,13 @@ function startLocalRefreshScheduler(
             columns: dataset.columns,
             retrievalStrategy: dataset.retrievalStrategy,
             sourceHint: dataset.sourceHint,
+            codificationProfile: dataset.codificationProfile,
           },
+          logger,
+        );
+
+        void runScheduledUpdateWorkflowInBackground({
+          input,
           run,
           authorizedUserId: dataset.ownerId,
           logger,
@@ -944,6 +977,7 @@ fastify.post("/cli/datasets", async (req, reply) => {
         columns,
         retrievalStrategy: schema.retrieval_strategy,
         sourceHint: schema.source_hint,
+        codificationProfile: schemaCodificationProfileToRuntime(schema.codification_profile),
       },
     );
 
@@ -1040,9 +1074,8 @@ fastify.post("/cli/datasets/:datasetId/populate", async (req, reply) => {
     const modelConfig = await getModelConfig(ownerId);
     const run = await populateWorkflow.createRun();
     const controller = registerDataset(dataset._id);
-
-    void runPopulateWorkflowInBackground({
-      input: {
+    const input = await withCodificationProfile(
+      {
         datasetId: dataset._id,
         datasetName: dataset.name,
         description: dataset.description,
@@ -1050,7 +1083,13 @@ fastify.post("/cli/datasets/:datasetId/populate", async (req, reply) => {
         columns: dataset.columns,
         retrievalStrategy: dataset.retrievalStrategy,
         sourceHint: dataset.sourceHint,
+        codificationProfile: dataset.codificationProfile,
       },
+      req.log,
+    );
+
+    void runPopulateWorkflowInBackground({
+      input,
       run,
       controller,
       authorizedUserId: ownerId,
@@ -1297,14 +1336,19 @@ await fastify.register(async (instance) => {
       // arriving before registerDataset runs inside the background function
       // would incorrectly force-transition an active run to "failed".
       const controller = registerDataset(parsed.data.datasetId);
-
-      void runPopulateWorkflowInBackground({
-        input: {
+      const input = await withCodificationProfile(
+        {
           ...parsed.data,
           maxRowCount: dataset.maxRowCount ?? parsed.data.maxRowCount,
           retrievalStrategy: dataset.retrievalStrategy ?? parsed.data.retrievalStrategy,
           sourceHint: dataset.sourceHint ?? parsed.data.sourceHint,
+          codificationProfile: dataset.codificationProfile ?? parsed.data.codificationProfile,
         },
+        req.log,
+      );
+
+      void runPopulateWorkflowInBackground({
+        input,
         run,
         controller,
         authorizedUserId: auth.userId,
@@ -1385,14 +1429,19 @@ await fastify.register(async (instance) => {
       // arriving before registerDataset runs inside the background function
       // would incorrectly force-transition an active run to "failed".
       registerDataset(parsed.data.datasetId);
-
-      void runUpdateWorkflowInBackground({
-        input: {
+      const input = await withCodificationProfile(
+        {
           ...parsed.data,
           maxRowCount: dataset.maxRowCount ?? parsed.data.maxRowCount,
           retrievalStrategy: dataset.retrievalStrategy ?? parsed.data.retrievalStrategy,
           sourceHint: dataset.sourceHint ?? parsed.data.sourceHint,
+          codificationProfile: dataset.codificationProfile ?? parsed.data.codificationProfile,
         },
+        req.log,
+      );
+
+      void runUpdateWorkflowInBackground({
+        input,
         run,
         authorizedUserId: auth.userId,
         logger: req.log,

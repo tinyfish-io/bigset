@@ -19,6 +19,12 @@ Your job is to:
 5. Set \`source_hint\` to a specific URL whenever possible (e.g. \`https://www.ycombinator.com/companies?industry=Fintech\`). Avoid vague descriptions.
 6. Write a \`retrieval_hint\` for each column describing where/how the value can be found later. Downstream agents will use this to fill the column for each row.
 7. For each column where a value has a known shape, include \`validation_regex\` and \`normalization_hint\`. These are extractor contracts, not UI decoration. Examples: ratings, prices, dates, URL/slug shapes, repository slugs, app package names, counts, currencies, availability labels. Omit \`validation_regex\` only when the value is genuinely free-form text.
+8. Set \`codification_profile\`. This is a cheap schema-time decision about whether BigSet should attempt to compile a reusable Playwright extractor later.
+   - \`mode: "disabled"\` when rows will come from broad web search, arbitrary unrelated domains, search snippets, or sources that are known to block browser automation for the requested fields.
+   - \`mode: "candidate"\` when rows likely share one or more stable page families and a reusable browser script may work after seeing a representative row.
+   - \`mode: "required"\` when the dataset is clearly tied to one authoritative browser-heavy source or directory where repeated extraction is the intended path.
+   - \`mode: "unknown"\` only when the prompt/schema gives too little evidence; prefer \`disabled\` over \`unknown\` for broad web datasets to avoid expensive extractor attempts.
+   Include \`primary_key_shape\` as one of \`url\`, \`slug\`, \`name\`, \`id\`, \`mixed\`, or \`unknown\`. Include \`families\` for known source/page families. Use snake_case labels. For URL templates, use column placeholders like \`https://github.com/{repo_slug}\`.
 
 Rules:
 
@@ -28,6 +34,7 @@ Rules:
 - Prefer concrete column choices over speculative ones — better to omit a column than guess wildly.
 - Validation regexes must validate the normalized final value, not raw page text. Keep them practical and anchored, e.g. "^[0-5](\\\\.\\\\d)?$" for a normalized rating or "^[^/\\\\s]+/[^/\\\\s]+$" for an owner/repo slug.
 - \`normalization_hint\` should tell the extractor how to convert raw page text into the stored value, e.g. "Convert '4.6 out of 5 stars' to '4.6'" or "Strip commas and convert 1.2k to 1200".
+- \`codification_profile\` should be conservative. Do not mark arbitrary company/person/place/product research as codifiable just because pages exist on the web. Mark it codifiable only when rows can be routed to stable page families from the primary key, source_hint, or obvious URL templates.
 - When a column is a scalar numeric rating (e.g. average score like 4.3/5 for restaurants, cafes, hotels, products, apps): name it generically (e.g. "rating" not "yelp_rating") and write a retrieval_hint explaining that review sites (Yelp, TripAdvisor, Google Maps) block direct page fetches, so the agent must extract ratings from **search result snippets**. The hint should say: "Search for \\"<entity name> rating reviews\\" and include location terms only when location is part of the entity identity. Look for ratings in snippets from TripAdvisor (\\"rated X.X of 5\\"), Yelp search listings (\\"X.X (N reviews)\\"), or aggregator sites (Birdeye, joe.coffee, giftly, Uber Eats, menufyy). Do NOT try to fetch yelp.com or tripadvisor.com directly — they block automated access. Accept ratings from any reputable source." If including a rating column, also add a "rating_source" text column so the agent records where the rating came from. Do not rename review-count or review-text fields to "rating" — keep those as distinct columns (e.g. "review_count") when the user explicitly asks for them.`;
 
 async function getModel(modelSlug?: string) {
@@ -58,7 +65,7 @@ async function callOnce(
     model,
     output: Output.object({ schema: datasetSchemaSchema }),
     system: SYSTEM_PROMPT,
-    maxOutputTokens: 4096,
+    maxOutputTokens: 5000,
     prompt,
   });
   if (!output) throw new Error("Model did not generate a valid schema object");

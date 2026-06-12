@@ -57,6 +57,7 @@ function emptyModelConfig(): EffectiveModelConfig {
     schemaInference: "",
     populateOrchestrator: "",
     investigateSubagent: "",
+    extractorBuilder: "",
     rowExtractorConcurrency: 5,
     rowExtractorBrowserAttempts: 2,
   };

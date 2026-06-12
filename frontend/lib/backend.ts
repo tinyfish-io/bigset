@@ -5,6 +5,39 @@ export interface InferredSchema {
   primary_key: string[];
   retrieval_strategy: "search_fetch" | "browser" | "hybrid";
   source_hint: string;
+  codification_profile: InferredCodificationProfile;
+}
+
+export interface InferredCodificationProfile {
+  version: 1;
+  mode: "disabled" | "candidate" | "required" | "unknown";
+  reason: string;
+  primary_key_shape: "url" | "slug" | "name" | "id" | "mixed" | "unknown";
+  families: InferredCodificationFamily[];
+}
+
+export interface InferredCodificationFamily {
+  label: string;
+  source_host?: string;
+  source_path_prefix?: string;
+  url_template?: string;
+  primary_key_regex?: string;
+}
+
+export interface CodificationProfile {
+  version: 1;
+  mode: "disabled" | "candidate" | "required" | "unknown";
+  reason: string;
+  primaryKeyShape: "url" | "slug" | "name" | "id" | "mixed" | "unknown";
+  families: CodificationFamily[];
+}
+
+export interface CodificationFamily {
+  label: string;
+  sourceHost?: string;
+  sourcePathPrefix?: string;
+  urlTemplate?: string;
+  primaryKeyRegex?: string;
 }
 
 export interface InferredColumn {

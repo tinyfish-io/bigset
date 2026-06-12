@@ -3,11 +3,12 @@ import { z } from "zod";
 import { convex, internal } from "../../convex.js";
 import { buildInvestigateAgent } from "../agents/investigate.js";
 import type { AuthContext } from "../workflows/populate.js";
-import type { PopulateColumn } from "../../pipeline/populate.js";
+import type { CodificationProfile, PopulateColumn } from "../../pipeline/populate.js";
 import type { RunMetrics } from "../run-metrics.js";
 import { getSignal } from "../../abort-registry.js";
 import { tryRowExtractor } from "../../row-extractors/try-row-extractor.js";
 import type { LlmProviderConfig } from "../../config/llm.js";
+import { AGENT_MAX_OUTPUT_TOKENS } from "../../config/agent-output-tokens.js";
 
 const keyValueSchema = z.object({
   column: z.string().min(1),
@@ -55,6 +56,7 @@ interface DatasetContextForExtractor {
   description: string;
   retrievalStrategy?: "search_fetch" | "browser" | "hybrid";
   sourceHint?: string;
+  codificationProfile?: CodificationProfile;
 }
 
 function parseInvestigateResult(
@@ -71,6 +73,12 @@ function parseInvestigateResult(
     clues: cluesMatch?.[1]?.trim() || undefined,
     reason: reasonMatch?.[1]?.trim() || text.slice(0, 300),
   };
+}
+
+function isIncompleteExtractorFailure(reason: string): boolean {
+  return /generated extractor (missed columns|missed required columns|returned values that failed validation)|repaired extractor failed validation|extractor returned no non-primary values/i.test(
+    reason,
+  );
 }
 
 /**
@@ -127,6 +135,7 @@ export function buildSubagentTool(
           description: datasetContext.description,
           retrievalStrategy: datasetContext.retrievalStrategy,
           sourceHint: datasetContext.sourceHint,
+          codificationProfile: datasetContext.codificationProfile,
           browserAttempts: authContext.modelConfig.rowExtractorBrowserAttempts,
           extractorBuilderModel: authContext.modelConfig.extractorBuilder,
         });
@@ -154,6 +163,14 @@ export function buildSubagentTool(
           console.warn(
             `[run_subagent] row extractor failed entity="${entity_hint}" reason="${extractorResult.reason}"`,
           );
+          if (isIncompleteExtractorFailure(extractorResult.reason)) {
+            return {
+              inserted: false,
+              reason: `Browser extractor did not produce a complete row: ${extractorResult.reason}`,
+              row_summary: undefined,
+              clues: "Improve the reusable browser extractor or choose a schema/source where every column is visible.",
+            };
+          }
         } else if (extractorResult.status === "miss") {
           console.log(
             `[run_subagent] row extractor missed entity="${entity_hint}" reason="${extractorResult.reason}"`,
@@ -191,7 +208,13 @@ Context (partial data already found):
 ${context}${urlsBlock}${notesBlock}`;
 
         const abortSignal = getSignal(authorizedDatasetId);
-        const result = await agent.generate(prompt, { abortSignal, maxSteps: 25 });
+        const result = await agent.generate(prompt, {
+          abortSignal,
+          maxSteps: 25,
+          modelSettings: {
+            maxOutputTokens: AGENT_MAX_OUTPUT_TOKENS.INVESTIGATE_SUBAGENT,
+          },
+        });
         if (metrics) {
           // Use result.toolCalls (the flat accumulated list across all steps) rather
           // than iterating result.steps[n].toolCalls. The per-step arrays are snapshots

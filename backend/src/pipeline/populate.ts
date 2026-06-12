@@ -13,6 +13,23 @@ export const populateColumnSchema = z.object({
 });
 export type PopulateColumn = z.infer<typeof populateColumnSchema>;
 
+export const codificationProfileSchema = z.object({
+  version: z.literal(1),
+  mode: z.enum(["disabled", "candidate", "required", "unknown"]),
+  reason: z.string(),
+  primaryKeyShape: z.enum(["url", "slug", "name", "id", "mixed", "unknown"]),
+  families: z.array(
+    z.object({
+      label: z.string(),
+      sourceHost: z.optional(z.string()),
+      sourcePathPrefix: z.optional(z.string()),
+      urlTemplate: z.optional(z.string()),
+      primaryKeyRegex: z.optional(z.string()),
+    }),
+  ),
+});
+export type CodificationProfile = z.infer<typeof codificationProfileSchema>;
+
 export const datasetContextSchema = z.object({
   datasetId: z.string().min(1),
   datasetName: z.string(),
@@ -22,5 +39,6 @@ export const datasetContextSchema = z.object({
   rowIds: z.array(z.string()).min(1).optional(),
   retrievalStrategy: z.enum(["search_fetch", "browser", "hybrid"]).optional(),
   sourceHint: z.string().optional(),
+  codificationProfile: z.optional(codificationProfileSchema),
 });
 export type DatasetContext = z.infer<typeof datasetContextSchema>;

@@ -3,7 +3,7 @@ import { createLanguageModel, type LlmProviderConfig } from "../../config/llm.js
 import { buildSubagentTool } from "../tools/investigate-tool.js";
 import { searchWebTool, fetchPageTool } from "../tools/web-tools.js";
 import type { AuthContext } from "../workflows/populate.js";
-import type { PopulateColumn } from "../../pipeline/populate.js";
+import type { CodificationProfile, PopulateColumn } from "../../pipeline/populate.js";
 import type { RunMetrics } from "../run-metrics.js";
 
 export interface PopulateAgentDatasetContext {
@@ -11,6 +11,7 @@ export interface PopulateAgentDatasetContext {
   description: string;
   retrievalStrategy?: "search_fetch" | "browser" | "hybrid";
   sourceHint?: string;
+  codificationProfile?: CodificationProfile;
 }
 
 function buildInstructions(maxRowCount: number): string {
