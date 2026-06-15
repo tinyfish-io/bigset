@@ -18,6 +18,11 @@ function numberFromEnv(name: string, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function positiveIntegerFromEnv(name: string, fallback: number): number {
+  const parsed = numberFromEnv(name, fallback);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 export const env = {
   PROD: process.env.PROD,
   IS_PROD: process.env.PROD === "1",
@@ -51,6 +56,10 @@ export const env = {
     process.env.SCHEMA_INFERENCE_MODEL ?? "anthropic/claude-sonnet-4.6",
   POPULATE_ORCHESTRATOR_MODEL:
     process.env.POPULATE_ORCHESTRATOR_MODEL ?? "qwen/qwen3.7-max",
+  POPULATE_ORCHESTRATOR_MAX_STEPS: positiveIntegerFromEnv(
+    "POPULATE_ORCHESTRATOR_MAX_STEPS",
+    80,
+  ),
   INVESTIGATE_SUBAGENT_MODEL:
     process.env.INVESTIGATE_SUBAGENT_MODEL ?? "qwen/qwen3.7-max",
   EXTRACTOR_BUILDER_MODEL:

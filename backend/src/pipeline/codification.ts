@@ -10,6 +10,9 @@ interface CodificationClassificationInput {
   datasetName?: string;
   description?: string;
   columns: PopulateColumn[];
+  primaryKeys?: Record<string, string>;
+  urls?: string[];
+  context?: string;
   retrievalStrategy?: "search_fetch" | "browser" | "hybrid";
   sourceHint?: string;
 }
@@ -41,8 +44,13 @@ export function normalizeCodificationProfile(
   return profile ?? classifyCodificationProfile(input);
 }
 
-export function shouldAttemptCodification(profile: CodificationProfile): boolean {
-  return profile.mode === "candidate" || profile.mode === "required";
+export function shouldAttemptCodification(
+  profile: CodificationProfile,
+  input?: CodificationClassificationInput,
+): boolean {
+  if (profile.mode === "candidate" || profile.mode === "required") return true;
+  if (!input || (profile.mode !== "disabled" && profile.mode !== "unknown")) return false;
+  return hasConcreteCodificationRoute(profile, input);
 }
 
 export function classifyCodificationProfile(
@@ -149,9 +157,83 @@ function inferColumnShape(column: PopulateColumn): CodificationProfile["primaryK
   if (/\bslug\b|\bhandle\b|\bpath\b|\brepo\b|\bpackage\b|\busername\b/.test(text)) {
     return "slug";
   }
-  if (/\bid\b|_id\b|\bidentifier\b|\buuid\b/.test(text)) return "id";
+  if (/\bid\b|_id\b|\bidentifier\b|\buuid\b|\bisbn\b|\bsku\b/.test(text)) {
+    return "id";
+  }
   if (/\bname\b|\btitle\b/.test(text)) return "name";
   return "unknown";
+}
+
+function hasConcreteCodificationRoute(
+  profile: CodificationProfile,
+  input: CodificationClassificationInput,
+): boolean {
+  const hasUsableTemplate = profile.families.some(
+    (family) => family.urlTemplate && hasTemplateValues(family.urlTemplate, input),
+  );
+  if (hasUsableTemplate) return true;
+
+  const rowUrl = firstHttpUrl(
+    [
+      ...Object.values(input.primaryKeys ?? {}),
+      ...(input.urls ?? []),
+      input.context,
+    ].join(" "),
+  );
+  const broadResearch = isBroadResearchDisableReason(profile.reason);
+  if (rowUrl && !broadResearch) return true;
+
+  const sourceUrl = firstHttpUrl(input.sourceHint);
+  const primaryKeyShape =
+    profile.primaryKeyShape === "unknown"
+      ? inferPrimaryKeyShape(input.columns)
+      : profile.primaryKeyShape;
+  const structuredPrimaryKey =
+    primaryKeyShape === "id" ||
+    primaryKeyShape === "slug" ||
+    primaryKeyShape === "url";
+  if (sourceUrl && structuredPrimaryKey) return true;
+  if (broadResearch) return false;
+
+  const accessRiskOnly = /\b(block|blocked|captcha|bot|automation|browser|fetch|access|degrad)/i.test(
+    profile.reason,
+  );
+  return accessRiskOnly && (structuredPrimaryKey || hasIdentifierLikePrimaryKey(input.primaryKeys));
+}
+
+function isBroadResearchDisableReason(reason: string): boolean {
+  return /\b(broad web|arbitrary unrelated|unrelated domains|snippet-only|search snippets)\b/i.test(
+    reason,
+  );
+}
+
+function hasTemplateValues(
+  template: string,
+  input: CodificationClassificationInput,
+): boolean {
+  const placeholders = [...template.matchAll(/\{([a-zA-Z0-9_]+)\}/g)].map(
+    (match) => match[1],
+  );
+  if (placeholders.length === 0) return false;
+  return placeholders.every((placeholder) =>
+    Boolean(findPrimaryKeyValue(placeholder, input.primaryKeys ?? {})),
+  );
+}
+
+function hasIdentifierLikePrimaryKey(
+  primaryKeys: Record<string, string> | undefined,
+): boolean {
+  const values = Object.values(primaryKeys ?? {})
+    .map((value) => value.trim())
+    .filter(Boolean);
+  if (values.length === 0) return false;
+
+  return values.every((value) => {
+    if (/\s/.test(value)) return false;
+    if (/^https?:\/\//i.test(value)) return true;
+    if (!/^[a-z0-9._~:/?#\[\]@!$&'()*+,;=%-]{6,}$/i.test(value)) return false;
+    return /[0-9._~:/?#\[\]@!$&'()*+,;=%-]/.test(value);
+  });
 }
 
 function firstHttpUrl(value: string | undefined): URL | undefined {
@@ -180,4 +262,21 @@ function sanitizeFamilyLabel(value: string): string {
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "");
   return /^[a-z]/.test(label) ? label : `site_${label || "unknown"}`;
+}
+
+function findPrimaryKeyValue(
+  columnName: string | undefined,
+  primaryKeys: Record<string, string>,
+): string | undefined {
+  if (!columnName) return undefined;
+  if (primaryKeys[columnName]) return primaryKeys[columnName];
+  const normalizedColumn = normalizeFieldName(columnName);
+  const entry = Object.entries(primaryKeys).find(
+    ([key]) => normalizeFieldName(key) === normalizedColumn,
+  );
+  return entry?.[1];
+}
+
+function normalizeFieldName(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "");
 }

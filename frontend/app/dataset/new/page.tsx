@@ -56,7 +56,7 @@ const DEFAULT_MAX_ROW_COUNT = 100;
 function mapBackendColumn(col: InferredColumn, index: number): ProposedColumn {
   return {
     id: String(index + 1),
-    name: col.display_name,
+    name: col.name,
     type: BACKEND_TYPE_MAP[col.type],
     description: col.retrieval_hint,
     isPrimaryKey: col.is_primary_key,

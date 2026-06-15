@@ -65,6 +65,26 @@ const rowDataCellSchema = z.object({
 
 type RowDataCell = z.infer<typeof rowDataCellSchema>;
 
+const cellSourcesSchema = z.object({
+  column: z.string().min(1),
+  sources: z.array(z.string()).min(1),
+});
+
+type CellSourcesInput = z.infer<typeof cellSourcesSchema>;
+
+interface InsertDefaults {
+  data?: Record<string, unknown>;
+  lockColumns?: string[];
+  sources?: string[];
+  cellSources?: Record<string, string[]>;
+  rowSummary?: string;
+  howFoundPrefix?: string;
+}
+
+interface PopulateToolOptions {
+  insertDefaults?: InsertDefaults;
+}
+
 function rowDataCellsToRecord(data: RowDataCell[]): Record<string, string> {
   const row: Record<string, string> = {};
   for (const cell of data) {
@@ -79,6 +99,65 @@ function cleanDataKeys(data: Record<string, unknown>): Record<string, unknown> {
     cleaned[key.replace(/^["`]+|["`]+$/g, "")] = value;
   }
   return cleaned;
+}
+
+function hasMeaningfulValue(value: unknown): boolean {
+  if (value === undefined || value === null) return false;
+  if (typeof value === "string") return value.trim().length > 0;
+  return true;
+}
+
+function uniqueStrings(values: Array<string | undefined>): string[] {
+  return [...new Set(values.filter((value): value is string => Boolean(value)))];
+}
+
+function cellSourcesToRecord(
+  entries: CellSourcesInput[] | undefined,
+): Record<string, string[]> | undefined {
+  if (!entries || entries.length === 0) return undefined;
+
+  const output: Record<string, string[]> = {};
+  for (const entry of entries) {
+    const column = entry.column.replace(/^["`]+|["`]+$/g, "");
+    const sources = uniqueStrings(entry.sources);
+    if (column && sources.length > 0) output[column] = sources;
+  }
+  return Object.keys(output).length > 0 ? output : undefined;
+}
+
+function mergeCellSources(
+  defaults: Record<string, string[]> | undefined,
+  proposed: Record<string, string[]> | undefined,
+): Record<string, string[]> | undefined {
+  const merged: Record<string, string[]> = {};
+  for (const [column, sources] of Object.entries(defaults ?? {})) {
+    const cleanSources = uniqueStrings(sources);
+    if (cleanSources.length > 0) merged[column] = cleanSources;
+  }
+  for (const [column, sources] of Object.entries(proposed ?? {})) {
+    const cleanSources = uniqueStrings([...(merged[column] ?? []), ...sources]);
+    if (cleanSources.length > 0) merged[column] = cleanSources;
+  }
+  return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
+function mergeInsertData(
+  proposedData: Record<string, unknown>,
+  defaults: InsertDefaults | undefined,
+): Record<string, unknown> {
+  if (!defaults?.data) return proposedData;
+
+  const merged = cleanDataKeys({
+    ...defaults.data,
+    ...proposedData,
+  });
+
+  for (const column of defaults.lockColumns ?? []) {
+    const value = defaults.data[column];
+    if (hasMeaningfulValue(value)) merged[column] = value;
+  }
+
+  return merged;
 }
 
 /**
@@ -117,6 +196,7 @@ function recordCapabilityViolation(params: {
 export function buildPopulateTools(
   authorizedDatasetId: string,
   authContext: AuthContext,
+  options: PopulateToolOptions = {},
 ) {
   if (!authorizedDatasetId) {
     // Fail loud at construction time — never silently fall back to an
@@ -151,6 +231,12 @@ export function buildPopulateTools(
         .array(z.string())
         .optional()
         .describe("URLs you visited or used to gather data for this row"),
+      cell_sources: z
+        .array(cellSourcesSchema)
+        .optional()
+        .describe(
+          'Per-cell source URLs as {"column": "column_name", "sources": ["https://..."]}. Only include URLs that justify that exact cell value.',
+        ),
       row_summary: z
         .string()
         .optional()
@@ -161,7 +247,7 @@ export function buildPopulateTools(
         .describe("Brief description of how you found and verified this data"),
     }),
     outputSchema: writeResultSchema,
-    execute: async ({ data, sources, row_summary, how_found }) => {
+    execute: async ({ data, sources, cell_sources, row_summary, how_found }) => {
       if (!data || data.length === 0)
         return {
           success: false,
@@ -169,17 +255,35 @@ export function buildPopulateTools(
             'data is required and must include at least one entry like { "column": "column_name", "value": "cell value" }.',
         };
 
-      const cleanedData = cleanDataKeys(rowDataCellsToRecord(data));
+      const cleanedData = mergeInsertData(
+        cleanDataKeys(rowDataCellsToRecord(data)),
+        options.insertDefaults,
+      );
+      const mergedSources = uniqueStrings([
+        ...(options.insertDefaults?.sources ?? []),
+        ...(sources ?? []),
+      ]);
+      const mergedCellSources = mergeCellSources(
+        options.insertDefaults?.cellSources,
+        cellSourcesToRecord(cell_sources),
+      );
+      const mergedRowSummary =
+        row_summary ?? options.insertDefaults?.rowSummary;
+      const mergedHowFound = uniqueStrings([
+        options.insertDefaults?.howFoundPrefix,
+        how_found,
+      ]).join("\n");
       console.log(
-        `[insert_row] ${logCtx} cols=${Object.keys(cleanedData).length} sources=${sources?.length ?? 0}`,
+        `[insert_row] ${logCtx} cols=${Object.keys(cleanedData).length} sources=${mergedSources.length}`,
       );
       try {
         await convex.mutation(internal.datasetRows.insert, {
           datasetId: authorizedDatasetId,
           data: cleanedData,
-          ...(sources !== undefined ? { sources } : {}),
-          ...(row_summary !== undefined ? { rowSummary: row_summary } : {}),
-          ...(how_found !== undefined ? { howFound: how_found } : {}),
+          ...(mergedSources.length > 0 ? { sources: mergedSources } : {}),
+          ...(mergedCellSources ? { cellSources: mergedCellSources } : {}),
+          ...(mergedRowSummary !== undefined ? { rowSummary: mergedRowSummary } : {}),
+          ...(mergedHowFound ? { howFound: mergedHowFound } : {}),
         });
         return { success: true };
       } catch (err) {
@@ -290,6 +394,12 @@ export function buildPopulateTools(
         .array(z.string())
         .optional()
         .describe("Updated source URLs where this data was verified"),
+      cell_sources: z
+        .array(cellSourcesSchema)
+        .optional()
+        .describe(
+          'Updated per-cell source URLs as {"column": "column_name", "sources": ["https://..."]}. Only include URLs that justify that exact cell value.',
+        ),
       row_summary: z
         .string()
         .optional()
@@ -300,7 +410,7 @@ export function buildPopulateTools(
         .describe("Brief description of how the updated data was found"),
     }),
     outputSchema: writeResultSchema,
-    execute: async ({ rowId, data, sources, row_summary, how_found }) => {
+    execute: async ({ rowId, data, sources, cell_sources, row_summary, how_found }) => {
       if (!rowId) return { success: false, error: "rowId is required." };
       if (!data || data.length === 0)
         return {
@@ -318,6 +428,9 @@ export function buildPopulateTools(
           expectedDatasetId: authorizedDatasetId,
           data: cleanedData,
           ...(sources !== undefined ? { sources } : {}),
+          ...(cell_sources !== undefined
+            ? { cellSources: cellSourcesToRecord(cell_sources) ?? {} }
+            : {}),
           ...(row_summary !== undefined ? { rowSummary: row_summary } : {}),
           ...(how_found !== undefined ? { howFound: how_found } : {}),
         });

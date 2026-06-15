@@ -42,7 +42,8 @@ export default function DatasetPage() {
   const [cellDetail, setCellDetail] = useState<{
     column: DatasetColumn;
     value: unknown;
-    sources?: string[];
+    cellSources?: string[];
+    rowSources?: string[];
   } | null>(null);
 
   const datasetId = params.id as Id<"datasets">;
@@ -103,7 +104,12 @@ export default function DatasetPage() {
     const col = dataset.columns.find((c) => c.name === columnName);
     if (!col) return;
     const row = rows.find((r) => r._id === rowId);
-    setCellDetail({ column: col, value, sources: row?.sources });
+    setCellDetail({
+      column: col,
+      value,
+      cellSources: row?.cellSources?.[columnName],
+      rowSources: row?.sources,
+    });
   }, [dataset, rows]);
 
   const openedFired = useRef<string | null>(null);
@@ -461,7 +467,8 @@ export default function DatasetPage() {
           <CellDetail
             column={cellDetail.column}
             value={cellDetail.value}
-            sources={cellDetail.sources}
+            cellSources={cellDetail.cellSources}
+            rowSources={cellDetail.rowSources}
           />
         )}
       </SideSheet>

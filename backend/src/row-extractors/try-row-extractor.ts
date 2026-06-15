@@ -27,6 +27,20 @@ import { DEFAULT_MODEL_IDS } from "../config/models.js";
 
 type ExtractorStatus = "inserted" | "updated" | "unchanged" | "miss" | "failed";
 type ExtractedValue = string | number | boolean;
+type ColumnExtractionStatus =
+  | "extracted"
+  | "derived"
+  | "not_present_on_page"
+  | "blocked"
+  | "ambiguous"
+  | "validation_failed"
+  | "fallback_needed"
+  | "missing";
+
+interface ColumnStatus {
+  status: ColumnExtractionStatus;
+  reason?: string;
+}
 
 export interface TryRowExtractorInput {
   datasetId: string;
@@ -55,6 +69,20 @@ export interface TryRowExtractorResult {
   sources?: string[];
 }
 
+export interface RowExtractorDraftResult {
+  status: "extracted" | "miss" | "failed";
+  reason: string;
+  data?: Record<string, ExtractedValue>;
+  rowSummary?: string;
+  sources?: string[];
+  cellSources?: Record<string, string[]>;
+  extractedColumns?: string[];
+  missingColumns?: string[];
+  requiredMissingColumns?: string[];
+  optionalMissingColumns?: string[];
+  columnStatuses?: Record<string, ColumnStatus>;
+}
+
 interface TinyFishBrowserSession {
   session_id: string;
   cdp_url: string;
@@ -73,17 +101,25 @@ interface GenericExtraction {
   data: Record<string, ExtractedValue>;
   sources: string[];
   rowSummary?: string;
+  cellSources: Record<string, string[]>;
   extractedColumns: string[];
   missingColumns: string[];
+  requiredMissingColumns: string[];
+  optionalMissingColumns: string[];
+  columnStatuses: Record<string, ColumnStatus>;
 }
 
 interface GeneratedExtractorResult {
   data?: Record<string, unknown>;
   sources?: unknown;
+  cell_sources?: unknown;
+  cellSources?: unknown;
   row_summary?: unknown;
   rowSummary?: unknown;
   how_found?: unknown;
   howFound?: unknown;
+  column_status?: unknown;
+  columnStatus?: unknown;
 }
 
 interface DetailedExtractorTestResult {
@@ -108,7 +144,8 @@ const CDP_CONNECT_TIMEOUT_MS = 45_000;
 const DEFAULT_BROWSER_ATTEMPTS = 2;
 const EXTRACTOR_RUNNER_TIMEOUT_MS = 60_000;
 const EXTRACTOR_SCRIPT_OUTPUT_LIMIT = 256_000;
-const EXTRACTOR_BUILDER_MAX_STEPS = 24;
+const EXTRACTOR_BUILDER_MAX_STEPS = 80;
+const EXTRACTOR_REPAIR_MAX_STEPS = 24;
 const BACKEND_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const GENERIC_EXTRACTOR_HOW_FOUND =
   "Opened the row target with TinyFish Browser and ran the dataset's generated Playwright extractor.";
@@ -200,8 +237,58 @@ try {
 export async function tryRowExtractor(
   input: TryRowExtractorInput,
 ): Promise<TryRowExtractorResult> {
+  const draft = await tryRowExtractorDraft(input);
+  if (draft.status !== "extracted") {
+    return {
+      status: draft.status,
+      reason: draft.reason,
+      rowSummary: draft.rowSummary,
+      sources: draft.sources,
+    };
+  }
+
+  if ((draft.missingColumns ?? []).length > 0) {
+    return {
+      status: "miss",
+      reason: `browser extractor left unresolved columns for fallback: ${(draft.missingColumns ?? []).join(", ")}`,
+      rowSummary: draft.rowSummary,
+      sources: draft.sources,
+    };
+  }
+
+  try {
+    await convex.mutation(internal.datasetRows.insert, {
+      datasetId: input.datasetId,
+      data: draft.data ?? {},
+      sources: draft.sources,
+      cellSources: draft.cellSources,
+      rowSummary: draft.rowSummary,
+      howFound: GENERIC_EXTRACTOR_HOW_FOUND,
+    });
+
+    return {
+      status: "inserted",
+      reason: `Inserted by generic browser extractor (${(draft.extractedColumns ?? []).join(", ")})`,
+      rowSummary: draft.rowSummary,
+      sources: draft.sources,
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (/duplicate/i.test(msg)) {
+      return {
+        status: "miss",
+        reason: `${msg} Move on to the next entity.`,
+      };
+    }
+    return { status: "failed", reason: msg };
+  }
+}
+
+export async function tryRowExtractorDraft(
+  input: TryRowExtractorInput,
+): Promise<RowExtractorDraftResult> {
   const codificationProfile = normalizeCodificationProfile(input.codificationProfile, input);
-  if (!shouldAttemptCodification(codificationProfile)) {
+  if (!shouldAttemptCodification(codificationProfile, input)) {
     return {
       status: "miss",
       reason: `codification profile is ${codificationProfile.mode}: ${codificationProfile.reason}`,
@@ -220,19 +307,21 @@ export async function tryRowExtractor(
       };
     }
 
-    await convex.mutation(internal.datasetRows.insert, {
-      datasetId: input.datasetId,
-      data: extraction.data,
-      sources: extraction.sources,
-      rowSummary: extraction.rowSummary,
-      howFound: GENERIC_EXTRACTOR_HOW_FOUND,
-    });
-
     return {
-      status: "inserted",
-      reason: `Inserted by generic browser extractor (${extraction.extractedColumns.join(", ")})`,
+      status: "extracted",
+      reason:
+        extraction.missingColumns.length > 0
+          ? `Browser extractor filled ${extraction.extractedColumns.length} columns and left ${extraction.missingColumns.length} for fallback`
+          : `Browser extractor filled all ${extraction.extractedColumns.length} columns`,
+      data: extraction.data,
       rowSummary: extraction.rowSummary,
       sources: extraction.sources,
+      cellSources: extraction.cellSources,
+      extractedColumns: extraction.extractedColumns,
+      missingColumns: extraction.missingColumns,
+      requiredMissingColumns: extraction.requiredMissingColumns,
+      optionalMissingColumns: extraction.optionalMissingColumns,
+      columnStatuses: extraction.columnStatuses,
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -250,7 +339,7 @@ export async function tryRefreshRowExtractor(
   input: TryRefreshRowExtractorInput,
 ): Promise<TryRowExtractorResult> {
   const codificationProfile = normalizeCodificationProfile(input.codificationProfile, input);
-  if (!shouldAttemptCodification(codificationProfile)) {
+  if (!shouldAttemptCodification(codificationProfile, input)) {
     return {
       status: "miss",
       reason: `codification profile is ${codificationProfile.mode}: ${codificationProfile.reason}`,
@@ -288,6 +377,7 @@ export async function tryRefreshRowExtractor(
       expectedDatasetId: input.datasetId,
       data: extraction.data,
       sources: extraction.sources,
+      cellSources: extraction.cellSources,
       rowSummary: extraction.rowSummary,
       howFound: GENERIC_REFRESH_HOW_FOUND,
     });
@@ -305,12 +395,7 @@ export async function tryRefreshRowExtractor(
 }
 
 function initialBrowserUrl(input: TryRowExtractorInput): string | undefined {
-  const explicitUrl = [
-    ...Object.values(input.primaryKeys),
-    ...(input.urls ?? []),
-    input.sourceHint,
-    input.context?.match(/https?:\/\/[^\s)>"']+/i)?.[0],
-  ]
+  const explicitUrl = browserStartUrlCandidates(input)
     .map(coerceHttpUrl)
     .find((value): value is string => Boolean(value));
   if (explicitUrl) return explicitUrl;
@@ -328,6 +413,78 @@ function initialBrowserUrl(input: TryRowExtractorInput): string | undefined {
 
   if (!searchQuery) return undefined;
   return `https://www.google.com/search?q=${encodeURIComponent(searchQuery)}`;
+}
+
+function browserStartUrlCandidates(input: TryRowExtractorInput): Array<string | undefined> {
+  return uniqueCandidateValues([
+    ...Object.values(input.primaryKeys),
+    ...(input.urls ?? []),
+    ...renderCodificationTemplateUrls(input),
+    ...extractHttpUrls(input.sourceHint),
+    ...extractHttpUrls(input.context),
+    input.sourceHint,
+  ]);
+}
+
+function renderCodificationTemplateUrls(input: TryRowExtractorInput): string[] {
+  const urls: string[] = [];
+  for (const family of input.codificationProfile?.families ?? []) {
+    if (!family.urlTemplate) continue;
+    const rendered = renderUrlTemplate(family.urlTemplate, input.primaryKeys);
+    if (rendered) urls.push(rendered);
+  }
+  return urls;
+}
+
+function renderUrlTemplate(
+  template: string,
+  primaryKeys: Record<string, string>,
+): string | undefined {
+  let missing = false;
+  const rendered = template.replace(
+    /\{([a-zA-Z0-9_]+)\}/g,
+    (match: string, key: string, offset: number) => {
+      const value = findPrimaryKeyValue(key, primaryKeys)?.trim();
+      if (!value) {
+        missing = true;
+        return "";
+      }
+      return encodeTemplateValue(template, offset, value);
+    },
+  );
+  return missing ? undefined : rendered;
+}
+
+function encodeTemplateValue(template: string, placeholderOffset: number, value: string): string {
+  if (placeholderIsInQueryOrHash(template, placeholderOffset)) {
+    return encodeURIComponent(value);
+  }
+  return value.split("/").map(encodeURIComponent).join("/");
+}
+
+function placeholderIsInQueryOrHash(template: string, placeholderOffset: number): boolean {
+  const queryIndex = template.indexOf("?");
+  const hashIndex = template.indexOf("#");
+  const boundaryIndexes = [queryIndex, hashIndex].filter((index) => index >= 0);
+  return boundaryIndexes.length > 0 && Math.min(...boundaryIndexes) < placeholderOffset;
+}
+
+function extractHttpUrls(value: string | undefined): string[] {
+  if (!value) return [];
+  return [...value.matchAll(/https?:\/\/[^\s)>"']+/gi)].map((match) => normalizeUrl(match[0]));
+}
+
+function uniqueCandidateValues(values: Array<string | undefined>): Array<string | undefined> {
+  const seen = new Set<string>();
+  const output: Array<string | undefined> = [];
+  for (const value of values) {
+    const key = value?.trim();
+    if (!key) continue;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    output.push(value);
+  }
+  return output;
 }
 
 function normalizeUrl(value: string): string {
@@ -371,13 +528,19 @@ async function extractGenericRow(
   const apiKey = await getTinyFishApiKey();
   if (!apiKey) throw new Error("TINYFISH_API_KEY is not configured");
 
+  const siteKey = siteKeyForInput(input, url);
   const script = await getOrBuildExtractorScript(apiKey, input, url);
   const attempts = normalizedBrowserAttempts(input.browserAttempts);
   let lastError: unknown;
   for (let attempt = 1; attempt <= attempts; attempt++) {
     try {
+      console.log(
+        `[row_extractor] running generated Playwright extractor for ${siteKey} attempt=${attempt}/${attempts}`,
+      );
       const raw = await runGeneratedExtractorScript(apiKey, input, url, script);
       const extraction = buildRowFromExtractorResult(input, url, raw, existingData);
+      const qualityIssue = extractorQualityIssue(extraction, input.columns);
+      if (qualityIssue) throw new Error(qualityIssue);
       rememberExtractorSmokeTest(input, url);
       return extraction;
     } catch (err) {
@@ -402,8 +565,11 @@ async function extractGenericRow(
       script,
       failure,
     );
+    console.log(`[row_extractor] running repaired Playwright extractor for ${siteKey}`);
     const raw = await runGeneratedExtractorScript(apiKey, input, url, repaired);
     const extraction = buildRowFromExtractorResult(input, url, raw, existingData);
+    const qualityIssue = extractorQualityIssue(extraction, input.columns);
+    if (qualityIssue) throw new Error(qualityIssue);
     rememberExtractorSmokeTest(input, url);
     return extraction;
   } catch (repairErr) {
@@ -435,7 +601,10 @@ async function getOrBuildExtractorScript(
     siteKey,
     columnsHash,
   })) as { script?: string } | null;
-  if (existing?.script) return existing.script;
+  if (existing?.script) {
+    console.log(`[row_extractor] using cached generated Playwright extractor for ${siteKey}`);
+    return existing.script;
+  }
 
   const inFlightBuild = inFlightExtractorBuilds.get(buildKey);
   if (inFlightBuild) {
@@ -696,19 +865,57 @@ async function withRunTimeoutSignal<T>(
   if (runSignal?.aborted) throw new DOMException("Run was stopped", "AbortError");
 
   const controller = new AbortController();
-  const timeout = setTimeout(
-    () => controller.abort(new DOMException("Timed out", "TimeoutError")),
-    timeoutMs,
-  );
-  const abortFromRun = () =>
-    controller.abort(runSignal?.reason ?? new DOMException("Run was stopped", "AbortError"));
+  let timeout: ReturnType<typeof setTimeout>;
+  const timeoutPromise = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(() => {
+      const reason = new DOMException(
+        `Timed out after ${Math.round(timeoutMs / 1000)}s`,
+        "TimeoutError",
+      );
+      controller.abort(reason);
+      reject(reason);
+    }, timeoutMs);
+  });
+  let abortFromRun: (() => void) | undefined;
+  const abortPromise = new Promise<never>((_resolve, reject) => {
+    abortFromRun = () => {
+      const reason = runSignal?.reason ?? new DOMException("Run was stopped", "AbortError");
+      controller.abort(reason);
+      reject(reason);
+    };
 
-  runSignal?.addEventListener("abort", abortFromRun, { once: true });
+    runSignal?.addEventListener("abort", abortFromRun, { once: true });
+  });
   try {
-    return await operation(controller.signal);
+    return await Promise.race([operation(controller.signal), timeoutPromise, abortPromise]);
   } finally {
-    clearTimeout(timeout);
-    runSignal?.removeEventListener("abort", abortFromRun);
+    clearTimeout(timeout!);
+    if (abortFromRun) runSignal?.removeEventListener("abort", abortFromRun);
+  }
+}
+
+async function withRunAbortSignal<T>(
+  datasetId: string,
+  operation: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const runSignal = getSignal(datasetId);
+  if (runSignal?.aborted) throw new DOMException("Run was stopped", "AbortError");
+
+  const controller = new AbortController();
+  let abortFromRun: (() => void) | undefined;
+  const abortPromise = new Promise<never>((_resolve, reject) => {
+    abortFromRun = () => {
+      const reason = runSignal?.reason ?? new DOMException("Run was stopped", "AbortError");
+      controller.abort(reason);
+      reject(reason);
+    };
+    runSignal?.addEventListener("abort", abortFromRun, { once: true });
+  });
+
+  try {
+    return await Promise.race([operation(controller.signal), abortPromise]);
+  } finally {
+    if (abortFromRun) runSignal?.removeEventListener("abort", abortFromRun);
   }
 }
 
@@ -838,12 +1045,24 @@ async function buildExtractorScriptWithAgent(
     previousScript: string;
     failure: string;
   },
+  options: {
+    maxSteps?: number;
+    phase?: string;
+  } = {},
 ): Promise<AgenticExtractorBuildResult> {
   const llmConfig = await requireLlmProviderConfig();
   let acceptedScript: string | undefined;
+  let acceptedFromTest = false;
   let declinedReason: string | undefined;
   let lastEvidence: PageEvidence | undefined;
   let lastProbeSummary = `url=${url}`;
+  const siteKey = siteKeyForInput(input, url);
+  const phase = options.phase ?? (repairContext ? "repair" : "build");
+  const maxSteps = options.maxSteps ?? EXTRACTOR_BUILDER_MAX_STEPS;
+
+  console.log(
+    `[extractor_builder] ${phase} started for ${siteKey} maxSteps=${maxSteps}`,
+  );
 
   const inspectBrowserPageTool = createTool({
     id: "inspect_browser_page",
@@ -871,6 +1090,7 @@ async function buildExtractorScriptWithAgent(
     execute: async ({ url: requestedUrl }) => {
       try {
         const targetUrl = coerceHttpUrl(requestedUrl) ?? url;
+        console.log(`[extractor_builder] ${phase} inspecting ${targetUrl}`);
         const evidence = await probePage(apiKey, input.datasetId, targetUrl);
         lastEvidence = evidence;
         lastProbeSummary = summarizeEvidenceForStorage(evidence);
@@ -897,12 +1117,22 @@ async function buildExtractorScriptWithAgent(
       reason: z.string(),
       extractedColumns: z.array(z.string()).optional(),
       missingColumns: z.array(z.string()).optional(),
+      requiredMissingColumns: z.array(z.string()).optional(),
+      optionalMissingColumns: z.array(z.string()).optional(),
       rowSummary: z.string().optional(),
       sources: z.array(z.string()).optional(),
       dataPreview: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
     }),
     execute: async ({ script }) => {
+      console.log(`[extractor_builder] ${phase} testing candidate for ${siteKey}`);
       const result = await testExtractorScriptDetailed(apiKey, input, url, script);
+      if (result.ok) {
+        acceptedScript = sanitizeGeneratedScript(script);
+        acceptedFromTest = true;
+      }
+      console.log(
+        `[extractor_builder] ${phase} test ${result.ok ? "passed" : "failed"} for ${siteKey}: ${reasonForLog(result.reason)}`,
+      );
       return detailedTestResultForTool(result);
     },
   });
@@ -920,20 +1150,28 @@ async function buildExtractorScriptWithAgent(
       reason: z.string(),
       extractedColumns: z.array(z.string()).optional(),
       missingColumns: z.array(z.string()).optional(),
+      requiredMissingColumns: z.array(z.string()).optional(),
+      optionalMissingColumns: z.array(z.string()).optional(),
     }),
     execute: async ({ script }) => {
+      console.log(`[extractor_builder] ${phase} finishing candidate for ${siteKey}`);
       const result = await testExtractorScriptDetailed(apiKey, input, url, script);
       if (result.ok) {
         acceptedScript = sanitizeGeneratedScript(script);
       }
-      return {
-        ok: result.ok,
-        reason: result.reason,
-        extractedColumns: result.extraction?.extractedColumns,
-        missingColumns: result.extraction?.missingColumns,
-      };
-    },
-  });
+      console.log(
+        `[extractor_builder] ${phase} finish ${result.ok ? "accepted" : "rejected"} for ${siteKey}: ${reasonForLog(result.reason)}`,
+      );
+    return {
+      ok: result.ok,
+      reason: result.reason,
+      extractedColumns: result.extraction?.extractedColumns,
+      missingColumns: result.extraction?.missingColumns,
+      requiredMissingColumns: result.extraction?.requiredMissingColumns,
+      optionalMissingColumns: result.extraction?.optionalMissingColumns,
+    };
+  },
+});
 
   const declineExtractorTool = createTool({
     id: "decline_extractor",
@@ -976,17 +1214,37 @@ async function buildExtractorScriptWithAgent(
   });
 
   const prompt = extractorBuilderAgentPrompt(input, url, repairContext);
-  const result = await agent.generate(prompt, {
-    abortSignal: getSignal(input.datasetId),
-    maxSteps: EXTRACTOR_BUILDER_MAX_STEPS,
-    modelSettings: {
-      maxOutputTokens: AGENT_MAX_OUTPUT_TOKENS.EXTRACTOR_BUILDER,
-    },
-  });
+  let result: Awaited<ReturnType<typeof agent.generate>>;
+  try {
+    result = await withRunAbortSignal(input.datasetId, (abortSignal) =>
+      agent.generate(prompt, {
+        abortSignal,
+        maxSteps,
+        modelSettings: {
+          maxOutputTokens: AGENT_MAX_OUTPUT_TOKENS.EXTRACTOR_BUILDER,
+        },
+      }),
+    );
+  } catch (err) {
+    if (acceptedScript) {
+      console.warn(
+        `[extractor_builder] ${phase} returning ${acceptedFromTest ? "tested" : "finished"} accepted script for ${siteKey} after agent error: ${reasonForLog(err instanceof Error ? err.message : String(err))}`,
+      );
+      return {
+        script: acceptedScript,
+        probeSummary: lastEvidence ? summarizeEvidenceForStorage(lastEvidence) : lastProbeSummary,
+      };
+    }
+    throw err;
+  }
+
+  console.log(
+    `[extractor_builder] ${phase} ended for ${siteKey} steps=${result.steps?.length ?? "?"}`,
+  );
 
   if (acceptedScript) {
     console.log(
-      `[extractor_builder] accepted script after ${result.steps?.length ?? "?"} steps for ${siteKeyForInput(input, url)}`,
+      `[extractor_builder] accepted script after ${result.steps?.length ?? "?"} steps for ${siteKey}`,
     );
     return {
       script: acceptedScript,
@@ -999,7 +1257,7 @@ async function buildExtractorScriptWithAgent(
   }
 
   throw new Error(
-    `extractor builder did not finish a validated script within ${EXTRACTOR_BUILDER_MAX_STEPS} steps`,
+    `extractor builder did not finish a validated script within ${maxSteps} steps`,
   );
 }
 
@@ -1019,6 +1277,10 @@ async function repairExtractorAfterRuntimeFailure(
     {
       previousScript: script,
       failure,
+    },
+    {
+      maxSteps: EXTRACTOR_REPAIR_MAX_STEPS,
+      phase: "repair",
     },
   );
   const validation = await validateExtractorScript(apiKey, input, url, repaired.script);
@@ -1100,6 +1362,22 @@ async function testExtractorScriptDetailed(
         extraction,
       };
     }
+    const qualityIssue = extractorQualityIssue(extraction, input.columns);
+    if (qualityIssue) {
+      return {
+        ok: false,
+        reason: qualityIssue,
+        extraction,
+      };
+    }
+    const hardcodedValues = hardcodedExtractorValues(sanitized, extraction, input, url);
+    if (hardcodedValues.length > 0) {
+      return {
+        ok: false,
+        reason: `extractor appears to hardcode representative-row values: ${hardcodedValues.join(", ")}`,
+        extraction,
+      };
+    }
     return { ok: true, reason: "passed", extraction };
   } catch (err) {
     return {
@@ -1114,6 +1392,8 @@ function detailedTestResultForTool(result: DetailedExtractorTestResult): {
   reason: string;
   extractedColumns?: string[];
   missingColumns?: string[];
+  requiredMissingColumns?: string[];
+  optionalMissingColumns?: string[];
   rowSummary?: string;
   sources?: string[];
   dataPreview?: Record<string, ExtractedValue>;
@@ -1123,10 +1403,17 @@ function detailedTestResultForTool(result: DetailedExtractorTestResult): {
     reason: result.reason,
     extractedColumns: result.extraction?.extractedColumns,
     missingColumns: result.extraction?.missingColumns,
+    requiredMissingColumns: result.extraction?.requiredMissingColumns,
+    optionalMissingColumns: result.extraction?.optionalMissingColumns,
     rowSummary: result.extraction?.rowSummary,
     sources: result.extraction?.sources,
     dataPreview: result.extraction?.data,
   };
+}
+
+function reasonForLog(reason: string): string {
+  const normalized = reason.replace(/\s+/g, " ").trim();
+  return normalized.length > 500 ? `${normalized.slice(0, 500)}...` : normalized;
 }
 
 function extractorBuilderAgentInstructions(): string {
@@ -1136,22 +1423,27 @@ Your job is to build a reusable Playwright extractor script for one dataset/page
 
 Critical behavior:
 - Inspect pages when structure, source URLs, or primary key semantics are unclear.
+- Do not decline because a source has an anti-bot reputation. BigSet uses TinyFish Browser for interactive browser access; inspect the representative page and judge the actual session result.
 - Write and test candidate scripts with test_extractor. Iterate on validation errors.
 - Finish only by calling finish_extractor with the final script. A final text response without finish_extractor is failure.
 - If the dataset is not a good fit for reusable browser codification, call decline_extractor with a concrete reason.
+- Treat this as a general page-family compiler. Do not optimize for any named site. The page family may be a marketplace listing, social group, product page, blog post archive, repository page, directory profile, forum thread, app-store listing, or any other accessible browser surface.
 
 When to decline:
 - The representative primary keys/URLs point at arbitrary unrelated domains with no shared page pattern.
-- The page is blocked by login, paywall, CAPTCHA, bot detection, or inaccessible content.
+- The representative page remains blocked by login, paywall, CAPTCHA, bot detection, or inaccessible content after a TinyFish Browser inspection attempt.
 - The row context is too ambiguous to construct or find a stable browser target.
-- You cannot produce a complete row with every dataset column populated.
+- TinyFish Browser can access the page but the requested values require actions/data outside the accessible page family and cannot be reliably derived.
 
 Important modeling rules:
 - Primary keys are arbitrary row identifiers. They do not have to be URLs.
 - You may construct navigation URLs from input.primaryKeys, top-level primary key fields, input.urls, input.sourceHint, dataset name, description, retrieval strategy, and context.
-- Example: a primary key like "tinyfish-io/bigset" may require page.goto("https://github.com/" + input.primaryKeys.repo_slug). Do the equivalent for any site family you infer.
-- Multiple known page families are allowed. For example, if rows consistently contain either Yelp or Google Maps URLs, write one reusable script that branches based on the available URL/domain. If rows are arbitrary unrelated URLs, decline.
+- If the source/schema imply a URL template, build the row URL from the primary key or identifier. This applies to any source family: handles, slugs, product IDs, post paths, item IDs, listing IDs, package names, tickers, and similar identifiers.
+- Search is a last resort when a deterministic source URL can be built.
+- Multiple known page families are allowed. If rows consistently contain URLs from a small set of stable domains or path patterns, write one reusable script that branches based on the available URL/domain. If rows are arbitrary unrelated URLs, decline.
 - Respect validation_regex exactly. Normalize values before returning them, using normalization_hint and column descriptions.
+- Attempt every column, including nullable/optional columns. Nullable means the final row may survive if all methods fail, not that you should skip the field.
+- You may derive values from page structure instead of finding literal labels. For example: count repeated cards in a relevant section, infer booleans from the presence of controls/badges, parse counts from aria labels, or normalize visible variants into the schema's final format.
 
 Script contract:
 - Return only a full JavaScript script in tool arguments, never Markdown fences.
@@ -1161,11 +1453,35 @@ Script contract:
 - Use only the provided Playwright page, input, and helpers.
 - You may use page.goto, locators, evaluate, textContent, getAttribute, and other Playwright page APIs.
 - Prefer stable DOM sources: JSON-LD, meta tags, tables, definition lists, visible labels, aria labels, canonical links, and semantically named selectors.
-- Return { data, sources, row_summary, how_found }.
-- data must include every dataset column. Preserve primary key values from input.primaryKeys.
-- Every dataset column must have a real non-empty value after normalization. Nullable columns are still required for codified browser extraction.
+- Return { data, column_status, cell_sources, sources, row_summary, how_found }.
+- data should include every dataset column that Playwright can extract or derive. Preserve primary key values from input.primaryKeys.
+- column_status should include every dataset column. Use status "extracted" or "derived" for values in data. Use "not_present_on_page", "blocked", "ambiguous", "validation_failed", or "fallback_needed" for unresolved values, with a short reason.
+- cell_sources should map each extracted/derived column to the exact HTTP URL(s) that justify that specific value. Do not put row-level sources here.
 - Returned sources must be HTTP URLs you actually used.
-- If any column cannot be extracted or normalized to satisfy validation_regex, keep investigating with the browser tools or decline. Do not finish a partial extractor.`;
+- If any column cannot be extracted or normalized to satisfy validation_regex, keep investigating with the browser tools. If it still cannot be solved from the browser page family, mark it in column_status for fallback instead of fabricating a value.
+
+Starter-code reference only. This shape will not work on the target site until you inspect the actual page and replace the URL construction/selectors:
+async function extract({ page, input, helpers }) {
+  const id = String(input.primaryKeys.item_id ?? input.item_id ?? "").trim();
+  const startUrl = input.urls[0] || input.sourceHint || input.startUrl;
+  await page.goto(startUrl, { waitUntil: "domcontentloaded" });
+  await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
+  const read = async (locator) => helpers.cleanText(await locator.first().textContent().catch(() => ""));
+  const title = await read(page.locator("h1"));
+  return {
+    data: { item_id: id, title },
+    column_status: {
+      item_id: { status: "extracted" },
+      title: title ? { status: "extracted" } : { status: "fallback_needed", reason: "No h1/title equivalent found after inspection" }
+    },
+    cell_sources: title ? { title: [page.url()] } : {},
+    sources: [page.url()],
+    row_summary: title || id,
+    how_found: "Reference shape only; actual extractor must describe the inspected selectors and derived values."
+  };
+}
+
+Never hardcode representative-row values in the script. Literal values from the first tested row, such as a specific product name, profile URL, rating, count, or homepage, make the extractor invalid unless they come from input primary keys or are source-family constants like a host prefix.`;
 }
 
 function extractorBuilderAgentPrompt(
@@ -1376,7 +1692,12 @@ function buildRowFromExtractorResult(
   const data: Record<string, ExtractedValue> = {};
   const extractedColumns: string[] = [];
   const missingColumns: string[] = [];
-  const invalidColumns: string[] = [];
+  const requiredMissingColumns: string[] = [];
+  const optionalMissingColumns: string[] = [];
+  const rawColumnStatuses = normalizeColumnStatuses(
+    result.column_status ?? result.columnStatus,
+  );
+  const columnStatuses: Record<string, ColumnStatus> = {};
 
   for (const column of input.columns) {
     const pkValue = findPrimaryKeyValue(column.name, input.primaryKeys);
@@ -1388,6 +1709,10 @@ function buildRowFromExtractorResult(
       }
       data[column.name] = value;
       extractedColumns.push(column.name);
+      columnStatuses[column.name] = {
+        status: rawColumnStatuses[column.name]?.status ?? "extracted",
+        reason: rawColumnStatuses[column.name]?.reason,
+      };
       continue;
     }
 
@@ -1398,9 +1723,16 @@ function buildRowFromExtractorResult(
       if (!validationError) {
         data[column.name] = value;
         extractedColumns.push(column.name);
+        columnStatuses[column.name] = {
+          status: rawColumnStatuses[column.name]?.status ?? "extracted",
+          reason: rawColumnStatuses[column.name]?.reason,
+        };
         continue;
       }
-      invalidColumns.push(`${column.name}: ${validationError}`);
+      columnStatuses[column.name] = {
+        status: "validation_failed",
+        reason: validationError,
+      };
     }
 
     if (existingData && existingData[column.name] !== undefined) {
@@ -1409,39 +1741,44 @@ function buildRowFromExtractorResult(
         const validationError = validateColumnValue(storedValue, column);
         if (!validationError) {
           data[column.name] = storedValue;
+          columnStatuses[column.name] = {
+            status: rawColumnStatuses[column.name]?.status ?? "extracted",
+            reason: rawColumnStatuses[column.name]?.reason ?? "Preserved existing validated value.",
+          };
           continue;
         }
-        invalidColumns.push(`${column.name}: stored value ${validationError}`);
       }
     }
 
     data[column.name] = "";
     missingColumns.push(column.name);
-  }
-
-  if (invalidColumns.length > 0) {
-    throw new Error(
-      `generated extractor returned values that failed validation: ${invalidColumns.join("; ")}`,
-    );
-  }
-
-  if (missingColumns.length > 0) {
-    throw new Error(
-      `generated extractor missed columns: ${missingColumns.join(", ")}`,
-    );
+    if (isRequiredColumn(column)) {
+      requiredMissingColumns.push(column.name);
+    } else {
+      optionalMissingColumns.push(column.name);
+    }
+    columnStatuses[column.name] = columnStatuses[column.name] ?? rawColumnStatuses[column.name] ?? {
+      status: "fallback_needed",
+      reason: "The browser extractor did not return a validated value.",
+    };
   }
 
   const sources = Array.isArray(result.sources)
     ? result.sources.filter((source): source is string => typeof source === "string" && isHttpUrl(source))
     : [];
+  const cellSources = normalizeCellSources(result.cell_sources ?? result.cellSources);
   const summary = String(result.row_summary ?? result.rowSummary ?? "").trim().slice(0, 500);
 
   return {
     data,
     sources: sources.length > 0 ? sources : [url],
     rowSummary: summary || url,
+    cellSources,
     extractedColumns,
     missingColumns,
+    requiredMissingColumns,
+    optionalMissingColumns,
+    columnStatuses,
   };
 }
 
@@ -1453,6 +1790,167 @@ function hasExtractedNonPrimaryValue(
     columns.filter((column) => column.isPrimaryKey).map((column) => column.name),
   );
   return extraction.extractedColumns.some((columnName) => !pkColumns.has(columnName));
+}
+
+function extractorQualityIssue(
+  extraction: GenericExtraction,
+  columns: PopulateColumn[],
+): string | undefined {
+  const nonPrimaryColumns = columns.filter((column) => !column.isPrimaryKey);
+  if (nonPrimaryColumns.length === 0) return undefined;
+
+  const extracted = new Set(extraction.extractedColumns);
+  const missing = new Set(extraction.missingColumns);
+  const extractedNonPrimary = nonPrimaryColumns.filter((column) => extracted.has(column.name));
+  const missingCellSources = extractedNonPrimary.filter(
+    (column) => (extraction.cellSources[column.name]?.length ?? 0) === 0,
+  );
+  if (missingCellSources.length > 0) {
+    return `generated extractor omitted cell_sources for extracted columns: ${missingCellSources.map((column) => column.name).join(", ")}`;
+  }
+
+  const missingRequired = nonPrimaryColumns.filter(
+    (column) => isRequiredColumn(column) && missing.has(column.name),
+  );
+  if (missingRequired.length > 0) {
+    return `generated extractor missed required columns: ${missingRequired.map((column) => column.name).join(", ")}`;
+  }
+
+  const minimum = minimumBrowserExtractedColumnCount(nonPrimaryColumns.length);
+  if (extractedNonPrimary.length < minimum) {
+    const missingColumns = nonPrimaryColumns
+      .filter((column) => !extracted.has(column.name))
+      .map((column) => column.name);
+    return [
+      `generated extractor coverage too low: extracted ${extractedNonPrimary.length}/${nonPrimaryColumns.length} non-primary columns`,
+      `minimum=${minimum}`,
+      `missing=${missingColumns.join(", ") || "(none)"}`,
+    ].join("; ");
+  }
+
+  return undefined;
+}
+
+function minimumBrowserExtractedColumnCount(nonPrimaryColumnCount: number): number {
+  if (nonPrimaryColumnCount <= 1) return nonPrimaryColumnCount;
+  return Math.floor(nonPrimaryColumnCount / 2) + 1;
+}
+
+function hardcodedExtractorValues(
+  script: string,
+  extraction: GenericExtraction,
+  input: TryRowExtractorInput,
+  url: string,
+): string[] {
+  const scriptText = script.toLowerCase();
+  const pkColumns = new Set(
+    input.columns.filter((column) => column.isPrimaryKey).map((column) => column.name),
+  );
+  const sourceUrls = new Set(
+    [url, ...(input.urls ?? []), input.sourceHint]
+      .filter((value): value is string => Boolean(value))
+      .map((value) => value.toLowerCase()),
+  );
+  const violations: string[] = [];
+
+  for (const [columnName, value] of Object.entries(extraction.data)) {
+    if (pkColumns.has(columnName)) continue;
+    if (typeof value !== "string") continue;
+    const normalized = value.trim();
+    if (normalized.length < 8) continue;
+    const lowerValue = normalized.toLowerCase();
+    if (sourceUrls.has(lowerValue)) continue;
+    if (!scriptText.includes(lowerValue)) continue;
+    violations.push(`${columnName}=${JSON.stringify(normalized.slice(0, 120))}`);
+  }
+
+  return violations.slice(0, 8);
+}
+
+function isRequiredColumn(column: PopulateColumn): boolean {
+  return column.isPrimaryKey === true || column.nullable === false;
+}
+
+function normalizeColumnStatuses(value: unknown): Record<string, ColumnStatus> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+
+  const statuses: Record<string, ColumnStatus> = {};
+  for (const [column, rawStatus] of Object.entries(value as Record<string, unknown>)) {
+    const normalized =
+      typeof rawStatus === "string"
+        ? { status: normalizeColumnStatus(rawStatus) }
+        : rawStatus && typeof rawStatus === "object"
+          ? {
+              status: normalizeColumnStatus(
+                String((rawStatus as { status?: unknown }).status ?? "fallback_needed"),
+              ),
+              reason:
+                typeof (rawStatus as { reason?: unknown }).reason === "string"
+                  ? String((rawStatus as { reason?: unknown }).reason).slice(0, 300)
+                  : undefined,
+            }
+          : { status: "fallback_needed" as const };
+    statuses[column] = normalized;
+  }
+  return statuses;
+}
+
+function normalizeColumnStatus(value: string): ColumnExtractionStatus {
+  const normalized = value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_");
+  switch (normalized) {
+    case "extracted":
+    case "derived":
+    case "not_present_on_page":
+    case "blocked":
+    case "ambiguous":
+    case "validation_failed":
+    case "fallback_needed":
+    case "missing":
+      return normalized;
+    case "not_found":
+    case "unavailable":
+    case "not_visible":
+      return "not_present_on_page";
+    default:
+      return "fallback_needed";
+  }
+}
+
+function normalizeCellSources(value: unknown): Record<string, string[]> {
+  if (!value) return {};
+
+  const output: Record<string, string[]> = {};
+  const add = (column: string, sources: unknown) => {
+    const normalizedColumn = column.trim().replace(/^["`]+|["`]+$/g, "");
+    if (!normalizedColumn) return;
+    const sourceValues = Array.isArray(sources) ? sources : [sources];
+    const cleaned = [
+      ...new Set(
+        sourceValues.filter((source): source is string => {
+          return typeof source === "string" && isHttpUrl(source);
+        }),
+      ),
+    ];
+    if (cleaned.length > 0) output[normalizedColumn] = cleaned;
+  };
+
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      if (!entry || typeof entry !== "object") continue;
+      const column = (entry as { column?: unknown }).column;
+      if (typeof column !== "string") continue;
+      add(column, (entry as { sources?: unknown; source?: unknown }).sources ?? (entry as { source?: unknown }).source);
+    }
+    return output;
+  }
+
+  if (typeof value === "object") {
+    for (const [column, sources] of Object.entries(value as Record<string, unknown>)) {
+      add(column, sources);
+    }
+  }
+
+  return output;
 }
 
 function rawValueToExtractedValue(value: unknown): ExtractedValue | undefined {
@@ -1508,11 +2006,7 @@ function siteKeyForUrl(value: string): string {
 }
 
 function siteKeyForInput(input: TryRowExtractorInput, browserStartUrl: string): string {
-  const sourceUrl = [
-    input.sourceHint,
-    ...(input.urls ?? []),
-    ...Object.values(input.primaryKeys),
-  ]
+  const sourceUrl = browserStartUrlCandidates(input)
     .map(coerceHttpUrl)
     .find((value): value is string => Boolean(value));
   return siteKeyForUrl(sourceUrl ?? browserStartUrl);

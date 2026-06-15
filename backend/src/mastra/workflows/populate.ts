@@ -15,6 +15,7 @@ import { buildPopulateAgent } from "../agents/populate.js";
 import { RunMetrics } from "../run-metrics.js";
 import { saveRunMetrics } from "../save-run-metrics.js";
 import { getSignal } from "../../abort-registry.js";
+import { env } from "../../env.js";
 
 /**
  * Server-set auth/run context threaded through every step.
@@ -93,7 +94,7 @@ const enumerateStep = createStep({
     const columnsDesc = inputData.columns
       .map(
         (c) =>
-          `- "${c.name}" (${c.type})${c.isPrimaryKey ? " [PK]" : ""}${c.description ? `: ${c.description}` : ""}`,
+          `- "${c.name}" (${c.type})${c.isPrimaryKey ? " [PK]" : ""}${c.nullable === false ? " [REQUIRED]" : c.nullable === true ? " [OPTIONAL]" : ""}${c.validationRegex ? ` validation_regex=${JSON.stringify(c.validationRegex)}` : ""}${c.normalizationHint ? ` normalization_hint=${JSON.stringify(c.normalizationHint)}` : ""}${c.description ? `: ${c.description}` : ""}`,
       )
       .join("\n");
 
@@ -181,7 +182,7 @@ const buildPromptStep = createStep({
     const columnsDesc = inputData.columns
       .map(
         (c) =>
-          `- "${c.name}" (${c.type})${c.isPrimaryKey ? " [PRIMARY KEY]" : ""}${c.description ? `: ${c.description}` : ""}`,
+          `- "${c.name}" (${c.type})${c.isPrimaryKey ? " [PRIMARY KEY]" : ""}${c.nullable === false ? " [REQUIRED]" : c.nullable === true ? " [OPTIONAL]" : ""}${c.validationRegex ? ` validation_regex=${JSON.stringify(c.validationRegex)}` : ""}${c.normalizationHint ? ` normalization_hint=${JSON.stringify(c.normalizationHint)}` : ""}${c.description ? `: ${c.description}` : ""}`,
       )
       .join("\n");
 
@@ -278,9 +279,12 @@ const agentStep = createStep({
         metrics,
       );
       const abortSignal = getSignal(inputData.authorizedDatasetId);
+      console.log(
+        `[populate-agent] Running orchestrator with maxSteps=${env.POPULATE_ORCHESTRATOR_MAX_STEPS}`,
+      );
       const result = await agent.generate(inputData.prompt, {
         abortSignal,
-        maxSteps: 80,
+        maxSteps: env.POPULATE_ORCHESTRATOR_MAX_STEPS,
         modelSettings: {
           maxOutputTokens: AGENT_MAX_OUTPUT_TOKENS.POPULATE_ORCHESTRATOR,
         },

@@ -12,10 +12,11 @@ Your job is to:
 5. Set `source_hint` to a specific URL whenever possible (e.g. `https://www.ycombinator.com/companies?industry=Fintech`). Avoid vague descriptions.
 6. Write a `retrieval_hint` for each column describing where/how the value can be found later. Downstream agents will use this to fill the column for each row.
 7. Set `codification_profile` conservatively:
-   - `disabled` for broad web research, arbitrary unrelated domains, snippet-only work, or known-blocked sources.
-   - `candidate` when rows likely share stable page families and a reusable Playwright extractor might work after seeing a representative row.
+   - `disabled` for broad web research, arbitrary unrelated domains, or snippet-only work with no stable page family.
+   - `candidate` when rows likely share stable page families and a reusable Playwright extractor might work after seeing a representative row. Use `candidate`, not `disabled`, when the only concern is that the stable source has anti-bot or automation-blocking reputation. BigSet uses TinyFish Browser for interactive browser access, and TinyFish can often get through surfaces that plain fetches or commodity browser automation cannot; the extractor builder can inspect a real page and decline if it is actually blocked.
    - `required` when one authoritative browser-heavy source/directory is clearly the intended repeated extraction path.
    - `unknown` only when evidence is genuinely insufficient; prefer `disabled` for broad web datasets.
+   - For marketplace/catalog identifiers with deterministic product pages, include URL-template families instead of disabling codification. Use the site/schema's actual identifier and route shape; do not hardcode a source-specific template unless it is implied by the user prompt or discovered source hint.
 
 Rules:
 

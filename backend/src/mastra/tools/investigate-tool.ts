@@ -6,7 +6,10 @@ import type { AuthContext } from "../workflows/populate.js";
 import type { CodificationProfile, PopulateColumn } from "../../pipeline/populate.js";
 import type { RunMetrics } from "../run-metrics.js";
 import { getSignal } from "../../abort-registry.js";
-import { tryRowExtractor } from "../../row-extractors/try-row-extractor.js";
+import {
+  tryRowExtractorDraft,
+  type RowExtractorDraftResult,
+} from "../../row-extractors/try-row-extractor.js";
 import type { LlmProviderConfig } from "../../config/llm.js";
 import { AGENT_MAX_OUTPUT_TOKENS } from "../../config/agent-output-tokens.js";
 
@@ -75,10 +78,88 @@ function parseInvestigateResult(
   };
 }
 
-function isIncompleteExtractorFailure(reason: string): boolean {
-  return /generated extractor (missed columns|missed required columns|returned values that failed validation)|repaired extractor failed validation|extractor returned no non-primary values/i.test(
-    reason,
+function hasMeaningfulValue(value: unknown): boolean {
+  if (value === undefined || value === null) return false;
+  if (typeof value === "string") return value.trim().length > 0;
+  return true;
+}
+
+function filledColumnNames(
+  draft: RowExtractorDraftResult | undefined,
+  columns: PopulateColumn[],
+): string[] {
+  if (!draft?.data) return [];
+  const primaryKeyColumns = new Set(
+    columns.filter((column) => column.isPrimaryKey).map((column) => column.name),
   );
+  return Object.entries(draft.data)
+    .filter(([column, value]) => {
+      if (!hasMeaningfulValue(value)) return false;
+      if (primaryKeyColumns.has(column)) return true;
+      return (draft.cellSources?.[column]?.length ?? 0) > 0;
+    })
+    .map(([column]) => column);
+}
+
+function formatRowData(data: Record<string, unknown> | undefined): string {
+  if (!data) return "(none)";
+  const lines = Object.entries(data)
+    .filter(([, value]) => hasMeaningfulValue(value))
+    .map(([column, value]) => `- ${column}: ${JSON.stringify(value)}`);
+  return lines.length > 0 ? lines.join("\n") : "(none)";
+}
+
+function pickRowData(
+  data: Record<string, unknown> | undefined,
+  columns: string[],
+): Record<string, unknown> | undefined {
+  if (!data) return undefined;
+  const picked: Record<string, unknown> = {};
+  for (const column of columns) {
+    const value = data[column];
+    if (hasMeaningfulValue(value)) picked[column] = value;
+  }
+  return Object.keys(picked).length > 0 ? picked : undefined;
+}
+
+function formatUnresolvedColumns(
+  columns: PopulateColumn[],
+  draft: RowExtractorDraftResult | undefined,
+  lockedColumns: string[] = [],
+): string {
+  if (!draft) return "(none)";
+  const locked = new Set(lockedColumns);
+  const fallbackNames = columns
+    .filter((column) => !column.isPrimaryKey)
+    .filter((column) => {
+      if (locked.has(column.name)) return false;
+      return draft.missingColumns?.includes(column.name) || hasMeaningfulValue(draft.data?.[column.name]);
+    })
+    .map((column) => column.name);
+  if (fallbackNames.length === 0) return "(none)";
+
+  const columnByName = new Map(columns.map((column) => [column.name, column]));
+  return fallbackNames
+    .map((name) => {
+      const column = columnByName.get(name);
+      const requiredness = column?.nullable === false ? "required" : "optional";
+      const status = draft.columnStatuses?.[name];
+      const missingCellSource =
+        hasMeaningfulValue(draft.data?.[name]) && (draft.cellSources?.[name]?.length ?? 0) === 0;
+      const detail = [
+        `${requiredness}`,
+        missingCellSource ? "browser_status=unverified_cell_source" : undefined,
+        status?.status ? `browser_status=${status.status}` : undefined,
+        status?.reason ? `reason=${JSON.stringify(status.reason)}` : undefined,
+        column?.normalizationHint
+          ? `normalization=${JSON.stringify(column.normalizationHint)}`
+          : undefined,
+      ]
+        .filter(Boolean)
+        .join("; ");
+      return `- ${name} (${detail})`;
+    })
+    .join("\n");
 }
 
 /**
@@ -125,7 +206,7 @@ export function buildSubagentTool(
           primary_keys.map(({ column, value }) => [column, value]),
         );
 
-        const extractorResult = await tryRowExtractor({
+        const extractorResult = await tryRowExtractorDraft({
           datasetId: authorizedDatasetId,
           columns,
           primaryKeys: primaryKeyRecord,
@@ -139,18 +220,6 @@ export function buildSubagentTool(
           browserAttempts: authContext.modelConfig.rowExtractorBrowserAttempts,
           extractorBuilderModel: authContext.modelConfig.extractorBuilder,
         });
-        if (extractorResult.status === "inserted") {
-          if (metrics) metrics.rowsInserted++;
-          console.log(
-            `[run_subagent] row extractor inserted entity="${entity_hint}" reason="${extractorResult.reason}"`,
-          );
-          return {
-            inserted: true,
-            reason: extractorResult.reason,
-            row_summary: extractorResult.rowSummary,
-            clues: undefined,
-          };
-        }
         if (/duplicate/i.test(extractorResult.reason)) {
           return {
             inserted: false,
@@ -159,18 +228,51 @@ export function buildSubagentTool(
             clues: undefined,
           };
         }
-        if (extractorResult.status === "failed") {
+
+        if (extractorResult.status === "extracted") {
+          const missingColumns = extractorResult.missingColumns ?? [];
+          if (missingColumns.length === 0) {
+            try {
+              await convex.mutation(internal.datasetRows.insert, {
+                datasetId: authorizedDatasetId,
+                data: extractorResult.data ?? {},
+                sources: extractorResult.sources,
+                cellSources: extractorResult.cellSources,
+                rowSummary: extractorResult.rowSummary,
+                howFound:
+                  "Opened the row target with TinyFish Browser and ran the dataset's generated Playwright extractor. No fallback columns were unresolved.",
+              });
+              if (metrics) metrics.rowsInserted++;
+              console.log(
+                `[run_subagent] row extractor inserted complete row entity="${entity_hint}" reason="${extractorResult.reason}"`,
+              );
+              return {
+                inserted: true,
+                reason: extractorResult.reason,
+                row_summary: extractorResult.rowSummary,
+                clues: undefined,
+              };
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              if (/duplicate/i.test(msg)) {
+                return {
+                  inserted: false,
+                  reason: `${msg} Move on to the next entity.`,
+                  row_summary: undefined,
+                  clues: undefined,
+                };
+              }
+              throw err;
+            }
+          }
+
+          console.log(
+            `[run_subagent] row extractor drafted entity="${entity_hint}" filled=${extractorResult.extractedColumns?.length ?? 0} unresolved=${missingColumns.length}`,
+          );
+        } else if (extractorResult.status === "failed") {
           console.warn(
             `[run_subagent] row extractor failed entity="${entity_hint}" reason="${extractorResult.reason}"`,
           );
-          if (isIncompleteExtractorFailure(extractorResult.reason)) {
-            return {
-              inserted: false,
-              reason: `Browser extractor did not produce a complete row: ${extractorResult.reason}`,
-              row_summary: undefined,
-              clues: "Improve the reusable browser extractor or choose a schema/source where every column is visible.",
-            };
-          }
         } else if (extractorResult.status === "miss") {
           console.log(
             `[run_subagent] row extractor missed entity="${entity_hint}" reason="${extractorResult.reason}"`,
@@ -181,11 +283,37 @@ export function buildSubagentTool(
           `[run_subagent] spawning subagent user=${authContext.authorizedUserId} run=${authContext.workflowRunId} dataset=${authorizedDatasetId} entity="${entity_hint}" pk=${JSON.stringify(primary_keys)}`,
         );
 
+        const browserFilledValues =
+          extractorResult.status === "extracted" ? extractorResult.data : undefined;
+        const browserFilledColumns =
+          extractorResult.status === "extracted"
+            ? filledColumnNames(extractorResult, columns)
+            : [];
+        const browserLockedValues =
+          extractorResult.status === "extracted"
+            ? pickRowData(browserFilledValues, browserFilledColumns)
+            : undefined;
+        const browserSources =
+          extractorResult.status === "extracted" ? extractorResult.sources : undefined;
+
         const agent = buildInvestigateAgent(
           authorizedDatasetId,
           authContext,
           columns,
           llmConfig,
+          extractorResult.status === "extracted"
+            ? {
+                insertDefaults: {
+                  data: browserLockedValues,
+                  lockColumns: browserFilledColumns,
+                  sources: browserSources,
+                  cellSources: extractorResult.cellSources,
+                  rowSummary: extractorResult.rowSummary,
+                  howFoundPrefix:
+                    "Browser extraction pass ran first. The insert tool preserved browser-verified values and merged fallback research for unresolved columns.",
+                },
+              }
+            : {},
         );
 
         const pkBlock = primary_keys
@@ -196,6 +324,26 @@ export function buildSubagentTool(
             ? `\nUseful URLs to start from:\n${urls.map((u) => `- ${u}`).join("\n")}`
             : "";
         const notesBlock = notes ? `\nAdditional notes: ${notes}` : "";
+        const browserDraftBlock =
+          extractorResult.status === "extracted"
+            ? `
+
+Browser extraction already verified these values. Do not spend tool calls re-verifying or changing them; insert_row will preserve them:
+${formatRowData(browserLockedValues)}
+
+Unresolved columns to research now. Try every listed column, including optional ones. If a value still cannot be verified, insert "" for that column and explain why:
+${formatUnresolvedColumns(columns, extractorResult, browserFilledColumns)}
+
+Browser sources already used:
+${(browserSources ?? []).map((u) => `- ${u}`).join("\n") || "(none)"}
+`
+            : `
+
+Browser extraction did not produce a usable draft for this row:
+- status: ${extractorResult.status}
+- reason: ${extractorResult.reason}
+
+Research all non-primary columns normally.`;
 
         const prompt = `Research this entity and insert a row if you find real, verified data.
 
@@ -205,7 +353,7 @@ Primary key values (MUST be included in insert_row):
 ${pkBlock}
 
 Context (partial data already found):
-${context}${urlsBlock}${notesBlock}`;
+${context}${urlsBlock}${notesBlock}${browserDraftBlock}`;
 
         const abortSignal = getSignal(authorizedDatasetId);
         const result = await agent.generate(prompt, {
