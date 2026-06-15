@@ -4,6 +4,7 @@ import { convex, internal } from "../../convex.js";
 import { capture } from "../../analytics/posthog.js";
 import { EVENTS } from "../../analytics/events.js";
 import type { AuthContext } from "../workflows/populate.js";
+import type { PopulateColumn } from "../../pipeline/populate.js";
 
 /**
  * Capability-scoped dataset tools for the populate agent.
@@ -83,6 +84,8 @@ interface InsertDefaults {
 
 interface PopulateToolOptions {
   insertDefaults?: InsertDefaults;
+  columns?: PopulateColumn[];
+  enforcePrimaryKeySources?: boolean;
 }
 
 function rowDataCellsToRecord(data: RowDataCell[]): Record<string, string> {
@@ -158,6 +161,66 @@ function mergeInsertData(
   }
 
   return merged;
+}
+
+function validatePrimaryKeySources(
+  data: Record<string, unknown>,
+  rowSources: string[],
+  cellSources: Record<string, string[]> | undefined,
+  columns: PopulateColumn[] | undefined,
+  enforcePrimaryKeySources: boolean | undefined,
+): string | undefined {
+  if (!enforcePrimaryKeySources || !columns || columns.length === 0) return undefined;
+
+  const primaryColumns = columns.filter((column) => column.isPrimaryKey);
+  for (const column of primaryColumns) {
+    const value = data[column.name];
+    if (!hasMeaningfulValue(value)) {
+      return `Primary key "${column.name}" is missing. Verify the primary key before inserting.`;
+    }
+
+    if (!isUrlPrimaryKeyColumn(column)) continue;
+
+    const normalizedValue = normalizeHttpUrlForComparison(String(value));
+    if (!normalizedValue) {
+      return `Primary key "${column.name}" must be a valid HTTP URL.`;
+    }
+
+    const supportingSources = [
+      ...(cellSources?.[column.name] ?? []),
+      ...rowSources,
+    ];
+    const hasExactSource = supportingSources.some(
+      (source) => normalizeHttpUrlForComparison(source) === normalizedValue,
+    );
+    const hasCellSource = (cellSources?.[column.name] ?? []).some(
+      (source) => normalizeHttpUrlForComparison(source) === normalizedValue,
+    );
+
+    if (!hasExactSource || !hasCellSource) {
+      return `URL primary key "${column.name}" must have a cell_sources entry containing the exact verified URL. If the URL 404s, redirects to another entity, or only appears in an unverified candidate, do not insert the row.`;
+    }
+  }
+
+  return undefined;
+}
+
+function isUrlPrimaryKeyColumn(column: PopulateColumn): boolean {
+  const haystack = `${column.name} ${column.description ?? ""}`.toLowerCase();
+  return column.type === "url" || /\burl\b|https?:/.test(haystack);
+}
+
+function normalizeHttpUrlForComparison(value: string): string | undefined {
+  try {
+    const parsed = new URL(value.trim());
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return undefined;
+    parsed.hash = "";
+    parsed.search = "";
+    parsed.pathname = parsed.pathname.replace(/\/+$/, "") || "/";
+    return parsed.toString().toLowerCase();
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -267,6 +330,16 @@ export function buildPopulateTools(
         options.insertDefaults?.cellSources,
         cellSourcesToRecord(cell_sources),
       );
+      const primaryKeySourceError = validatePrimaryKeySources(
+        cleanedData,
+        mergedSources,
+        mergedCellSources,
+        options.columns,
+        options.enforcePrimaryKeySources,
+      );
+      if (primaryKeySourceError) {
+        return { success: false, error: primaryKeySourceError };
+      }
       const mergedRowSummary =
         row_summary ?? options.insertDefaults?.rowSummary;
       const mergedHowFound = uniqueStrings([

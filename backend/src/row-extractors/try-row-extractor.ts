@@ -152,6 +152,7 @@ const GENERIC_EXTRACTOR_HOW_FOUND =
 const GENERIC_REFRESH_HOW_FOUND =
   "Refreshed the row target with TinyFish Browser and ran the dataset's generated Playwright extractor.";
 const inFlightExtractorBuilds = new Map<string, Promise<string>>();
+const inFlightExtractorRepairs = new Map<string, Promise<string>>();
 const extractorSmokeTests = new Map<string, ExtractorSmokeTestCase>();
 const EXTRACTOR_RUNNER_SOURCE = `
 import { chromium } from "playwright-core";
@@ -193,7 +194,11 @@ const helpers = {
 try {
   const context = browser.contexts()[0] ?? await browser.newContext();
   const page = context.pages()[0] ?? await context.newPage();
-  await page.goto(payload.url, { waitUntil: "domcontentloaded", timeout: 45000 });
+  const response = await page.goto(payload.url, { waitUntil: "domcontentloaded", timeout: 45000 });
+  const status = response?.status();
+  if (typeof status === "number" && status >= 400) {
+    throw new Error(\`start URL returned HTTP \${status}: \${page.url()}\`);
+  }
   await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
 
   const sandbox = {
@@ -233,6 +238,13 @@ try {
   await browser.close().catch(() => {});
 }
 `;
+
+class NonRepairableExtractorFailure extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "NonRepairableExtractorFailure";
+  }
+}
 
 export async function tryRowExtractor(
   input: TryRowExtractorInput,
@@ -274,6 +286,12 @@ export async function tryRowExtractor(
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    if (err instanceof NonRepairableExtractorFailure) {
+      return {
+        status: "miss",
+        reason: `browser extractor skipped repair for row-level/source issue: ${msg}`,
+      };
+    }
     if (/duplicate/i.test(msg)) {
       return {
         status: "miss",
@@ -363,6 +381,14 @@ export async function tryRefreshRowExtractor(
       input.existingData,
       input.columns,
     );
+    if (extraction.missingColumns.length > 0) {
+      return {
+        status: "miss",
+        reason: `browser extractor left unresolved columns during refresh: ${extraction.missingColumns.join(", ")}`,
+        rowSummary: extraction.rowSummary,
+        sources: extraction.sources,
+      };
+    }
     if (changedColumns.length === 0) {
       return {
         status: "unchanged",
@@ -390,6 +416,12 @@ export async function tryRefreshRowExtractor(
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    if (err instanceof NonRepairableExtractorFailure) {
+      return {
+        status: "miss",
+        reason: `browser extractor skipped repair for row-level/source issue: ${msg}`,
+      };
+    }
     return { status: "failed", reason: msg };
   }
 }
@@ -540,6 +572,12 @@ async function extractGenericRow(
       const raw = await runGeneratedExtractorScript(apiKey, input, url, script);
       const extraction = buildRowFromExtractorResult(input, url, raw, existingData);
       const qualityIssue = extractorQualityIssue(extraction, input.columns);
+      if (qualityIssue && isRowLevelQualityIssue(qualityIssue)) {
+        console.warn(
+          `[row_extractor] generated extractor produced row-level partial result for ${siteKey}; skipping repair: ${qualityIssue}`,
+        );
+        return extraction;
+      }
       if (qualityIssue) throw new Error(qualityIssue);
       rememberExtractorSmokeTest(input, url);
       return extraction;
@@ -554,6 +592,13 @@ async function extractGenericRow(
   }
 
   const failure = lastError instanceof Error ? lastError.message : String(lastError);
+  if (isNonRepairableRuntimeFailure(failure)) {
+    console.warn(
+      `[row_extractor] generated extractor failed with row-level/source issue for ${siteKey}; skipping repair: ${failure}`,
+    );
+    throw new NonRepairableExtractorFailure(failure);
+  }
+
   try {
     console.warn(
       `[row_extractor] generated extractor failed; requesting repair: ${failure}`,
@@ -1268,6 +1313,34 @@ async function repairExtractorAfterRuntimeFailure(
   script: string,
   failure: string,
 ): Promise<string> {
+  const repairKey = extractorBuildKeyForInput(input, url);
+  const siteKey = siteKeyForInput(input, url);
+  const inFlightRepair = inFlightExtractorRepairs.get(repairKey);
+  if (inFlightRepair) {
+    console.log(`[row_extractor] waiting for in-flight extractor repair for ${siteKey}`);
+    return await inFlightRepair;
+  }
+
+  const repairPromise = repairExtractorAfterRuntimeFailureImpl(
+    apiKey,
+    input,
+    url,
+    script,
+    failure,
+  ).finally(() => {
+    inFlightExtractorRepairs.delete(repairKey);
+  });
+  inFlightExtractorRepairs.set(repairKey, repairPromise);
+  return await repairPromise;
+}
+
+async function repairExtractorAfterRuntimeFailureImpl(
+  apiKey: string,
+  input: TryRowExtractorInput,
+  url: string,
+  script: string,
+  failure: string,
+): Promise<string> {
   const modelSlug = input.extractorBuilderModel ?? DEFAULT_MODEL_IDS.EXTRACTOR_BUILDER;
   const repaired = await buildExtractorScriptWithAgent(
     apiKey,
@@ -1322,6 +1395,24 @@ async function repairExtractorAfterRuntimeFailure(
     probeSummary: repaired.probeSummary,
   });
   return repaired.script;
+}
+
+function isRowLevelQualityIssue(reason: string): boolean {
+  return (
+    reason.startsWith("generated extractor missed required columns:") ||
+    reason.startsWith("generated extractor coverage too low:")
+  );
+}
+
+function isNonRepairableRuntimeFailure(reason: string): boolean {
+  return (
+    isRowLevelQualityIssue(reason) ||
+    /^primary key ".+" failed validation:/.test(reason) ||
+    /start URL returned HTTP \d{3}:/i.test(reason) ||
+    /net::ERR_HTTP_RESPONSE_CODE_FAILURE/i.test(reason) ||
+    /browserType\.connectOverCDP|WebSocket error|getaddrinfo|EAI_AGAIN|ENOTFOUND|ECONNRESET|ETIMEDOUT/i.test(reason) ||
+    /TinyFish Browser returned HTTP|Run was stopped|AbortError|TimeoutError/i.test(reason)
+  );
 }
 
 function evidenceForTool(evidence: PageEvidence): {

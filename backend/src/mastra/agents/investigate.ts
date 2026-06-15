@@ -38,9 +38,11 @@ RULES:
 - Try to stay under 6 tool calls when that is enough, but do not stop early if more searching/fetching is needed to verify requested columns.
 - Your goal is to fill every column from real, source-backed evidence. Some columns may be impossible to verify; use "" only after a reasonable targeted attempt.
 - Never fabricate values. Use "" for anything you cannot verify.
-- If the prompt says some values were already verified by browser extraction, preserve them exactly. Focus tool calls on unresolved columns.
+- Treat any browser-extracted candidate values in the prompt as hints, not truth. Re-verify primary key values and source-backed facts before inserting.
+- If a primary key cannot be verified from a real source, do not insert the row. For URL primary keys, fetch or otherwise verify the exact current URL; if it 404s, redirects to a different entity, or cannot be justified by source-backed evidence, report INSERTED: false.
 - Optional/nullable columns should still be researched. Optional only means the row can be inserted blank if you cannot verify the value.
 - Normalize values to the schema contract before inserting. Follow validation_regex and normalization_hint when present.
+- For every primary key, include cell_sources that justify that exact primary-key value. For URL primary keys, cell_sources must include the exact verified URL.
 - insert_row rejects duplicates based on primary key columns. If you get a "Duplicate" error, do NOT retry — report INSERTED: false and move on.
 
 TOOL CALL FORMAT — every tool call argument must be a JSON object wrapped in curly braces:
@@ -80,7 +82,11 @@ export function buildInvestigateAgent(
   const { insert_row } = buildPopulateTools(
     authorizedDatasetId,
     authContext,
-    options,
+    {
+      ...options,
+      columns,
+      enforcePrimaryKeySources: true,
+    },
   );
   return new Agent({
     id: "investigate-agent",

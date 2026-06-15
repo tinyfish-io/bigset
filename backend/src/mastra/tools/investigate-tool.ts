@@ -289,7 +289,7 @@ export function buildSubagentTool(
           extractorResult.status === "extracted"
             ? filledColumnNames(extractorResult, columns)
             : [];
-        const browserLockedValues =
+        const browserCandidateValues =
           extractorResult.status === "extracted"
             ? pickRowData(browserFilledValues, browserFilledColumns)
             : undefined;
@@ -301,19 +301,6 @@ export function buildSubagentTool(
           authContext,
           columns,
           llmConfig,
-          extractorResult.status === "extracted"
-            ? {
-                insertDefaults: {
-                  data: browserLockedValues,
-                  lockColumns: browserFilledColumns,
-                  sources: browserSources,
-                  cellSources: extractorResult.cellSources,
-                  rowSummary: extractorResult.rowSummary,
-                  howFoundPrefix:
-                    "Browser extraction pass ran first. The insert tool preserved browser-verified values and merged fallback research for unresolved columns.",
-                },
-              }
-            : {},
         );
 
         const pkBlock = primary_keys
@@ -328,8 +315,8 @@ export function buildSubagentTool(
           extractorResult.status === "extracted"
             ? `
 
-Browser extraction already verified these values. Do not spend tool calls re-verifying or changing them; insert_row will preserve them:
-${formatRowData(browserLockedValues)}
+Browser extraction produced these candidate values, but this row still needs fallback verification. Treat them as hints, not locked facts. Re-verify all primary key values and any non-empty candidate before insert_row. If a URL primary key 404s, redirects to a different entity, or cannot be justified by source-backed evidence, do not insert the row:
+${formatRowData(browserCandidateValues)}
 
 Unresolved columns to research now. Try every listed column, including optional ones. If a value still cannot be verified, insert "" for that column and explain why:
 ${formatUnresolvedColumns(columns, extractorResult, browserFilledColumns)}
