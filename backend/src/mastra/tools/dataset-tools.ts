@@ -3,6 +3,10 @@ import { z } from "zod";
 import { convex, internal } from "../../convex.js";
 import { capture } from "../../analytics/posthog.js";
 import { EVENTS } from "../../analytics/events.js";
+import {
+  isAbortLikeError,
+  throwIfDatasetRunAborted,
+} from "../../abort-registry.js";
 import type { AuthContext } from "../workflows/populate.js";
 import type { PopulateColumn } from "../../pipeline/populate.js";
 
@@ -308,6 +312,7 @@ export function buildPopulateTools(
   // Short prefix used in every tool's structured log line so a run's
   // entries can be grep'd together in the backend logs without parsing.
   const logCtx = `user=${authContext.authorizedUserId} run=${authContext.workflowRunId} dataset=${authorizedDatasetId}`;
+  const throwIfStopped = () => throwIfDatasetRunAborted(authorizedDatasetId);
 
   const insertRowTool = createTool({
     id: "insert_row",
@@ -341,6 +346,7 @@ export function buildPopulateTools(
     }),
     outputSchema: writeResultSchema,
     execute: async ({ data, sources, cell_sources, row_summary, how_found }) => {
+      throwIfStopped();
       if (!data || data.length === 0)
         return {
           success: false,
@@ -381,6 +387,7 @@ export function buildPopulateTools(
         `[insert_row] ${logCtx} cols=${Object.keys(cleanedData).length} sources=${mergedSources.length}`,
       );
       try {
+        throwIfStopped();
         await convex.mutation(internal.datasetRows.insert, {
           datasetId: authorizedDatasetId,
           data: cleanedData,
@@ -391,6 +398,7 @@ export function buildPopulateTools(
         });
         return { success: true };
       } catch (err) {
+        if (isAbortLikeError(err)) throw err;
         const msg = err instanceof Error ? err.message : String(err);
         console.error(`[insert_row] Failed: ${logCtx} err=${msg}`);
         if (/duplicate/i.test(msg))
@@ -423,13 +431,16 @@ export function buildPopulateTools(
       error: z.string().optional(),
     }),
     execute: async () => {
+      throwIfStopped();
       console.log(`[list_rows] ${logCtx}`);
       try {
+        throwIfStopped();
         const rows = await convex.query(internal.datasetRows.listInternal, {
           datasetId: authorizedDatasetId,
         });
         return { rows };
       } catch (err) {
+        if (isAbortLikeError(err)) throw err;
         const msg = err instanceof Error ? err.message : String(err);
         console.error(`[list_rows] Failed: ${logCtx} err=${msg}`);
         return { error: `List rows failed: ${msg}` };
@@ -449,10 +460,12 @@ export function buildPopulateTools(
       error: z.string().optional(),
     }),
     execute: async ({ rowId }) => {
+      throwIfStopped();
       if (!rowId) return { error: "rowId is required." };
 
       console.log(`[get_row] ${logCtx} row=${rowId}`);
       try {
+        throwIfStopped();
         const row = await convex.query(internal.datasetRows.get, { id: rowId });
         // Existence + ownership are collapsed into ONE uniform error so
         // the LLM (or a prompt-injecting page) can't probe row ids across
@@ -471,6 +484,7 @@ export function buildPopulateTools(
         }
         return { row };
       } catch (err) {
+        if (isAbortLikeError(err)) throw err;
         const msg = err instanceof Error ? err.message : String(err);
         console.error(`[get_row] Failed: ${logCtx} row=${rowId} err=${msg}`);
         if (msg.includes("validator") || msg.includes("Invalid"))
@@ -515,6 +529,7 @@ export function buildPopulateTools(
     }),
     outputSchema: writeResultSchema,
     execute: async ({ rowId, data, sources, cell_sources, row_summary, how_found }) => {
+      throwIfStopped();
       if (!rowId) return { success: false, error: "rowId is required." };
       if (!data || data.length === 0)
         return {
@@ -527,6 +542,7 @@ export function buildPopulateTools(
         `[update_row] ${logCtx} row=${rowId} cols=${Object.keys(cleanedData).length}`,
       );
       try {
+        throwIfStopped();
         await convex.mutation(internal.datasetRows.update, {
           id: rowId,
           expectedDatasetId: authorizedDatasetId,
@@ -540,6 +556,7 @@ export function buildPopulateTools(
         });
         return { success: true };
       } catch (err) {
+        if (isAbortLikeError(err)) throw err;
         const msg = err instanceof Error ? err.message : String(err);
         console.error(`[update_row] Failed: ${logCtx} row=${rowId} err=${msg}`);
         if (msg.includes("Row not found") || msg.includes("not found")) {
@@ -578,16 +595,19 @@ export function buildPopulateTools(
     }),
     outputSchema: writeResultSchema,
     execute: async ({ rowId }) => {
+      throwIfStopped();
       if (!rowId) return { success: false, error: "rowId is required." };
 
       console.log(`[delete_row] ${logCtx} row=${rowId}`);
       try {
+        throwIfStopped();
         await convex.mutation(internal.datasetRows.remove, {
           id: rowId,
           expectedDatasetId: authorizedDatasetId,
         });
         return { success: true };
       } catch (err) {
+        if (isAbortLikeError(err)) throw err;
         const msg = err instanceof Error ? err.message : String(err);
         console.error(`[delete_row] Failed: ${logCtx} row=${rowId} err=${msg}`);
         if (msg.includes("Row not found") || msg.includes("not found")) {

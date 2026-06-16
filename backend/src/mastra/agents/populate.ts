@@ -1,7 +1,7 @@
 import { Agent } from "@mastra/core/agent";
 import { createLanguageModel, type LlmProviderConfig } from "../../config/llm.js";
 import { buildSubagentTools } from "../tools/investigate-tool.js";
-import { searchWebTool, fetchPageTool } from "../tools/web-tools.js";
+import { buildWebTools } from "../tools/web-tools.js";
 import type { AuthContext } from "../workflows/populate.js";
 import type { CodificationProfile, PopulateColumn } from "../../pipeline/populate.js";
 import type { RunMetrics } from "../run-metrics.js";
@@ -56,6 +56,7 @@ export function buildPopulateAgent(
   metrics?: RunMetrics,
 ): Agent {
   const modelSlug = authContext.modelConfig!.populateOrchestrator;
+  const webTools = buildWebTools({ datasetId: authorizedDatasetId });
   const subagentTools = buildSubagentTools(
     authorizedDatasetId,
     authContext,
@@ -72,8 +73,7 @@ export function buildPopulateAgent(
     instructions: buildInstructions(maxRowCount),
     model: createLanguageModel(llmConfig, modelSlug),
     tools: {
-      search_web: searchWebTool,
-      fetch_page: fetchPageTool,
+      ...webTools,
       ...subagentTools,
     },
   });

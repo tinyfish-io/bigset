@@ -7,7 +7,12 @@ import { authContextSchema } from "./populate.js";
 import { requireLlmProviderConfig } from "../../local-credentials.js";
 import { RunMetrics } from "../run-metrics.js";
 import { saveRunMetrics } from "../save-run-metrics.js";
-import { getSignal } from "../../abort-registry.js";
+import {
+  getSignal,
+  isAbortLikeError,
+  isDatasetRunAborted,
+  throwIfDatasetRunAborted,
+} from "../../abort-registry.js";
 import { tryRefreshRowExtractor } from "../../row-extractors/try-row-extractor.js";
 import { AGENT_MAX_OUTPUT_TOKENS } from "../../config/agent-output-tokens.js";
 
@@ -33,6 +38,7 @@ const markAndFetchStep = createStep({
   inputSchema: updateInputSchema,
   outputSchema: markAndFetchOutputSchema,
   execute: async ({ inputData }) => {
+    throwIfDatasetRunAborted(inputData.datasetId);
     const selective = inputData.rowIds && inputData.rowIds.length > 0;
     console.log(
       `[mark-and-fetch] Marking ${selective ? inputData.rowIds!.length : "all"} rows for dataset ${inputData.datasetId}`,
@@ -42,10 +48,12 @@ const markAndFetchStep = createStep({
       datasetId: inputData.datasetId,
       ...(selective ? { rowIds: inputData.rowIds } : {}),
     });
+    throwIfDatasetRunAborted(inputData.datasetId);
 
     const rawRows = await convex.query(internal.datasetRows.listInternal, {
       datasetId: inputData.datasetId,
     });
+    throwIfDatasetRunAborted(inputData.datasetId);
 
     let rows = (rawRows as Record<string, unknown>[]).map((r) => ({
       _id: String(r._id),
@@ -120,6 +128,7 @@ const refreshRowsStep = createStep({
 
     async function processRow(row: z.infer<typeof rowSchema>) {
       try {
+        throwIfDatasetRunAborted(datasetId);
         const primaryKeyRecord = Object.fromEntries(
           pkColumns
             .map((column) => [column.name, String(row.data[column.name] ?? "").trim()])
@@ -142,6 +151,7 @@ const refreshRowsStep = createStep({
           browserAttempts: authContext.modelConfig.rowExtractorBrowserAttempts,
           extractorBuilderModel: authContext.modelConfig.extractorBuilder,
         });
+        throwIfDatasetRunAborted(datasetId);
 
         if (extractorResult.status === "updated") {
           updatedCount++;
@@ -166,12 +176,13 @@ const refreshRowsStep = createStep({
         }
 
         if (extractorResult.status === "failed") {
-          if (getSignal(datasetId)?.aborted) throwAbortError();
+          if (isDatasetRunAborted(datasetId)) throwAbortError();
           console.warn(
             `[refresh-rows] Row ${row._id}: row extractor failed; falling back to refresh agent: ${extractorResult.reason}`,
           );
         }
 
+        throwIfDatasetRunAborted(datasetId);
         const agent = buildRefreshAgent(
           datasetId,
           authContext,
@@ -207,6 +218,7 @@ ${row.rowSummary ? `\nPrevious summary: ${row.rowSummary}` : ""}
 ${row.howFound ? `\nPreviously found via: ${row.howFound}` : ""}`;
 
         const abortSignal = getSignal(datasetId);
+        throwIfDatasetRunAborted(datasetId);
         const result = await agent.generate(prompt, {
           abortSignal,
           maxSteps: 10,
@@ -240,7 +252,7 @@ ${row.howFound ? `\nPreviously found via: ${row.howFound}` : ""}`;
         // Only re-throw if OUR signal was actually fired. Spurious network
         // AbortErrors must not terminate a worker — they should be counted as
         // row errors so the rest of the dataset continues refreshing.
-        if (err instanceof Error && err.name === "AbortError" && getSignal(datasetId)?.aborted) throw err;
+        if (isAbortLikeError(err) && isDatasetRunAborted(datasetId)) throw err;
         const msg = err instanceof Error ? err.message : String(err);
         console.error(
           `[refresh-rows] Row ${row._id} failed: ${msg}`,

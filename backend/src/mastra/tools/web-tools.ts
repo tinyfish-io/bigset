@@ -1,5 +1,11 @@
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
+import {
+  datasetAbortError,
+  getSignal,
+  isAbortLikeError,
+  throwIfDatasetRunAborted,
+} from "../../abort-registry.js";
 import { FETCH_TIMEOUT_MS } from "../../fetch-timeout.js";
 import { getTinyFishApiKey, tinyFishHeaders } from "../../local-credentials.js";
 
@@ -14,6 +20,54 @@ const recentFetchFailures = new Map<
   string,
   { at: number; code: string; status?: string; message: string }
 >();
+
+interface WebToolOptions {
+  datasetId?: string;
+}
+
+function timeoutSignalForDataset(datasetId: string | undefined): {
+  signal: AbortSignal;
+  cleanup: () => void;
+  timedOut: () => boolean;
+} {
+  if (datasetId) throwIfDatasetRunAborted(datasetId);
+
+  const controller = new AbortController();
+  const runSignal = datasetId ? getSignal(datasetId) : undefined;
+  let timedOut = false;
+
+  const abortForRunStop = () => {
+    controller.abort(runSignal?.reason ?? datasetAbortError());
+  };
+  if (runSignal) {
+    runSignal.addEventListener("abort", abortForRunStop, { once: true });
+    if (runSignal.aborted) abortForRunStop();
+  }
+
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort(new DOMException("Operation timed out", "TimeoutError"));
+  }, FETCH_TIMEOUT_MS);
+
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      clearTimeout(timeout);
+      if (runSignal) runSignal.removeEventListener("abort", abortForRunStop);
+    },
+    timedOut: () => timedOut,
+  };
+}
+
+function throwIfStoppedAbort(err: unknown, datasetId: string | undefined): void {
+  if (!datasetId || getSignal(datasetId)?.aborted !== true) return;
+  if (
+    isAbortLikeError(err) ||
+    (err instanceof Error && err.name === "TimeoutError")
+  ) {
+    throw datasetAbortError();
+  }
+}
 
 function cachedFetchFailure(url: string): string | undefined {
   const cached = recentFetchFailures.get(url);
@@ -61,7 +115,9 @@ function fetchPageErrorMessage(code: string, status: string | undefined): string
   return hints[code] ?? `Fetch failed: ${code}. Try a different URL.`;
 }
 
-export const searchWebTool = createTool({
+function buildSearchWebTool(options: WebToolOptions = {}) {
+  const datasetId = options.datasetId;
+  return createTool({
   id: "search_web",
   description:
     'Search the web for information. Returns a list of results with titles, snippets, and URLs. Call with: {"query": "your search terms"}',
@@ -73,8 +129,10 @@ export const searchWebTool = createTool({
     error: z.string().optional(),
   }),
   execute: async ({ query }) => {
-    if (!query?.trim())
+    query = query?.trim();
+    if (!query)
       return { error: "query is required and cannot be empty." };
+    if (datasetId) throwIfDatasetRunAborted(datasetId);
 
     const apiKey = await getTinyFishApiKey();
     if (!apiKey)
@@ -83,14 +141,13 @@ export const searchWebTool = createTool({
     const url = `https://api.search.tinyfish.ai?query=${encodeURIComponent(query)}`;
     console.log(`[search_web] Searching: "${query}"`);
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    const request = timeoutSignalForDataset(datasetId);
     try {
       const res = await fetch(url, {
         headers: tinyFishHeaders(apiKey),
-        signal: controller.signal,
+        signal: request.signal,
       });
-      clearTimeout(timeout);
+      if (datasetId) throwIfDatasetRunAborted(datasetId);
 
       if (!res.ok) {
         const body = await res.text();
@@ -103,6 +160,7 @@ export const searchWebTool = createTool({
       }
 
       const data = await res.json();
+      if (datasetId) throwIfDatasetRunAborted(datasetId);
       const results = (data.results ?? []).map((r: Record<string, unknown>) => ({
         title: r.title as string,
         snippet: r.snippet as string,
@@ -114,17 +172,25 @@ export const searchWebTool = createTool({
         return { results: [], error: "No results found for this query. Try a broader search or use synthetic data." };
       return { results };
     } catch (err) {
-      clearTimeout(timeout);
-      if (err instanceof Error && err.name === "AbortError")
+      throwIfStoppedAbort(err, datasetId);
+      if (
+        request.timedOut() ||
+        (err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError"))
+      )
         return { error: "Search timed out. Skip web search and use synthetic data." };
       const msg = err instanceof Error ? err.message : String(err);
       console.error(`[search_web] Failed:`, msg);
       return { error: `Search failed: ${msg}. Skip web search and use synthetic data.` };
+    } finally {
+      request.cleanup();
     }
   },
-});
+  });
+}
 
-export const fetchPageTool = createTool({
+function buildFetchPageTool(options: WebToolOptions = {}) {
+  const datasetId = options.datasetId;
+  return createTool({
   id: "fetch_page",
   description:
     'Fetch a web page and extract its content as clean markdown text. Call with: {"url": "https://example.com/page"}',
@@ -142,6 +208,7 @@ export const fetchPageTool = createTool({
       return { error: "url is required and cannot be empty." };
     if (!targetUrl.startsWith("http://") && !targetUrl.startsWith("https://"))
       return { error: `Invalid URL "${targetUrl}". Must start with http:// or https://.` };
+    if (datasetId) throwIfDatasetRunAborted(datasetId);
 
     const apiKey = await getTinyFishApiKey();
     if (!apiKey)
@@ -152,8 +219,7 @@ export const fetchPageTool = createTool({
 
     console.log(`[fetch_page] Fetching: ${targetUrl}`);
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    const request = timeoutSignalForDataset(datasetId);
     try {
       const res = await fetch("https://api.fetch.tinyfish.ai", {
         method: "POST",
@@ -162,9 +228,9 @@ export const fetchPageTool = createTool({
           ...tinyFishHeaders(apiKey),
         },
         body: JSON.stringify({ urls: [targetUrl], format: "markdown" }),
-        signal: controller.signal,
+        signal: request.signal,
       });
-      clearTimeout(timeout);
+      if (datasetId) throwIfDatasetRunAborted(datasetId);
 
       if (!res.ok) {
         const body = await res.text();
@@ -177,6 +243,7 @@ export const fetchPageTool = createTool({
       }
 
       const data = await res.json();
+      if (datasetId) throwIfDatasetRunAborted(datasetId);
 
       if (data.errors?.length > 0) {
         const err = data.errors[0];
@@ -206,12 +273,28 @@ export const fetchPageTool = createTool({
         text,
       };
     } catch (err) {
-      clearTimeout(timeout);
-      if (err instanceof Error && err.name === "AbortError")
+      throwIfStoppedAbort(err, datasetId);
+      if (
+        request.timedOut() ||
+        (err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError"))
+      )
         return { error: "Page fetch timed out. Try a different URL or use search snippet data." };
       const msg = err instanceof Error ? err.message : String(err);
       console.error(`[fetch_page] Failed:`, msg);
       return { error: `Fetch failed: ${msg}. Use data from search snippets instead.` };
+    } finally {
+      request.cleanup();
     }
   },
-});
+  });
+}
+
+export function buildWebTools(options: WebToolOptions = {}) {
+  return {
+    search_web: buildSearchWebTool(options),
+    fetch_page: buildFetchPageTool(options),
+  };
+}
+
+export const searchWebTool = buildSearchWebTool();
+export const fetchPageTool = buildFetchPageTool();

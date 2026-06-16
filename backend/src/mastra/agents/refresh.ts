@@ -1,7 +1,7 @@
 import { Agent } from "@mastra/core/agent";
 import { createLanguageModel, type LlmProviderConfig } from "../../config/llm.js";
 import { buildPopulateTools } from "../tools/dataset-tools.js";
-import { searchWebTool, fetchPageTool } from "../tools/web-tools.js";
+import { buildWebTools } from "../tools/web-tools.js";
 import type { AuthContext } from "../workflows/populate.js";
 import type { PopulateColumn } from "../../pipeline/populate.js";
 
@@ -57,6 +57,7 @@ export function buildRefreshAgent(
   llmConfig: LlmProviderConfig,
 ): Agent {
   const modelSlug = authContext.modelConfig!.investigateSubagent;
+  const webTools = buildWebTools({ datasetId: authorizedDatasetId });
   const { update_row } = buildPopulateTools(
     authorizedDatasetId,
     authContext,
@@ -68,8 +69,7 @@ export function buildRefreshAgent(
     model: createLanguageModel(llmConfig, modelSlug),
     tools: {
       update_row,
-      search_web: searchWebTool,
-      fetch_page: fetchPageTool,
+      ...webTools,
     },
   });
 }

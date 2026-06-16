@@ -35,6 +35,25 @@ export function getSignal(datasetId: string): AbortSignal | undefined {
   return controllers.get(datasetId)?.signal;
 }
 
+export function datasetAbortError(): DOMException {
+  return new DOMException("Run was stopped", "AbortError");
+}
+
+export function isDatasetRunAborted(datasetId: string): boolean {
+  return getSignal(datasetId)?.aborted === true;
+}
+
+export function throwIfDatasetRunAborted(datasetId: string): void {
+  if (isDatasetRunAborted(datasetId)) {
+    throw datasetAbortError();
+  }
+}
+
+export function isAbortLikeError(err: unknown): boolean {
+  if (err instanceof DOMException && err.name === "AbortError") return true;
+  return err instanceof Error && err.name === "AbortError";
+}
+
 /** Number of dataset runs currently active in this process. */
 export function activeDatasetRunCount(): number {
   return controllers.size;

@@ -1,7 +1,7 @@
 import { Agent } from "@mastra/core/agent";
 import { createLanguageModel, type LlmProviderConfig } from "../../config/llm.js";
 import { buildPopulateTools } from "../tools/dataset-tools.js";
-import { searchWebTool, fetchPageTool } from "../tools/web-tools.js";
+import { buildWebTools } from "../tools/web-tools.js";
 import type { AuthContext } from "../workflows/populate.js";
 import type { PopulateColumn } from "../../pipeline/populate.js";
 
@@ -84,6 +84,7 @@ export function buildInvestigateAgent(
   options: InvestigateAgentOptions = {},
 ): Agent {
   const modelSlug = authContext.modelConfig!.investigateSubagent;
+  const webTools = buildWebTools({ datasetId: authorizedDatasetId });
 
   const { insert_row } = buildPopulateTools(
     authorizedDatasetId,
@@ -103,8 +104,7 @@ export function buildInvestigateAgent(
 
     tools: {
       insert_row,
-      search_web: searchWebTool,
-      fetch_page: fetchPageTool,
+      ...webTools,
     },
   });
 }
