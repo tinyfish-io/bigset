@@ -34,6 +34,7 @@
     "dotenv": "^16.4.0",
     "fastify": "^5.0.0",
     "fastify-plugin": "^5.1.0",
+    "just-bash": "^3.0.1",
     "playwright-core": "^1.60.0",
     "posthog-node": "^5.35.1",
     "resend": "^6.12.3",

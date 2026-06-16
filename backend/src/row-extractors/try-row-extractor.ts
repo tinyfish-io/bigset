@@ -149,15 +149,17 @@ const EXTRACTOR_BUILDER_MAX_STEPS = 80;
 const EXTRACTOR_REPAIR_MAX_STEPS = 24;
 const BACKEND_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const GENERIC_EXTRACTOR_HOW_FOUND =
-  "Opened the row target with TinyFish Browser and ran the dataset's generated Playwright extractor.";
+  "Opened the row target with TinyFish Browser and ran the dataset's sandboxed browser extractor.";
 const GENERIC_REFRESH_HOW_FOUND =
-  "Refreshed the row target with TinyFish Browser and ran the dataset's generated Playwright extractor.";
+  "Refreshed the row target with TinyFish Browser and ran the dataset's sandboxed browser extractor.";
 const inFlightExtractorBuilds = new Map<string, Promise<string>>();
 const inFlightExtractorRepairs = new Map<string, Promise<string>>();
 const extractorSmokeTests = new Map<string, ExtractorSmokeTestCase>();
 const EXTRACTOR_RUNNER_SOURCE = `
 import { chromium } from "playwright-core";
-import vm from "node:vm";
+import { Bash, InMemoryFs } from "just-bash";
+import dns from "node:dns/promises";
+import net from "node:net";
 
 const chunks = [];
 for await (const chunk of process.stdin) chunks.push(chunk);
@@ -165,6 +167,81 @@ const payload = JSON.parse(Buffer.concat(chunks).toString("utf8"));
 
 const browser = await chromium.connectOverCDP(payload.cdpUrl, { timeout: 45000 });
 let timeout;
+let abortController;
+
+const MAX_SELECTOR_LENGTH = 2000;
+const MAX_COMMAND_OUTPUT_CHARS = 256000;
+const MAX_HTTP_RESPONSE_BYTES = 20 * 1024 * 1024;
+const PUBLIC_HTTP_TIMEOUT_MS = 30000;
+const PUBLIC_HTTP_MAX_REDIRECTS = 10;
+const HTTP_REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+const HTTP_METHODS = new Set(["GET", "HEAD"]);
+const EXTRACTOR_COMMANDS = [
+  "cat",
+  "printf",
+  "echo",
+  "grep",
+  "fgrep",
+  "egrep",
+  "rg",
+  "sed",
+  "awk",
+  "sort",
+  "uniq",
+  "comm",
+  "cut",
+  "paste",
+  "tr",
+  "rev",
+  "nl",
+  "fold",
+  "expand",
+  "unexpand",
+  "strings",
+  "split",
+  "column",
+  "join",
+  "head",
+  "tail",
+  "wc",
+  "xargs",
+  "jq",
+  "yq",
+  "xan",
+  "sqlite3",
+  "base64",
+  "gzip",
+  "gunzip",
+  "zcat",
+  "tar",
+  "file",
+  "find",
+  "ls",
+  "mkdir",
+  "rmdir",
+  "rm",
+  "cp",
+  "mv",
+  "touch",
+  "pwd",
+  "dirname",
+  "basename",
+  "tee",
+  "date",
+  "seq",
+  "expr",
+  "md5sum",
+  "sha1sum",
+  "sha256sum",
+  "true",
+  "false",
+  "sleep",
+  "timeout",
+  "env",
+  "printenv",
+  "which",
+  "html-to-markdown",
+];
 
 const cleanText = (value) => String(value ?? "").replace(/\\s+/g, " ").trim();
 const parseCompactNumber = (value) => {
@@ -177,20 +254,373 @@ const parseCompactNumber = (value) => {
   const multiplier = suffix === "k" ? 1000 : suffix === "m" ? 1000000 : suffix === "b" ? 1000000000 : 1;
   return Math.round(base * multiplier * 100) / 100;
 };
-const helpers = {
-  cleanText,
-  parseNumber: parseCompactNumber,
-  parseCompactNumber,
-  parsePrice: parseCompactNumber,
-  parseRating: parseCompactNumber,
-  absoluteUrl: (value, base = payload.url) => {
-    try {
-      return new URL(String(value ?? ""), base).toString();
-    } catch {
-      return "";
+
+const helpersPython = [
+  "import json, re, sys, urllib.parse",
+  "",
+  "def clean_text(value):",
+  "    return re.sub(r'\\\\s+', ' ', str(value or '')).strip()",
+  "",
+  "def parse_compact_number(value):",
+  "    text = str(value or '').replace(',', '')",
+  "    match = re.search(r'[$€£]?\\\\s*([0-9]+(?:\\\\.[0-9]+)?)\\\\s*([kmb])?', text, re.I) or re.search(r'([0-9]+(?:\\\\.[0-9]+)?)', text)",
+  "    if not match:",
+  "        return None",
+  "    base = float(match.group(1))",
+  "    suffix = (match.group(2) or '').lower() if len(match.groups()) > 1 else ''",
+  "    mult = {'k': 1000, 'm': 1000000, 'b': 1000000000}.get(suffix, 1)",
+  "    value = round(base * mult, 2)",
+  "    return int(value) if value.is_integer() else value",
+  "",
+  "parse_number = parse_compact_number",
+  "parse_price = parse_compact_number",
+  "parse_rating = parse_compact_number",
+  "",
+  "def absolute_url(value, base=None):",
+  "    return urllib.parse.urljoin(base or '', str(value or ''))",
+  "",
+].join("\\n");
+
+function ok(stdout = "") {
+  return { stdout, stderr: "", exitCode: 0 };
+}
+
+function fail(err) {
+  const message = err instanceof Error ? err.message : String(err);
+  return { stdout: "", stderr: message + "\\n", exitCode: 1 };
+}
+
+function trimOutput(value, limit = MAX_COMMAND_OUTPUT_CHARS) {
+  const text = String(value ?? "");
+  return text.length > limit ? text.slice(0, limit) : text;
+}
+
+function jsonOutput(value) {
+  return ok(trimOutput(JSON.stringify(value)) + "\\n");
+}
+
+function textOutput(value) {
+  return ok(trimOutput(value) + "\\n");
+}
+
+function arg(args, index, name) {
+  const value = args[index];
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(name + " is required");
+  }
+  return value;
+}
+
+function parseLimit(value, fallback, max) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.min(Math.floor(parsed), max);
+}
+
+function ensureSelector(selector) {
+  if (selector.length > MAX_SELECTOR_LENGTH) {
+    throw new Error("selector is too long");
+  }
+  return selector;
+}
+
+function command(name, execute) {
+  return {
+    name,
+    trusted: true,
+    execute: async (args, ctx) => {
+      try {
+        return await execute(args, ctx);
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  };
+}
+
+async function firstLocator(page, selector) {
+  return page.locator(ensureSelector(selector)).first();
+}
+
+function pageCommands(page) {
+  return [
+    command("page-goto", async (args) => {
+      const target = coerceHttpUrl(args[0] || payload.url);
+      const response = await page.goto(target, {
+        waitUntil: "domcontentloaded",
+        timeout: 45000,
+      });
+      const status = response?.status();
+      if (typeof status === "number" && status >= 400) {
+        throw new Error("page-goto returned HTTP " + status + ": " + page.url());
+      }
+      await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
+      return textOutput(page.url());
+    }),
+    command("page-url", async () => textOutput(page.url())),
+    command("page-title", async () => textOutput(cleanText(await page.title()))),
+    command("page-text", async (args) => {
+      const locator = await firstLocator(page, arg(args, 0, "selector"));
+      return textOutput(cleanText(await locator.textContent({ timeout: 10000 }).catch(() => "")));
+    }),
+    command("page-texts", async (args) => {
+      const selector = ensureSelector(arg(args, 0, "selector"));
+      const limit = parseLimit(args[1], 50, 200);
+      const values = await page.locator(selector).evaluateAll(
+        (elements, max) => elements
+          .slice(0, max)
+          .map((element) => String(element.textContent ?? "").replace(/\\s+/g, " ").trim())
+          .filter(Boolean),
+        limit,
+      );
+      return jsonOutput(values);
+    }),
+    command("page-attr", async (args) => {
+      const locator = await firstLocator(page, arg(args, 0, "selector"));
+      const name = arg(args, 1, "attribute");
+      return textOutput(cleanText(await locator.getAttribute(name, { timeout: 10000 }).catch(() => "")));
+    }),
+    command("page-count", async (args) => {
+      const selector = ensureSelector(arg(args, 0, "selector"));
+      return textOutput(String(await page.locator(selector).count()));
+    }),
+    command("page-exists", async (args) => {
+      const selector = ensureSelector(arg(args, 0, "selector"));
+      return textOutput((await page.locator(selector).count()) > 0 ? "true" : "false");
+    }),
+    command("page-wait", async (args) => {
+      const selector = ensureSelector(arg(args, 0, "selector"));
+      const timeoutMs = parseLimit(args[1], 10000, 30000);
+      await page.locator(selector).first().waitFor({ state: "visible", timeout: timeoutMs });
+      return textOutput("ok");
+    }),
+    command("page-click", async (args) => {
+      const locator = await firstLocator(page, arg(args, 0, "selector"));
+      await locator.click({ timeout: 10000 });
+      await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
+      return textOutput(page.url());
+    }),
+    command("page-fill", async (args) => {
+      const locator = await firstLocator(page, arg(args, 0, "selector"));
+      await locator.fill(args[1] ?? "", { timeout: 10000 });
+      return textOutput("ok");
+    }),
+    command("page-meta", async (args) => {
+      const name = arg(args, 0, "name");
+      const value = await page.evaluate((metaName) => {
+        const normalized = String(metaName || "").toLowerCase();
+        if (normalized === "canonical") {
+          return document.querySelector('link[rel="canonical"]')?.getAttribute("href") || "";
+        }
+        const wanted = String(metaName || "").toLowerCase();
+        for (const element of Array.from(document.querySelectorAll("meta"))) {
+          const key = (
+            element.getAttribute("name") ||
+            element.getAttribute("property") ||
+            ""
+          ).toLowerCase();
+          if (key === wanted) return element.getAttribute("content") || "";
+        }
+        return "";
+      }, name);
+      return textOutput(cleanText(value));
+    }),
+    command("page-jsonld", async () => {
+      const values = await page.evaluate(() => {
+        return Array.from(document.querySelectorAll('script[type="application/ld+json"]'))
+          .map((script) => {
+            try {
+              return JSON.parse(script.textContent || "");
+            } catch {
+              return undefined;
+            }
+          })
+          .filter((value) => value !== undefined);
+      });
+      return jsonOutput(values);
+    }),
+    command("page-links", async (args) => {
+      const limit = parseLimit(args[0], 100, 500);
+      const values = await page.evaluate((max) => {
+        const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+        return Array.from(document.querySelectorAll("a[href]"))
+          .slice(0, max)
+          .map((element) => ({
+            text: clean(element.textContent || element.getAttribute("aria-label") || ""),
+            href: element.href,
+          }))
+          .filter((link) => /^https?:\\/\\//i.test(link.href));
+      }, limit);
+      return jsonOutput(values);
+    }),
+    command("page-visible-text", async (args) => {
+      const limit = parseLimit(args[0], 60000, 200000);
+      const text = await page.evaluate((max) => {
+        return String(document.body?.innerText || "")
+          .replace(/\\s+/g, " ")
+          .trim()
+          .slice(0, max);
+      }, limit);
+      return textOutput(text);
+    }),
+  ];
+}
+
+function coerceHttpUrl(value) {
+  const url = new URL(String(value || ""), payload.url);
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("only http(s) URLs are allowed");
+  }
+  return url.toString();
+}
+
+async function assertPublicHttpUrl(value) {
+  const url = new URL(String(value || ""));
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("curl only supports http(s) URLs");
+  }
+  const host = normalizeHost(url.hostname);
+  if (!host || host === "localhost" || host.endsWith(".localhost") || host === "host.docker.internal" || host.endsWith(".internal")) {
+    throw new Error("private/internal host is not allowed: " + host);
+  }
+  if (net.isIP(host) === 0 && !host.includes(".")) {
+    throw new Error("single-label host is not allowed: " + host);
+  }
+  if (isPrivateAddress(host)) {
+    throw new Error("private/internal IP is not allowed: " + host);
+  }
+  if (net.isIP(host) === 0) {
+    const records = await dns.lookup(host, { all: true });
+    for (const record of records) {
+      if (isPrivateAddress(record.address)) {
+        throw new Error("host resolves to a private/internal IP: " + host);
+      }
     }
-  },
-};
+  }
+  return url.toString();
+}
+
+function normalizeHost(hostname) {
+  return String(hostname || "").toLowerCase().replace(/^\\[(.*)\\]$/, "$1");
+}
+
+function isPrivateAddress(address) {
+  const normalized = normalizeHost(address);
+  const family = net.isIP(normalized);
+  if (family === 4) return isPrivateIpv4(normalized);
+  if (family === 6) return isPrivateIpv6(normalized);
+  return false;
+}
+
+function isPrivateIpv4(address) {
+  const parts = address.split(".").map((part) => Number(part));
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
+    return true;
+  }
+  const [a, b] = parts;
+  return (
+    a === 0 ||
+    a === 10 ||
+    a === 127 ||
+    (a === 100 && b >= 64 && b <= 127) ||
+    (a === 169 && b === 254) ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    (a === 198 && (b === 18 || b === 19)) ||
+    a >= 224
+  );
+}
+
+function isPrivateIpv6(address) {
+  const value = address.toLowerCase();
+  if (value === "::" || value === "::1") return true;
+  if (value.startsWith("fc") || value.startsWith("fd")) return true;
+  if (/^fe[89ab]/.test(value)) return true;
+  if (value.startsWith("::ffff:")) {
+    const mapped = value.slice("::ffff:".length);
+    return isPrivateAddress(mapped);
+  }
+  return false;
+}
+
+async function publicFetch(rawUrl, options = {}) {
+  const method = String(options.method ?? "GET").toUpperCase();
+  if (!HTTP_METHODS.has(method)) {
+    throw new Error("HTTP method not allowed in extractor sandbox: " + method);
+  }
+
+  let current = await assertPublicHttpUrl(rawUrl);
+  const followRedirects = options.followRedirects ?? true;
+  const timeoutMs = Math.min(Number(options.timeoutMs) || PUBLIC_HTTP_TIMEOUT_MS, PUBLIC_HTTP_TIMEOUT_MS);
+
+  for (let redirects = 0; ; redirects++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(current, {
+        method,
+        headers: options.headers,
+        redirect: "manual",
+        signal: controller.signal,
+      });
+
+      if (followRedirects && HTTP_REDIRECT_STATUSES.has(response.status)) {
+        const location = response.headers.get("location");
+        if (!location) return await responseToFetchResult(response, current, method);
+        if (redirects >= PUBLIC_HTTP_MAX_REDIRECTS) {
+          throw new Error("too many redirects");
+        }
+        current = await assertPublicHttpUrl(new URL(location, current).toString());
+        continue;
+      }
+
+      return await responseToFetchResult(response, current, method);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+}
+
+async function responseToFetchResult(response, url, method) {
+  const headers = Object.create(null);
+  response.headers.forEach((value, key) => {
+    headers[key.toLowerCase()] = value;
+  });
+  const length = Number(response.headers.get("content-length") || "0");
+  if (length > MAX_HTTP_RESPONSE_BYTES) {
+    throw new Error("HTTP response too large");
+  }
+  const body = method === "HEAD"
+    ? new Uint8Array()
+    : new Uint8Array(await response.arrayBuffer());
+  if (body.byteLength > MAX_HTTP_RESPONSE_BYTES) {
+    throw new Error("HTTP response too large");
+  }
+  return {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+    body,
+    url,
+  };
+}
+
+function parseExtractorOutput(stdout) {
+  const trimmed = String(stdout || "").trim();
+  if (!trimmed) throw new Error("extractor script produced no JSON output");
+  try {
+    return JSON.parse(trimmed);
+  } catch {}
+  const lines = trimmed.split(/\\r?\\n/).map((line) => line.trim()).filter(Boolean);
+  for (let index = lines.length - 1; index >= 0; index--) {
+    const line = lines[index];
+    if (!line.startsWith("{")) continue;
+    try {
+      return JSON.parse(line);
+    } catch {}
+  }
+  throw new Error("extractor script did not print a JSON object on stdout");
+}
 
 try {
   const context = browser.contexts()[0] ?? await browser.newContext();
@@ -198,44 +628,67 @@ try {
   const response = await page.goto(payload.url, { waitUntil: "domcontentloaded", timeout: 45000 });
   const status = response?.status();
   if (typeof status === "number" && status >= 400) {
-    throw new Error(\`start URL returned HTTP \${status}: \${page.url()}\`);
+    throw new Error("start URL returned HTTP " + status + ": " + page.url());
   }
   await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
 
-  const sandbox = {
-    URL,
-    Date,
-    Math,
-    JSON,
-    RegExp,
-    String,
-    Number,
-    Boolean,
-    Array,
-    Object,
-    Promise,
-    setTimeout,
-    clearTimeout,
-    console: { log() {}, warn() {}, error() {} },
-  };
-  vm.createContext(sandbox, { codeGeneration: { strings: false, wasm: false } });
-  const compiled = new vm.Script(payload.script + "\\n;globalThis.__extract = extract;", {
-    filename: "generated-extractor.js",
+  const sandbox = new Bash({
+    fs: new InMemoryFs({
+      "/input.json": JSON.stringify(payload.input, null, 2),
+      "/schema.json": JSON.stringify(payload.input.columns ?? [], null, 2),
+      "/helpers.py": helpersPython,
+    }),
+    cwd: "/home/user",
+    env: {
+      START_URL: payload.url,
+      INPUT_JSON: "/input.json",
+      SCHEMA_JSON: "/schema.json",
+      PYTHONPATH: "/",
+    },
+    commands: EXTRACTOR_COMMANDS,
+    customCommands: pageCommands(page),
+    fetch: publicFetch,
+    python: true,
+    javascript: false,
+    defenseInDepth: true,
+    executionLimits: {
+      maxCallDepth: 100,
+      maxCommandCount: 20000,
+      maxLoopIterations: 100000,
+      maxAwkIterations: 100000,
+      maxSedIterations: 100000,
+    },
   });
-  compiled.runInContext(sandbox, { timeout: 1000 });
-  const extract = sandbox.__extract;
-  if (typeof extract !== "function") throw new Error("extract is not a function");
 
+  abortController = new AbortController();
   const timeoutPromise = new Promise((_, reject) => {
-    timeout = setTimeout(() => reject(new Error("extract timed out")), payload.timeoutMs);
+    timeout = setTimeout(() => {
+      abortController.abort();
+      reject(new Error("extract timed out"));
+    }, payload.timeoutMs);
   });
-  const result = await Promise.race([
-    extract({ page, input: payload.input, helpers }),
+  const execResult = await Promise.race([
+    sandbox.exec(payload.script, {
+      rawScript: true,
+      replaceEnv: true,
+      env: {
+        START_URL: payload.url,
+        INPUT_JSON: "/input.json",
+        SCHEMA_JSON: "/schema.json",
+        PYTHONPATH: "/",
+      },
+      signal: abortController.signal,
+    }),
     timeoutPromise,
   ]);
+  if (execResult.exitCode !== 0) {
+    throw new Error((execResult.stderr || "extractor script failed").trim());
+  }
+  const result = parseExtractorOutput(execResult.stdout);
   process.stdout.write(JSON.stringify(result ?? {}));
 } finally {
   if (timeout) clearTimeout(timeout);
+  if (abortController) abortController.abort();
   await browser.close().catch(() => {});
 }
 `;
@@ -613,7 +1066,7 @@ async function extractGenericRow(
   for (let attempt = 1; attempt <= attempts; attempt++) {
     try {
       console.log(
-        `[row_extractor] running generated Playwright extractor for ${siteKey} attempt=${attempt}/${attempts}`,
+        `[row_extractor] running generated sandboxed browser extractor for ${siteKey} attempt=${attempt}/${attempts}`,
       );
       const raw = await runGeneratedExtractorScript(apiKey, input, url, script);
       const extraction = buildRowFromExtractorResult(input, url, raw, existingData);
@@ -658,7 +1111,7 @@ async function extractGenericRow(
       script,
       failure,
     );
-    console.log(`[row_extractor] running repaired Playwright extractor for ${siteKey}`);
+    console.log(`[row_extractor] running repaired sandboxed browser extractor for ${siteKey}`);
     const raw = await runGeneratedExtractorScript(apiKey, input, url, repaired);
     const extraction = buildRowFromExtractorResult(input, url, raw, existingData);
     const qualityIssue = extractorQualityIssue(extraction, input.columns);
@@ -705,7 +1158,7 @@ async function getOrBuildExtractorScript(
     columnsHash,
   })) as { script?: string } | null;
   if (existing?.script) {
-    console.log(`[row_extractor] using cached generated Playwright extractor for ${siteKey}`);
+    console.log(`[row_extractor] using cached generated sandboxed browser extractor for ${siteKey}`);
     return existing.script;
   }
 
@@ -892,7 +1345,7 @@ function cloneSmokeTestInput(input: TryRowExtractorInput): TryRowExtractorInput 
 }
 
 function isBrowserExtractedRow(howFound: string | undefined): boolean {
-  return Boolean(howFound && /generated Playwright extractor/i.test(howFound));
+  return Boolean(howFound && /generated (?:Playwright|sandboxed browser) extractor/i.test(howFound));
 }
 
 function storedRowHasCompleteValues(
@@ -1262,9 +1715,9 @@ async function buildExtractorScriptWithAgent(
   const testExtractorTool = createTool({
     id: "test_extractor",
     description:
-      "Run a candidate Playwright extractor in BigSet's sandbox against the representative row and return validation feedback. Call this repeatedly while improving the script.",
+      "Run a candidate sandboxed Bash/Python extractor against the representative row and return validation feedback. Call this repeatedly while improving the script.",
     inputSchema: z.object({
-      script: z.string().describe("The full JavaScript extractor script defining async function extract({ page, input, helpers })."),
+      script: z.string().describe("The full Bash extractor script. It may call BigSet page-* commands, curl, jq, and python3, and must print one JSON object."),
     }),
     outputSchema: z.object({
       ok: z.boolean(),
@@ -1295,7 +1748,7 @@ async function buildExtractorScriptWithAgent(
     description:
       "Finalize a candidate extractor. This runs the same sandbox validation as test_extractor and only accepts the script if it passes.",
     inputSchema: z.object({
-      script: z.string().describe("The full JavaScript extractor script to persist."),
+      script: z.string().describe("The full Bash extractor script to persist."),
       notes: z.string().optional().describe("Brief notes about the page pattern this script supports."),
     }),
     outputSchema: z.object({
@@ -1329,7 +1782,7 @@ async function buildExtractorScriptWithAgent(
   const declineExtractorTool = createTool({
     id: "decline_extractor",
     description:
-      "Use this when the representative row is not a good fit for a reusable Playwright extractor, for example arbitrary unrelated URLs, CAPTCHA/blocking, or no stable page family.",
+      "Use this when the representative row is not a good fit for a reusable sandboxed browser extractor, for example arbitrary unrelated URLs, CAPTCHA/blocking, or no stable page family.",
     inputSchema: z.object({
       reason: z.string().describe("Concrete reason this row/site pattern should fall back to the normal investigate agent."),
       category: z
@@ -1641,7 +2094,7 @@ function reasonForLog(reason: string): string {
 function extractorBuilderAgentInstructions(): string {
   return `You are BigSet's autonomous extractor builder agent.
 
-Your job is to build a reusable Playwright extractor script for one dataset/page family. You have browser inspection and sandbox testing tools. Use whichever tools fit the situation; do not follow a rigid checklist.
+Your job is to build a reusable sandboxed extractor script for one dataset/page family. You have browser inspection and sandbox testing tools. Use whichever tools fit the situation; do not follow a rigid checklist.
 
 Critical behavior:
 - Inspect pages when structure, source URLs, or primary key semantics are unclear.
@@ -1668,40 +2121,66 @@ Important modeling rules:
 - You may derive values from page structure instead of finding literal labels. For example: count repeated cards in a relevant section, infer booleans from the presence of controls/badges, parse counts from aria labels, or normalize visible variants into the schema's final format.
 
 Script contract:
-- Return only a full JavaScript script in tool arguments, never Markdown fences.
-- Define exactly: async function extract({ page, input, helpers }) { ... }
-- Do not import anything.
-- Do not use require, process, fs, child_process, fetch, XMLHttpRequest, WebSocket, eval, new Function, Node http/https/net modules, direct database APIs, or Convex APIs.
-- Use only the provided Playwright page, input, and helpers.
-- You may use page.goto, locators, evaluate, textContent, getAttribute, and other Playwright page APIs.
+- Return only a full Bash script in tool arguments, never Markdown fences.
+- Do not write JavaScript. Do not define async function extract. Do not use Playwright APIs directly.
+- The script runs in a just-bash sandbox with a virtual filesystem. It can read /input.json, /schema.json, and /helpers.py.
+- The script must print exactly one JSON object on stdout as its final non-empty line.
+- The script may use Bash, jq, sed, awk, grep, rg, yq, xan, sqlite3, tar/gzip, curl, and python3.
+- Python may import /helpers.py for clean_text, parse_compact_number, parse_number, parse_price, parse_rating, and absolute_url.
+- JavaScript execution is unavailable. Network access is public HTTP(S) GET/HEAD only via curl; private/internal hosts are blocked.
+- Browser access is only through these BigSet commands:
+  - page-goto [url]: navigate the TinyFish Browser page and print the final URL.
+  - page-url: print the current page URL.
+  - page-title: print the page title.
+  - page-text CSS_SELECTOR: print the first matching element's cleaned text.
+  - page-texts CSS_SELECTOR [limit]: print a JSON array of cleaned matching texts.
+  - page-attr CSS_SELECTOR ATTRIBUTE: print the first matching element attribute.
+  - page-count CSS_SELECTOR: print the match count.
+  - page-exists CSS_SELECTOR: print true or false.
+  - page-wait CSS_SELECTOR [timeout_ms]: wait for a visible element.
+  - page-click CSS_SELECTOR: click an element and print the resulting URL.
+  - page-fill CSS_SELECTOR VALUE: fill an input.
+  - page-meta NAME_OR_PROPERTY: print a meta tag content value, or canonical for canonical link.
+  - page-jsonld: print a JSON array of parsed application/ld+json objects.
+  - page-links [limit]: print a JSON array of {text, href} links.
+  - page-visible-text [limit]: print cleaned visible page text.
 - Prefer stable DOM sources: JSON-LD, meta tags, tables, definition lists, visible labels, aria labels, canonical links, and semantically named selectors.
 - Return { data, column_status, cell_sources, sources, row_summary, how_found }.
-- data should include every dataset column that Playwright can extract or derive. Preserve primary key values from input.primaryKeys.
+- data should include every dataset column that the sandboxed browser commands can extract or derive. Preserve primary key values from input.primaryKeys.
 - column_status should include every dataset column. Use status "extracted" or "derived" for values in data. Use "not_present_on_page", "blocked", "ambiguous", "validation_failed", or "fallback_needed" for unresolved values, with a short reason.
 - cell_sources should map each extracted/derived column to the exact HTTP URL(s) that justify that specific value. Do not put row-level sources here.
 - Returned sources must be HTTP URLs you actually used.
 - If any column cannot be extracted or normalized to satisfy validation_regex, keep investigating with the browser tools. If it still cannot be solved from the browser page family, mark it in column_status for fallback instead of fabricating a value.
 
 Starter-code reference only. This shape will not work on the target site until you inspect the actual page and replace the URL construction/selectors:
-async function extract({ page, input, helpers }) {
-  const id = String(input.primaryKeys.item_id ?? input.item_id ?? "").trim();
-  const startUrl = input.urls[0] || input.sourceHint || input.startUrl;
-  await page.goto(startUrl, { waitUntil: "domcontentloaded" });
-  await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
-  const read = async (locator) => helpers.cleanText(await locator.first().textContent().catch(() => ""));
-  const title = await read(page.locator("h1"));
-  return {
-    data: { item_id: id, title },
-    column_status: {
-      item_id: { status: "extracted" },
-      title: title ? { status: "extracted" } : { status: "fallback_needed", reason: "No h1/title equivalent found after inspection" }
+#!/usr/bin/env bash
+set -e
+
+page-goto "$START_URL" >/tmp/page_url.txt
+title="$(page-text 'h1')"
+current_url="$(page-url)"
+
+TITLE="$title" CURRENT_URL="$current_url" python3 - <<'PY'
+import json, os
+from helpers import clean_text
+
+input_data = json.load(open("/input.json"))
+title = clean_text(os.environ.get("TITLE", ""))
+url = os.environ.get("CURRENT_URL", "")
+item_id = input_data.get("primaryKeys", {}).get("item_id") or input_data.get("item_id", "")
+result = {
+    "data": {"item_id": item_id, "title": title},
+    "column_status": {
+        "item_id": {"status": "extracted"},
+        "title": {"status": "extracted"} if title else {"status": "fallback_needed", "reason": "No h1/title equivalent found after inspection"},
     },
-    cell_sources: title ? { title: [page.url()] } : {},
-    sources: [page.url()],
-    row_summary: title || id,
-    how_found: "Reference shape only; actual extractor must describe the inspected selectors and derived values."
-  };
+    "cell_sources": {"title": [url]} if title else {},
+    "sources": [url],
+    "row_summary": title or item_id or url,
+    "how_found": "Opened the row target with TinyFish Browser and extracted values using sandboxed BigSet page commands.",
 }
+print(json.dumps(result, separators=(",", ":")))
+PY
 
 Never hardcode representative-row values in the script. Literal values from the first tested row, such as a specific product name, profile URL, rating, count, or homepage, make the extractor invalid unless they come from input primary keys or are source-family constants like a host prefix.`;
 }
@@ -1731,7 +2210,7 @@ ${repairContext.previousScript.slice(0, 20_000)}
 `
     : "";
 
-  return `Build a reusable Playwright extractor for this BigSet dataset.
+  return `Build a reusable sandboxed Bash/Python extractor for this BigSet dataset.
 
 Dataset:
 - Name: ${input.datasetName ?? ""}
@@ -1784,37 +2263,28 @@ function summarizeEvidenceForStorage(evidence: PageEvidence): string {
 }
 
 function sanitizeGeneratedScript(text: string): string {
-  const fenced = text.match(/```(?:js|javascript)?\s*([\s\S]*?)```/i);
+  const fenced = text.match(/```(?:bash|sh|shell)?\s*([\s\S]*?)```/i);
   const raw = (fenced?.[1] ?? text)
-    .trim()
-    .replace(/\bexport\s+async\s+function\s+extract\b/, "async function extract")
-    .replace(/\bexport\s+function\s+extract\b/, "function extract");
-  rejectDangerousScript(raw);
-  if (!/\basync\s+function\s+extract\s*\(/.test(raw) && !/\bfunction\s+extract\s*\(/.test(raw)) {
-    throw new Error("generated extractor did not define function extract");
+    .trim();
+  rejectUnsupportedGeneratedScript(raw);
+  if (!raw) {
+    throw new Error("generated extractor script was empty");
   }
   return raw;
 }
 
-function rejectDangerousScript(script: string): void {
-  const dangerousPatterns = [
-    /\bimport\s*(?:\(|[^("'])/i,
-    /\brequire\s*\(/i,
-    /\bprocess\b/i,
-    /\bfs\b/i,
-    /\bchild_process\b/i,
-    /\bworker_threads\b/i,
-    /\beval\s*\(/i,
-    /\bnew\s+Function\b/i,
-    /\bfetch\s*\(/i,
-    /\bXMLHttpRequest\b/i,
-    /\bWebSocket\b/i,
-    /\bnode:(?:http|https|net)\b/i,
-    /\bconvex\b/i,
+function rejectUnsupportedGeneratedScript(script: string): void {
+  const legacyJavaScriptPatterns = [
+    /^\s*(?:export\s+)?async\s+function\s+extract\s*\(/m,
+    /^\s*(?:export\s+)?function\s+extract\s*\(/m,
+    /\bpage\.locator\s*\(/,
+    /\bnew\s+vm\.Script\b/,
   ];
-  const match = dangerousPatterns.find((pattern) => pattern.test(script));
+  const match = legacyJavaScriptPatterns.find((pattern) => pattern.test(script));
   if (match) {
-    throw new Error(`generated extractor contains a blocked pattern: ${match}`);
+    throw new Error(
+      "legacy JavaScript extractor scripts are disabled; generate a Bash/Python extractor instead",
+    );
   }
 }
 
@@ -1864,12 +2334,12 @@ async function runGeneratedExtractorScript(
   script: string,
 ): Promise<GeneratedExtractorResult> {
   throwIfRunAborted(input.datasetId);
-  rejectDangerousScript(script);
+  const sanitized = sanitizeGeneratedScript(script);
   const session = await createTinyFishBrowserSession(apiKey, url, input.datasetId);
   const payload = JSON.stringify({
     cdpUrl: session.cdp_url,
     url,
-    script,
+    script: sanitized,
     input: {
       ...input.primaryKeys,
       url,
