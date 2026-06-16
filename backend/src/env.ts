@@ -1,4 +1,5 @@
 import { config as loadDotenv } from "dotenv";
+import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 loadDotenv({ path: fileURLToPath(new URL("../../.env", import.meta.url)) });
@@ -27,6 +28,8 @@ export const env = {
   PROD: process.env.PROD,
   IS_PROD: process.env.PROD === "1",
   IS_LOCAL_MODE: process.env.PROD !== "1",
+  IS_DOCKER:
+    process.env.BIGSET_RUNNING_IN_DOCKER === "1" || existsSync("/.dockerenv"),
   CLIENT_ORIGIN: process.env.CLIENT_ORIGIN || "http://localhost:3500",
   CONVEX_URL: required("CONVEX_URL"),
   PORT: numberFromEnv("PORT", 3501),

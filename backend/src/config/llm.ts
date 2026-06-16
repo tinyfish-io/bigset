@@ -290,8 +290,8 @@ function isLoopbackHost(hostname: string): boolean {
 }
 
 function normalizeLocalLoopbackForBackend(parsed: URL): void {
-  if (env.IS_LOCAL_MODE && isLoopbackHost(parsed.hostname)) {
-    // In local dev the backend runs inside Docker. From the container,
+  if (env.IS_LOCAL_MODE && env.IS_DOCKER && isLoopbackHost(parsed.hostname)) {
+    // In Docker local dev, from the container,
     // localhost points at the container, not the host machine where LM Studio
     // and other local OpenAI-compatible servers usually listen.
     parsed.hostname = "host.docker.internal";
