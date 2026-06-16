@@ -142,6 +142,7 @@ interface ExtractorSmokeTestCase {
 const BROWSER_TIMEOUT_MS = 45_000;
 const CDP_CONNECT_TIMEOUT_MS = 45_000;
 const DEFAULT_BROWSER_ATTEMPTS = 2;
+const TRANSIENT_BROWSER_ATTEMPTS = 2;
 const EXTRACTOR_RUNNER_TIMEOUT_MS = 60_000;
 const EXTRACTOR_SCRIPT_OUTPUT_LIMIT = 256_000;
 const EXTRACTOR_BUILDER_MAX_STEPS = 80;
@@ -246,6 +247,38 @@ class NonRepairableExtractorFailure extends Error {
   }
 }
 
+function runWasAborted(datasetId: string): boolean {
+  return getSignal(datasetId)?.aborted === true;
+}
+
+function isAbortLikeError(err: unknown): boolean {
+  if (err instanceof DOMException && err.name === "AbortError") return true;
+  if (!(err instanceof Error)) return false;
+  return err.name === "AbortError" || /Run was stopped|AbortError/i.test(err.message);
+}
+
+function throwIfRunAborted(datasetId: string): void {
+  if (runWasAborted(datasetId)) {
+    throw new DOMException("Run was stopped", "AbortError");
+  }
+}
+
+function isTransientBrowserFailure(reason: string): boolean {
+  return /browserType\.connectOverCDP|WebSocket error|getaddrinfo|EAI_AGAIN|ENOTFOUND|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EHOSTUNREACH|net::ERR_TUNNEL_CONNECTION_FAILED|Target page, context or browser has been closed/i.test(
+    reason,
+  );
+}
+
+function isHttpSourceFailure(reason: string): boolean {
+  return /start URL returned HTTP \d{3}:|net::ERR_HTTP_RESPONSE_CODE_FAILURE|TinyFish Browser returned HTTP/i.test(
+    reason,
+  );
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export async function tryRowExtractor(
   input: TryRowExtractorInput,
 ): Promise<TryRowExtractorResult> {
@@ -342,7 +375,16 @@ export async function tryRowExtractorDraft(
       columnStatuses: extraction.columnStatuses,
     };
   } catch (err) {
+    if (isAbortLikeError(err) && runWasAborted(input.datasetId)) {
+      throw err;
+    }
     const msg = err instanceof Error ? err.message : String(err);
+    if (err instanceof NonRepairableExtractorFailure) {
+      return {
+        status: "miss",
+        reason: `browser extractor skipped repair for row-level/source issue: ${msg}`,
+      };
+    }
     if (/duplicate/i.test(msg)) {
       return {
         status: "miss",
@@ -415,6 +457,9 @@ export async function tryRefreshRowExtractor(
       sources: extraction.sources,
     };
   } catch (err) {
+    if (isAbortLikeError(err) && runWasAborted(input.datasetId)) {
+      throw err;
+    }
     const msg = err instanceof Error ? err.message : String(err);
     if (err instanceof NonRepairableExtractorFailure) {
       return {
@@ -562,6 +607,7 @@ async function extractGenericRow(
 
   const siteKey = siteKeyForInput(input, url);
   const script = await getOrBuildExtractorScript(apiKey, input, url);
+  throwIfRunAborted(input.datasetId);
   const attempts = normalizedBrowserAttempts(input.browserAttempts);
   let lastError: unknown;
   for (let attempt = 1; attempt <= attempts; attempt++) {
@@ -583,7 +629,8 @@ async function extractGenericRow(
       return extraction;
     } catch (err) {
       lastError = err;
-      if (getSignal(input.datasetId)?.aborted || attempt === attempts) break;
+      if (isAbortLikeError(err) && runWasAborted(input.datasetId)) throw err;
+      if (runWasAborted(input.datasetId) || attempt === attempts) break;
       const msg = err instanceof Error ? err.message : String(err);
       console.warn(
         `[row_extractor] Browser attempt ${attempt}/${attempts} failed; retrying: ${msg}`,
@@ -591,10 +638,11 @@ async function extractGenericRow(
     }
   }
 
+  throwIfRunAborted(input.datasetId);
   const failure = lastError instanceof Error ? lastError.message : String(lastError);
   if (isNonRepairableRuntimeFailure(failure)) {
     console.warn(
-      `[row_extractor] generated extractor failed with row-level/source issue for ${siteKey}; skipping repair: ${failure}`,
+      `[row_extractor] generated extractor failed with non-repairable browser/source issue for ${siteKey}; skipping repair: ${failure}`,
     );
     throw new NonRepairableExtractorFailure(failure);
   }
@@ -618,10 +666,20 @@ async function extractGenericRow(
     rememberExtractorSmokeTest(input, url);
     return extraction;
   } catch (repairErr) {
+    if (isAbortLikeError(repairErr) && runWasAborted(input.datasetId)) {
+      throw repairErr;
+    }
     const repairMsg = repairErr instanceof Error ? repairErr.message : String(repairErr);
-    console.warn(
-      `[row_extractor] repair failed; keeping cached extractor available for future improvement: ${repairMsg}`,
-    );
+    if (!isTransientBrowserFailure(repairMsg) && !isHttpSourceFailure(repairMsg)) {
+      await markExtractorFailed(input, url, repairMsg);
+      console.warn(
+        `[row_extractor] repair failed; marked cached extractor failed for ${siteKey}: ${repairMsg}`,
+      );
+    } else {
+      console.warn(
+        `[row_extractor] repair failed with transient/source issue; keeping cache state unchanged for ${siteKey}: ${repairMsg}`,
+      );
+    }
     throw repairErr instanceof Error ? repairErr : new Error(String(repairErr));
   }
 }
@@ -665,6 +723,29 @@ async function getOrBuildExtractorScript(
   return await buildPromise;
 }
 
+async function markExtractorFailed(
+  input: TryRowExtractorInput,
+  url: string,
+  error: string,
+): Promise<void> {
+  const siteKey = siteKeyForInput(input, url);
+  const columnsHash = hashColumns(input.columns);
+  try {
+    await convex.mutation(internal.datasetExtractors.markFailed, {
+      datasetId: input.datasetId,
+      siteKey,
+      columnsHash,
+      error,
+    });
+  } catch (err) {
+    console.warn(
+      `[row_extractor] failed to mark cached extractor failed for ${siteKey}: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
+}
+
 async function buildAndPersistExtractorScript(
   apiKey: string,
   input: TryRowExtractorInput,
@@ -688,6 +769,10 @@ async function buildAndPersistExtractorScript(
     return script;
   }
 
+  if (isNonRepairableValidationFailure(validation.reason)) {
+    throw new NonRepairableExtractorFailure(validation.reason);
+  }
+
   const repaired = await buildExtractorScriptWithAgent(
     apiKey,
     input,
@@ -700,6 +785,9 @@ async function buildAndPersistExtractorScript(
   );
   const repairedValidation = await validateExtractorScript(apiKey, input, url, repaired.script);
   if (!repairedValidation.ok) {
+    if (isNonRepairableValidationFailure(repairedValidation.reason)) {
+      throw new NonRepairableExtractorFailure(repairedValidation.reason);
+    }
     throw new Error(`generated extractor failed validation: ${repairedValidation.reason}`);
   }
 
@@ -712,6 +800,11 @@ async function buildAndPersistExtractorScript(
     probeSummary: repaired.probeSummary,
   });
   return repaired.script;
+}
+
+function isNonRepairableValidationFailure(reason: string | undefined): boolean {
+  if (!reason) return false;
+  return isTransientBrowserFailure(reason) || isHttpSourceFailure(reason);
 }
 
 function extractorBuildKey(
@@ -842,26 +935,42 @@ async function probePage(
   datasetId: string,
   url: string,
 ): Promise<PageEvidence> {
-  const session = await createTinyFishBrowserSession(apiKey, url, datasetId);
-  let browser: Browser | undefined;
-  try {
-    browser = await chromium.connectOverCDP(session.cdp_url, {
-      timeout: CDP_CONNECT_TIMEOUT_MS,
-    });
-    const context = browser.contexts()[0] ?? (await browser.newContext());
-    const page = context.pages()[0] ?? (await context.newPage());
-    await page.goto(url, {
-      waitUntil: "domcontentloaded",
-      timeout: BROWSER_TIMEOUT_MS,
-    });
-    await page.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => {
-      // Many modern sites keep long-lived requests open. DOMContentLoaded is enough.
-    });
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= TRANSIENT_BROWSER_ATTEMPTS; attempt++) {
+    let browser: Browser | undefined;
+    try {
+      throwIfRunAborted(datasetId);
+      const session = await createTinyFishBrowserSession(apiKey, url, datasetId);
+      browser = await chromium.connectOverCDP(session.cdp_url, {
+        timeout: CDP_CONNECT_TIMEOUT_MS,
+      });
+      const context = browser.contexts()[0] ?? (await browser.newContext());
+      const page = context.pages()[0] ?? (await context.newPage());
+      await page.goto(url, {
+        waitUntil: "domcontentloaded",
+        timeout: BROWSER_TIMEOUT_MS,
+      });
+      await page.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => {
+        // Many modern sites keep long-lived requests open. DOMContentLoaded is enough.
+      });
 
-    return await readPageEvidence(page);
-  } finally {
-    await browser?.close().catch(() => undefined);
+      return await readPageEvidence(page);
+    } catch (err) {
+      if (isAbortLikeError(err) && runWasAborted(datasetId)) throw err;
+      lastError = err;
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!isTransientBrowserFailure(msg) || attempt === TRANSIENT_BROWSER_ATTEMPTS) {
+        throw err;
+      }
+      console.warn(
+        `[extractor_builder] probe browser attempt ${attempt}/${TRANSIENT_BROWSER_ATTEMPTS} failed; retrying: ${reasonForLog(msg)}`,
+      );
+      await sleep(500 * attempt);
+    } finally {
+      await browser?.close().catch(() => undefined);
+    }
   }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
 async function createTinyFishBrowserSession(
@@ -1096,8 +1205,8 @@ async function buildExtractorScriptWithAgent(
   } = {},
 ): Promise<AgenticExtractorBuildResult> {
   const llmConfig = await requireLlmProviderConfig();
-  let acceptedScript: string | undefined;
-  let acceptedFromTest = false;
+  let testedScript: string | undefined;
+  let finishedScript: string | undefined;
   let declinedReason: string | undefined;
   let lastEvidence: PageEvidence | undefined;
   let lastProbeSummary = `url=${url}`;
@@ -1172,8 +1281,7 @@ async function buildExtractorScriptWithAgent(
       console.log(`[extractor_builder] ${phase} testing candidate for ${siteKey}`);
       const result = await testExtractorScriptDetailed(apiKey, input, url, script);
       if (result.ok) {
-        acceptedScript = sanitizeGeneratedScript(script);
-        acceptedFromTest = true;
+        testedScript = sanitizeGeneratedScript(script);
       }
       console.log(
         `[extractor_builder] ${phase} test ${result.ok ? "passed" : "failed"} for ${siteKey}: ${reasonForLog(result.reason)}`,
@@ -1202,7 +1310,7 @@ async function buildExtractorScriptWithAgent(
       console.log(`[extractor_builder] ${phase} finishing candidate for ${siteKey}`);
       const result = await testExtractorScriptDetailed(apiKey, input, url, script);
       if (result.ok) {
-        acceptedScript = sanitizeGeneratedScript(script);
+        finishedScript = sanitizeGeneratedScript(script);
       }
       console.log(
         `[extractor_builder] ${phase} finish ${result.ok ? "accepted" : "rejected"} for ${siteKey}: ${reasonForLog(result.reason)}`,
@@ -1271,30 +1379,45 @@ async function buildExtractorScriptWithAgent(
       }),
     );
   } catch (err) {
-    if (acceptedScript) {
+    if (isAbortLikeError(err) && runWasAborted(input.datasetId)) {
+      throw err;
+    }
+    if (finishedScript) {
       console.warn(
-        `[extractor_builder] ${phase} returning ${acceptedFromTest ? "tested" : "finished"} accepted script for ${siteKey} after agent error: ${reasonForLog(err instanceof Error ? err.message : String(err))}`,
+        `[extractor_builder] ${phase} returning finished script for ${siteKey} after agent error: ${reasonForLog(err instanceof Error ? err.message : String(err))}`,
       );
       return {
-        script: acceptedScript,
+        script: finishedScript,
         probeSummary: lastEvidence ? summarizeEvidenceForStorage(lastEvidence) : lastProbeSummary,
       };
+    }
+    if (testedScript) {
+      console.warn(
+        `[extractor_builder] ${phase} had a tested script for ${siteKey}, but finish_extractor did not accept it before agent error: ${reasonForLog(err instanceof Error ? err.message : String(err))}`,
+      );
     }
     throw err;
   }
 
+  throwIfRunAborted(input.datasetId);
   console.log(
     `[extractor_builder] ${phase} ended for ${siteKey} steps=${result.steps?.length ?? "?"}`,
   );
 
-  if (acceptedScript) {
+  if (finishedScript) {
     console.log(
-      `[extractor_builder] accepted script after ${result.steps?.length ?? "?"} steps for ${siteKey}`,
+      `[extractor_builder] accepted finished script after ${result.steps?.length ?? "?"} steps for ${siteKey}`,
     );
     return {
-      script: acceptedScript,
+      script: finishedScript,
       probeSummary: lastEvidence ? summarizeEvidenceForStorage(lastEvidence) : lastProbeSummary,
     };
+  }
+
+  if (testedScript) {
+    console.warn(
+      `[extractor_builder] ${phase} produced a tested script for ${siteKey}, but did not call finish_extractor`,
+    );
   }
 
   if (declinedReason) {
@@ -1358,6 +1481,9 @@ async function repairExtractorAfterRuntimeFailureImpl(
   );
   const validation = await validateExtractorScript(apiKey, input, url, repaired.script);
   if (!validation.ok) {
+    if (isNonRepairableValidationFailure(validation.reason)) {
+      throw new NonRepairableExtractorFailure(validation.reason);
+    }
     throw new Error(`repaired extractor failed validation: ${validation.reason}`);
   }
 
@@ -1372,6 +1498,9 @@ async function repairExtractorAfterRuntimeFailureImpl(
       repaired.script,
     );
     if (!regression.ok) {
+      if (isNonRepairableValidationFailure(regression.reason)) {
+        throw new NonRepairableExtractorFailure(regression.reason);
+      }
       throw new Error(
         `repaired extractor regressed ${smokeTest.source} known-good row: ${regression.reason}`,
       );
@@ -1408,9 +1537,8 @@ function isNonRepairableRuntimeFailure(reason: string): boolean {
   return (
     isRowLevelQualityIssue(reason) ||
     /^primary key ".+" failed validation:/.test(reason) ||
-    /start URL returned HTTP \d{3}:/i.test(reason) ||
-    /net::ERR_HTTP_RESPONSE_CODE_FAILURE/i.test(reason) ||
-    /browserType\.connectOverCDP|WebSocket error|getaddrinfo|EAI_AGAIN|ENOTFOUND|ECONNRESET|ETIMEDOUT/i.test(reason) ||
+    isHttpSourceFailure(reason) ||
+    isTransientBrowserFailure(reason) ||
     /TinyFish Browser returned HTTP|Run was stopped|AbortError|TimeoutError/i.test(reason)
   );
 }
@@ -1444,7 +1572,7 @@ async function testExtractorScriptDetailed(
 ): Promise<DetailedExtractorTestResult> {
   try {
     const sanitized = sanitizeGeneratedScript(script);
-    const raw = await runGeneratedExtractorScript(apiKey, input, url, sanitized);
+    const raw = await runGeneratedExtractorScriptForValidation(apiKey, input, url, sanitized);
     const extraction = buildRowFromExtractorResult(input, url, raw);
     if (!hasExtractedNonPrimaryValue(extraction, input.columns)) {
       return {
@@ -1471,6 +1599,9 @@ async function testExtractorScriptDetailed(
     }
     return { ok: true, reason: "passed", extraction };
   } catch (err) {
+    if (isAbortLikeError(err) && runWasAborted(input.datasetId)) {
+      throw err;
+    }
     return {
       ok: false,
       reason: err instanceof Error ? err.message : String(err),
@@ -1697,12 +1828,42 @@ async function validateExtractorScript(
   return result.ok ? { ok: true } : { ok: false, reason: result.reason };
 }
 
+async function runGeneratedExtractorScriptForValidation(
+  apiKey: string,
+  input: TryRowExtractorInput,
+  url: string,
+  script: string,
+): Promise<GeneratedExtractorResult> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= TRANSIENT_BROWSER_ATTEMPTS; attempt++) {
+    try {
+      throwIfRunAborted(input.datasetId);
+      return await runGeneratedExtractorScript(apiKey, input, url, script);
+    } catch (err) {
+      if (isAbortLikeError(err) && runWasAborted(input.datasetId)) {
+        throw err;
+      }
+      lastError = err;
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!isTransientBrowserFailure(msg) || attempt === TRANSIENT_BROWSER_ATTEMPTS) {
+        throw err;
+      }
+      console.warn(
+        `[extractor_builder] validation browser attempt ${attempt}/${TRANSIENT_BROWSER_ATTEMPTS} failed; retrying: ${reasonForLog(msg)}`,
+      );
+      await sleep(500 * attempt);
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
 async function runGeneratedExtractorScript(
   apiKey: string,
   input: TryRowExtractorInput,
   url: string,
   script: string,
 ): Promise<GeneratedExtractorResult> {
+  throwIfRunAborted(input.datasetId);
   rejectDangerousScript(script);
   const session = await createTinyFishBrowserSession(apiKey, url, input.datasetId);
   const payload = JSON.stringify({
@@ -1726,6 +1887,12 @@ async function runGeneratedExtractorScript(
   });
 
   return await new Promise((resolve, reject) => {
+    const runSignal = getSignal(input.datasetId);
+    if (runSignal?.aborted) {
+      reject(runSignal.reason ?? new DOMException("Run was stopped", "AbortError"));
+      return;
+    }
+
     const child = spawn(process.execPath, ["--input-type=module", "-e", EXTRACTOR_RUNNER_SOURCE], {
       cwd: BACKEND_ROOT,
       env: {},
@@ -1733,16 +1900,30 @@ async function runGeneratedExtractorScript(
     });
     let stdout = "";
     let stderr = "";
-    const timeout = setTimeout(() => {
+    let abortFromRun: (() => void) | undefined;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const cleanup = () => {
+      if (timeout) clearTimeout(timeout);
+      if (abortFromRun) runSignal?.removeEventListener("abort", abortFromRun);
+    };
+    timeout = setTimeout(() => {
       child.kill("SIGKILL");
+      cleanup();
       reject(new Error("generated extractor timed out"));
     }, EXTRACTOR_RUNNER_TIMEOUT_MS + 5_000);
+    abortFromRun = () => {
+      child.kill("SIGKILL");
+      cleanup();
+      reject(runSignal?.reason ?? new DOMException("Run was stopped", "AbortError"));
+    };
+    runSignal?.addEventListener("abort", abortFromRun, { once: true });
 
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
       stdout += chunk;
       if (stdout.length > EXTRACTOR_SCRIPT_OUTPUT_LIMIT) {
         child.kill("SIGKILL");
+        cleanup();
         reject(new Error("generated extractor output limit exceeded"));
       }
     });
@@ -1751,11 +1932,11 @@ async function runGeneratedExtractorScript(
       stderr += chunk;
     });
     child.on("error", (err) => {
-      clearTimeout(timeout);
+      cleanup();
       reject(err);
     });
     child.on("close", (code) => {
-      clearTimeout(timeout);
+      cleanup();
       if (code !== 0) {
         reject(new Error(stderr.trim() || `generated extractor exited ${code}`));
         return;
@@ -2086,11 +2267,22 @@ function compileValidationRegex(pattern: string): RegExp {
   return new RegExp(literal[1], flags);
 }
 
-function siteKeyForUrl(value: string): string {
+function siteKeyForUrl(
+  value: string,
+  primaryKeys: Record<string, string> = {},
+): string {
   try {
     const url = new URL(value);
-    const firstPathSegment = url.pathname.split("/").filter(Boolean)[0];
-    return [url.hostname.toLowerCase(), firstPathSegment].filter(Boolean).join("/");
+    const primaryKeySegments = siteKeyPrimaryValueSegments(primaryKeys);
+    const pathShape = url.pathname
+      .split("/")
+      .filter(Boolean)
+      .slice(0, 3)
+      .map((segment, index) =>
+        normalizeSiteKeyPathSegment(segment, index, primaryKeySegments),
+      )
+      .filter((segment): segment is string => Boolean(segment));
+    return [url.hostname.toLowerCase(), ...pathShape].filter(Boolean).join("/");
   } catch {
     return "invalid-url";
   }
@@ -2100,7 +2292,71 @@ function siteKeyForInput(input: TryRowExtractorInput, browserStartUrl: string): 
   const sourceUrl = browserStartUrlCandidates(input)
     .map(coerceHttpUrl)
     .find((value): value is string => Boolean(value));
-  return siteKeyForUrl(sourceUrl ?? browserStartUrl);
+  return siteKeyForUrl(sourceUrl ?? browserStartUrl, input.primaryKeys);
+}
+
+function siteKeyPrimaryValueSegments(primaryKeys: Record<string, string>): Set<string> {
+  const values = new Set<string>();
+  for (const value of Object.values(primaryKeys)) {
+    const normalized = normalizeSiteKeyLiteral(value);
+    const slug = slugifySiteKeyLiteral(value);
+    if (normalized) values.add(normalized);
+    if (slug) values.add(slug);
+    for (const segment of siteKeyUrlPathSegments(value)) {
+      values.add(segment);
+    }
+  }
+  return values;
+}
+
+function siteKeyUrlPathSegments(value: string): string[] {
+  try {
+    const url = new URL(value);
+    return url.pathname
+      .split("/")
+      .filter(Boolean)
+      .map(normalizeSiteKeyLiteral)
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function normalizeSiteKeyPathSegment(
+  value: string,
+  index: number,
+  primaryKeySegments: Set<string>,
+): string | undefined {
+  const normalized = normalizeSiteKeyLiteral(value);
+  if (!normalized) return undefined;
+  if (
+    index > 0 &&
+    (primaryKeySegments.has(normalized) || looksDynamicSiteKeySegment(normalized))
+  ) {
+    return ":value";
+  }
+  return normalized;
+}
+
+function looksDynamicSiteKeySegment(value: string): boolean {
+  return (
+    /^\d+$/.test(value) ||
+    /^[0-9a-f]{12,}$/i.test(value) ||
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value) ||
+    (value.length >= 6 && /\d/.test(value))
+  );
+}
+
+function normalizeSiteKeyLiteral(value: string): string {
+  try {
+    return decodeURIComponent(value).toLowerCase().replace(/[^a-z0-9._~-]+/g, "-").replace(/^-+|-+$/g, "");
+  } catch {
+    return value.toLowerCase().replace(/[^a-z0-9._~-]+/g, "-").replace(/^-+|-+$/g, "");
+  }
+}
+
+function slugifySiteKeyLiteral(value: string): string {
+  return normalizeSiteKeyLiteral(value.replace(/&/g, " and "));
 }
 
 function hashColumns(columns: PopulateColumn[]): string {

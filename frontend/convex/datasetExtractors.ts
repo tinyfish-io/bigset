@@ -15,7 +15,11 @@ export const getActive = internalQuery({
       )
       .first();
 
-    if (!extractor || extractor.columnsHash !== args.columnsHash) {
+    if (
+      !extractor ||
+      extractor.columnsHash !== args.columnsHash ||
+      extractor.status !== "active"
+    ) {
       return null;
     }
 

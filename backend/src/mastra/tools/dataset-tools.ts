@@ -86,6 +86,7 @@ interface PopulateToolOptions {
   insertDefaults?: InsertDefaults;
   columns?: PopulateColumn[];
   enforcePrimaryKeySources?: boolean;
+  membershipSourceHint?: string;
 }
 
 function rowDataCellsToRecord(data: RowDataCell[]): Record<string, string> {
@@ -163,20 +164,34 @@ function mergeInsertData(
   return merged;
 }
 
-function validatePrimaryKeySources(
+export function validatePrimaryKeySources(
   data: Record<string, unknown>,
   rowSources: string[],
   cellSources: Record<string, string[]> | undefined,
   columns: PopulateColumn[] | undefined,
   enforcePrimaryKeySources: boolean | undefined,
+  membershipSourceHint?: string,
 ): string | undefined {
   if (!enforcePrimaryKeySources || !columns || columns.length === 0) return undefined;
 
+  const membershipHosts = membershipHostsFromHint(membershipSourceHint);
   const primaryColumns = columns.filter((column) => column.isPrimaryKey);
   for (const column of primaryColumns) {
     const value = data[column.name];
     if (!hasMeaningfulValue(value)) {
       return `Primary key "${column.name}" is missing. Verify the primary key before inserting.`;
+    }
+
+    const primaryKeySources = cellSources?.[column.name] ?? [];
+    if (primaryKeySources.length === 0) {
+      return `Primary key "${column.name}" must include cell_sources that justify the exact primary-key value.`;
+    }
+
+    if (
+      membershipHosts.length > 0 &&
+      !primaryKeySources.some((source) => membershipHosts.includes(normalizeHost(source)))
+    ) {
+      return `Primary key "${column.name}" must be justified by the authoritative source family (${membershipHosts.join(", ")}). Third-party enrichment sources can fill other columns but cannot admit this row.`;
     }
 
     if (!isUrlPrimaryKeyColumn(column)) continue;
@@ -208,6 +223,21 @@ function validatePrimaryKeySources(
 function isUrlPrimaryKeyColumn(column: PopulateColumn): boolean {
   const haystack = `${column.name} ${column.description ?? ""}`.toLowerCase();
   return column.type === "url" || /\burl\b|https?:/.test(haystack);
+}
+
+function membershipHostsFromHint(value: string | undefined): string[] {
+  if (!value) return [];
+  const urls = [...value.matchAll(/https?:\/\/[^\s)>"']+/gi)].map((match) => match[0]);
+  return [...new Set(urls.map(normalizeHost).filter(Boolean))];
+}
+
+function normalizeHost(value: string | undefined): string {
+  if (!value) return "";
+  try {
+    return new URL(value.trim()).hostname.toLowerCase().replace(/^www\./, "");
+  } catch {
+    return "";
+  }
 }
 
 function normalizeHttpUrlForComparison(value: string): string | undefined {
@@ -336,6 +366,7 @@ export function buildPopulateTools(
         mergedCellSources,
         options.columns,
         options.enforcePrimaryKeySources,
+        options.membershipSourceHint,
       );
       if (primaryKeySourceError) {
         return { success: false, error: primaryKeySourceError };

@@ -18,7 +18,13 @@ import { sendTransactionalEmail } from "./email/send.js";
 import { datasetReadyTemplate } from "./email/templates/dataset-ready.js";
 import { capture, shutdown as shutdownAnalytics } from "./analytics/posthog.js";
 import { EVENTS } from "./analytics/events.js";
-import { registerDataset, deregisterDataset, abortDataset } from "./abort-registry.js";
+import {
+  activeDatasetRunCount,
+  abortDataset,
+  deregisterDataset,
+  hasActiveDatasetRuns,
+  registerDataset,
+} from "./abort-registry.js";
 import {
   LOCAL_USER_ID,
   clearLegacyPlaintextLocalCredentials,
@@ -445,6 +451,7 @@ async function runScheduledUpdateWorkflowInBackground({
 
     await convex.mutation(internal.datasets.completeScheduledRefreshInternal, {
       id: datasetId,
+      runId: run.runId,
       now: Date.now(),
     });
   } catch (err) {
@@ -454,6 +461,7 @@ async function runScheduledUpdateWorkflowInBackground({
     try {
       await convex.mutation(internal.datasets.failScheduledRefreshInternal, {
         id: datasetId,
+        runId: run.runId,
         now: Date.now(),
         lastStatusError,
       });
@@ -499,6 +507,16 @@ async function runPopulateWorkflowInBackground({
       },
     });
 
+    if (controller.signal.aborted) {
+      await finaliseStoppedPopulateRun({
+        logger,
+        clerk,
+        datasetId,
+        authorizedUserId,
+      });
+      return;
+    }
+
     logger.info(
       {
         workflowStatus: result.status,
@@ -541,21 +559,12 @@ async function runPopulateWorkflowInBackground({
     });
   } catch (err) {
     if (controller.signal.aborted) {
-      // User pressed Stop — treat whatever was collected as the final dataset.
-      logger.info({ datasetId }, "Populate workflow stopped by user; transitioning to live");
-      try {
-        await finaliseRunAsLive({ logger, clerk, datasetId, authorizedUserId });
-      } catch (stopErr) {
-        logger.error({ err: stopErr, datasetId }, "Failed to finalise stopped populate run; marking as failed");
-        // Ensure the dataset always leaves "building" — without this fallback,
-        // a failed finalisation leaves the dataset with no active registry entry
-        // and no way for /stop to act on it again.
-        try {
-          await setDatasetPopulateStatus(datasetId, "failed", "Workflow stopped but could not be finalised");
-        } catch (fallbackErr) {
-          logger.error({ err: fallbackErr, datasetId }, "Could not update dataset status after stop finalisation failure");
-        }
-      }
+      await finaliseStoppedPopulateRun({
+        logger,
+        clerk,
+        datasetId,
+        authorizedUserId,
+      });
       return;
     }
 
@@ -589,6 +598,43 @@ async function runPopulateWorkflowInBackground({
   }
 }
 
+async function finaliseStoppedPopulateRun({
+  logger,
+  clerk,
+  datasetId,
+  authorizedUserId,
+}: {
+  logger: FastifyBaseLogger;
+  clerk: ClerkClient;
+  datasetId: string;
+  authorizedUserId: string;
+}): Promise<void> {
+  logger.info({ datasetId }, "Populate workflow stopped by user; transitioning to live");
+  try {
+    await finaliseRunAsLive({ logger, clerk, datasetId, authorizedUserId });
+  } catch (stopErr) {
+    logger.error(
+      { err: stopErr, datasetId },
+      "Failed to finalise stopped populate run; marking as failed",
+    );
+    // Ensure the dataset always leaves "building" — without this fallback,
+    // a failed finalisation leaves the dataset with no active registry entry
+    // and no way for /stop to act on it again.
+    try {
+      await setDatasetPopulateStatus(
+        datasetId,
+        "failed",
+        "Workflow stopped but could not be finalised",
+      );
+    } catch (fallbackErr) {
+      logger.error(
+        { err: fallbackErr, datasetId },
+        "Could not update dataset status after stop finalisation failure",
+      );
+    }
+  }
+}
+
 async function backfillDatasetRefreshSettings(
   logger: FastifyBaseLogger,
 ): Promise<void> {
@@ -619,6 +665,14 @@ function startLocalRefreshScheduler(
     ticking = true;
 
     try {
+      if (hasActiveDatasetRuns()) {
+        logger.debug(
+          { activeRuns: activeDatasetRunCount() },
+          "Skipping scheduled refresh tick while dataset run is active",
+        );
+        return;
+      }
+
       if (env.IS_LOCAL_MODE) {
         const setup = await getLocalSetupStatus();
         if (!setup.complete) return;
@@ -677,7 +731,7 @@ function startLocalRefreshScheduler(
           logger,
         );
 
-        void runScheduledUpdateWorkflowInBackground({
+        await runScheduledUpdateWorkflowInBackground({
           input,
           run,
           authorizedUserId: dataset.ownerId,

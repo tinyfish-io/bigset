@@ -1,6 +1,6 @@
 import { Agent } from "@mastra/core/agent";
 import { createLanguageModel, type LlmProviderConfig } from "../../config/llm.js";
-import { buildSubagentTool } from "../tools/investigate-tool.js";
+import { buildSubagentTools } from "../tools/investigate-tool.js";
 import { searchWebTool, fetchPageTool } from "../tools/web-tools.js";
 import type { AuthContext } from "../workflows/populate.js";
 import type { CodificationProfile, PopulateColumn } from "../../pipeline/populate.js";
@@ -27,7 +27,9 @@ If the dataset is to look at YC Companies, collect links for the YC Startup regi
 
 3. See what the subagent reports back with, if all good and it gives you some information, use that to give better instuctions to subsequent sub agents.
 
-Keep going until you have ${maxRowCount} rows, then finish immediately. If run_subagent reports ROW_LIMIT_REACHED, stop calling tools and finish the run.
+When you find a batch of candidates, prefer queue_subagents so enumeration can continue while row workers build/reuse extractors and investigate rows in parallel. Use run_subagent when you need immediate feedback for one lead. Call drain_subagents before you finish if queued rows are still running.
+
+Keep going until you have ${maxRowCount} rows, then finish immediately. If run_subagent or queued work reports ROW_LIMIT_REACHED, stop calling tools and finish the run.
 
 This process should become faster overtime as you just find new rows to go and build, and you keep invoking sub agents in parallel to fill them in.
 
@@ -54,6 +56,15 @@ export function buildPopulateAgent(
   metrics?: RunMetrics,
 ): Agent {
   const modelSlug = authContext.modelConfig!.populateOrchestrator;
+  const subagentTools = buildSubagentTools(
+    authorizedDatasetId,
+    authContext,
+    columns,
+    llmConfig,
+    maxRowCount,
+    datasetContext,
+    metrics,
+  );
 
   return new Agent({
     id: "populate-agent",
@@ -63,15 +74,7 @@ export function buildPopulateAgent(
     tools: {
       search_web: searchWebTool,
       fetch_page: fetchPageTool,
-      run_subagent: buildSubagentTool(
-        authorizedDatasetId,
-        authContext,
-        columns,
-        llmConfig,
-        maxRowCount,
-        datasetContext,
-        metrics,
-      ),
+      ...subagentTools,
     },
   });
 }

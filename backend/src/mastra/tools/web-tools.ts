@@ -9,6 +9,58 @@ const searchResultSchema = z.object({
   url: z.string(),
 });
 
+const FETCH_FAILURE_CACHE_TTL_MS = 10 * 60 * 1000;
+const recentFetchFailures = new Map<
+  string,
+  { at: number; code: string; status?: string; message: string }
+>();
+
+function cachedFetchFailure(url: string): string | undefined {
+  const cached = recentFetchFailures.get(url);
+  if (!cached) return undefined;
+  if (Date.now() - cached.at > FETCH_FAILURE_CACHE_TTL_MS) {
+    recentFetchFailures.delete(url);
+    return undefined;
+  }
+  console.log(
+    `[fetch_page] Skipping recently failed URL: url=${url} error=${cached.code} status=${cached.status ?? "n/a"}`,
+  );
+  return cached.message;
+}
+
+function rememberFetchFailure(
+  url: string,
+  code: string,
+  status: string | undefined,
+  message: string,
+): void {
+  if (!isCacheableFetchFailure(code, status)) return;
+  recentFetchFailures.set(url, {
+    at: Date.now(),
+    code,
+    status,
+    message,
+  });
+}
+
+function isCacheableFetchFailure(code: string, status: string | undefined): boolean {
+  if (code === "page_not_found" || code === "bot_blocked") return true;
+  if (code !== "target_http_error" || !status) return false;
+  const statusCode = Number(status);
+  return Number.isFinite(statusCode) && statusCode >= 400 && statusCode < 500;
+}
+
+function fetchPageErrorMessage(code: string, status: string | undefined): string {
+  const hints: Record<string, string> = {
+    bot_blocked: "This site blocks automated access. Use the search snippet data instead.",
+    timeout: "Page took too long to load. Try a different URL.",
+    target_unreachable: "Could not connect to this site. Try a different URL.",
+    page_not_found: "Page not found (404). The URL may be outdated. Try a different one.",
+    target_http_error: `Site returned HTTP ${status ?? "error"}. Try a different URL.`,
+  };
+  return hints[code] ?? `Fetch failed: ${code}. Try a different URL.`;
+}
+
 export const searchWebTool = createTool({
   id: "search_web",
   description:
@@ -85,7 +137,8 @@ export const fetchPageTool = createTool({
     error: z.string().optional(),
   }),
   execute: async ({ url: targetUrl }) => {
-    if (!targetUrl?.trim())
+    targetUrl = targetUrl?.trim();
+    if (!targetUrl)
       return { error: "url is required and cannot be empty." };
     if (!targetUrl.startsWith("http://") && !targetUrl.startsWith("https://"))
       return { error: `Invalid URL "${targetUrl}". Must start with http:// or https://.` };
@@ -93,6 +146,9 @@ export const fetchPageTool = createTool({
     const apiKey = await getTinyFishApiKey();
     if (!apiKey)
       return { error: "TINYFISH_API_KEY is not configured. Page fetch is unavailable — use data from search snippets instead." };
+
+    const cachedFailure = cachedFetchFailure(targetUrl);
+    if (cachedFailure) return { error: cachedFailure };
 
     console.log(`[fetch_page] Fetching: ${targetUrl}`);
 
@@ -124,15 +180,14 @@ export const fetchPageTool = createTool({
 
       if (data.errors?.length > 0) {
         const err = data.errors[0];
-        console.log(`[fetch_page] Failed: ${err.error}`);
-        const hints: Record<string, string> = {
-          bot_blocked: "This site blocks automated access. Use the search snippet data instead.",
-          timeout: "Page took too long to load. Try a different URL.",
-          target_unreachable: "Could not connect to this site. Try a different URL.",
-          page_not_found: "Page not found (404). The URL may be outdated. Try a different one.",
-          target_http_error: `Site returned HTTP ${err.status ?? "error"}. Try a different URL.`,
-        };
-        return { error: hints[err.error] ?? `Fetch failed: ${err.error}. Try a different URL.` };
+        const code = String(err.error ?? "unknown_error");
+        const status = err.status === undefined ? undefined : String(err.status);
+        const message = fetchPageErrorMessage(code, status);
+        console.log(
+          `[fetch_page] Failed: url=${targetUrl} error=${code} status=${status ?? "n/a"}`,
+        );
+        rememberFetchFailure(targetUrl, code, status, message);
+        return { error: message };
       }
 
       const page = data.results?.[0];

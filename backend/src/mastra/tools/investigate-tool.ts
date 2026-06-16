@@ -2,6 +2,7 @@ import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 import { convex, internal } from "../../convex.js";
 import { buildInvestigateAgent } from "../agents/investigate.js";
+import { validatePrimaryKeySources } from "./dataset-tools.js";
 import type { AuthContext } from "../workflows/populate.js";
 import type { CodificationProfile, PopulateColumn } from "../../pipeline/populate.js";
 import type { RunMetrics } from "../run-metrics.js";
@@ -54,12 +55,150 @@ const investigateOutputSchema = z.object({
   reason: z.string(),
 });
 
+const queueSubagentsInputSchema = z.object({
+  candidates: z
+    .array(investigateInputSchema)
+    .min(1)
+    .max(50)
+    .describe("Candidate rows to enqueue for background investigation."),
+});
+
+const queueSubagentsOutputSchema = z.object({
+  queued: z.number(),
+  pending: z.number(),
+  active: z.number(),
+  completed: z.number(),
+  reason: z.string().optional(),
+});
+
+const drainSubagentsOutputSchema = z.object({
+  completed: z.number(),
+  inserted: z.number(),
+  failed: z.number(),
+  pending: z.number(),
+  active: z.number(),
+  reasons: z.array(z.string()),
+});
+
 interface DatasetContextForExtractor {
   datasetName: string;
   description: string;
   retrievalStrategy?: "search_fetch" | "browser" | "hybrid";
   sourceHint?: string;
   codificationProfile?: CodificationProfile;
+}
+
+type InvestigateLead = z.infer<typeof investigateInputSchema>;
+type InvestigateResult = z.infer<typeof investigateOutputSchema>;
+
+interface QueueSummary {
+  completed: number;
+  inserted: number;
+  failed: number;
+  pending: number;
+  active: number;
+  reasons: string[];
+}
+
+class SubagentQueue {
+  private readonly waiting: Array<{
+    lead: InvestigateLead;
+    resolve: (result: InvestigateResult) => void;
+  }> = [];
+  private readonly promises: Promise<InvestigateResult>[] = [];
+  private readonly completed: InvestigateResult[] = [];
+  private active = 0;
+
+  constructor(
+    private readonly concurrency: number,
+    private readonly processLead: (lead: InvestigateLead) => Promise<InvestigateResult>,
+  ) {}
+
+  enqueue(lead: InvestigateLead): void {
+    const promise = new Promise<InvestigateResult>((resolve) => {
+      this.waiting.push({ lead, resolve });
+      this.pump();
+    });
+    this.promises.push(promise);
+  }
+
+  enqueueMany(leads: InvestigateLead[]): void {
+    for (const lead of leads) this.enqueue(lead);
+  }
+
+  snapshot(): QueueSummary {
+    return this.toSummary();
+  }
+
+  async drain(): Promise<QueueSummary> {
+    let observedCount = -1;
+    while (observedCount !== this.promises.length) {
+      observedCount = this.promises.length;
+      await Promise.allSettled(this.promises);
+    }
+    return this.toSummary();
+  }
+
+  private pump(): void {
+    while (this.active < this.concurrency && this.waiting.length > 0) {
+      const next = this.waiting.shift();
+      if (!next) continue;
+      this.active++;
+      void this.processLead(next.lead)
+        .then((result) => {
+          this.completed.push(result);
+          next.resolve(result);
+        })
+        .catch((err) => {
+          const reason = err instanceof Error ? err.message : String(err);
+          const result = {
+            inserted: false,
+            reason: `Queued subagent failed: ${reason}`,
+            row_summary: undefined,
+            clues: undefined,
+          };
+          this.completed.push(result);
+          next.resolve(result);
+        })
+        .finally(() => {
+          this.active--;
+          this.pump();
+        });
+    }
+  }
+
+  private toSummary(): QueueSummary {
+    const failed = this.completed.filter((result) => !result.inserted).length;
+    return {
+      completed: this.completed.length,
+      inserted: this.completed.filter((result) => result.inserted).length,
+      failed,
+      pending: this.waiting.length,
+      active: this.active,
+      reasons: this.completed
+        .filter((result) => !result.inserted)
+        .map((result) => result.reason)
+        .slice(-10),
+    };
+  }
+}
+
+const queuedSubagentsByRun = new Map<string, SubagentQueue>();
+
+export async function drainQueuedSubagents(workflowRunId: string): Promise<QueueSummary> {
+  const queue = queuedSubagentsByRun.get(workflowRunId);
+  if (!queue) {
+    return { completed: 0, inserted: 0, failed: 0, pending: 0, active: 0, reasons: [] };
+  }
+  try {
+    return await queue.drain();
+  } finally {
+    queuedSubagentsByRun.delete(workflowRunId);
+  }
+}
+
+export function clearQueuedSubagents(workflowRunId: string): void {
+  queuedSubagentsByRun.delete(workflowRunId);
 }
 
 function parseInvestigateResult(
@@ -163,16 +302,17 @@ function formatUnresolvedColumns(
 }
 
 /**
- * Build the run_subagent tool scoped to one dataset.
+ * Build row-investigation tools scoped to one dataset.
  *
- * The orchestrator calls this to hand off a lead to a fresh subagent.
- * The subagent does deep research, inserts at most one row, and returns
- * structured feedback including clues for finding more rows.
+ * `run_subagent` is the original synchronous path. `queue_subagents` lets the
+ * orchestrator keep enumerating while row workers build/reuse extractors and
+ * investigate queued candidates in the background. The workflow drains the queue
+ * before completing, so queued work is still part of the populate run.
  *
  * authorizedDatasetId and authContext are captured by closure — not
  * exposed in the tool schema, never visible to the orchestrator LLM.
  */
-export function buildSubagentTool(
+export function buildSubagentTools(
   authorizedDatasetId: string,
   authContext: AuthContext,
   columns: PopulateColumn[],
@@ -181,139 +321,154 @@ export function buildSubagentTool(
   datasetContext: DatasetContextForExtractor,
   metrics?: RunMetrics,
 ) {
-  return createTool({
-    id: "run_subagent",
-    description:
-      "Hand off a lead to a subagent that will research it deeply and insert a single row if it finds real, verified data. You MUST pass the primary key values (primary_keys) for the entity — the subagent will fill in the remaining columns. Also pass any URLs and context you have found.",
-    inputSchema: investigateInputSchema,
-    outputSchema: investigateOutputSchema,
-    execute: async ({ entity_hint, primary_keys, context, urls, notes }) => {
-      try {
-        const rowCount = await convex.query(internal.datasetRows.countByDataset, {
-          datasetId: authorizedDatasetId,
-        });
-        if (rowCount >= maxRowCount) {
-          return {
-            inserted: false,
-            reason: `ROW_LIMIT_REACHED: this BigSet dataset is capped at ${maxRowCount} rows. Stop calling run_subagent and finish the run.`,
-            row_summary: undefined,
-            clues: undefined,
-          };
-        }
+  const processLead = async ({
+    entity_hint,
+    primary_keys,
+    context,
+    urls,
+    notes,
+  }: InvestigateLead): Promise<InvestigateResult> => {
+    try {
+      const rowCount = await convex.query(internal.datasetRows.countByDataset, {
+        datasetId: authorizedDatasetId,
+      });
+      if (rowCount >= maxRowCount) {
+        return {
+          inserted: false,
+          reason: `ROW_LIMIT_REACHED: this BigSet dataset is capped at ${maxRowCount} rows. Stop calling run_subagent and finish the run.`,
+          row_summary: undefined,
+          clues: undefined,
+        };
+      }
 
-        if (metrics) metrics.investigateCalls++;
-        const primaryKeyRecord = Object.fromEntries(
-          primary_keys.map(({ column, value }) => [column, value]),
-        );
+      if (metrics) metrics.investigateCalls++;
+      const primaryKeyRecord = Object.fromEntries(
+        primary_keys.map(({ column, value }) => [column, value]),
+      );
 
-        const extractorResult = await tryRowExtractorDraft({
-          datasetId: authorizedDatasetId,
+      const extractorResult = await tryRowExtractorDraft({
+        datasetId: authorizedDatasetId,
+        columns,
+        primaryKeys: primaryKeyRecord,
+        urls,
+        context,
+        datasetName: datasetContext.datasetName,
+        description: datasetContext.description,
+        retrievalStrategy: datasetContext.retrievalStrategy,
+        sourceHint: datasetContext.sourceHint,
+        codificationProfile: datasetContext.codificationProfile,
+        browserAttempts: authContext.modelConfig.rowExtractorBrowserAttempts,
+        extractorBuilderModel: authContext.modelConfig.extractorBuilder,
+      });
+      if (/duplicate/i.test(extractorResult.reason)) {
+        return {
+          inserted: false,
+          reason: extractorResult.reason,
+          row_summary: undefined,
+          clues: undefined,
+        };
+      }
+
+      if (extractorResult.status === "extracted") {
+        const missingColumns = extractorResult.missingColumns ?? [];
+        const primaryKeyIssue = validatePrimaryKeySources(
+          extractorResult.data ?? {},
+          extractorResult.sources ?? [],
+          extractorResult.cellSources,
           columns,
-          primaryKeys: primaryKeyRecord,
-          urls,
-          context,
-          datasetName: datasetContext.datasetName,
-          description: datasetContext.description,
-          retrievalStrategy: datasetContext.retrievalStrategy,
-          sourceHint: datasetContext.sourceHint,
-          codificationProfile: datasetContext.codificationProfile,
-          browserAttempts: authContext.modelConfig.rowExtractorBrowserAttempts,
-          extractorBuilderModel: authContext.modelConfig.extractorBuilder,
-        });
-        if (/duplicate/i.test(extractorResult.reason)) {
-          return {
-            inserted: false,
-            reason: extractorResult.reason,
-            row_summary: undefined,
-            clues: undefined,
-          };
-        }
-
-        if (extractorResult.status === "extracted") {
-          const missingColumns = extractorResult.missingColumns ?? [];
-          if (missingColumns.length === 0) {
-            try {
-              await convex.mutation(internal.datasetRows.insert, {
-                datasetId: authorizedDatasetId,
-                data: extractorResult.data ?? {},
-                sources: extractorResult.sources,
-                cellSources: extractorResult.cellSources,
-                rowSummary: extractorResult.rowSummary,
-                howFound:
-                  "Opened the row target with TinyFish Browser and ran the dataset's generated Playwright extractor. No fallback columns were unresolved.",
-              });
-              if (metrics) metrics.rowsInserted++;
-              console.log(
-                `[run_subagent] row extractor inserted complete row entity="${entity_hint}" reason="${extractorResult.reason}"`,
-              );
+          true,
+          datasetContext.sourceHint,
+        );
+        if (missingColumns.length === 0 && !primaryKeyIssue) {
+          try {
+            await convex.mutation(internal.datasetRows.insert, {
+              datasetId: authorizedDatasetId,
+              data: extractorResult.data ?? {},
+              sources: extractorResult.sources,
+              cellSources: extractorResult.cellSources,
+              rowSummary: extractorResult.rowSummary,
+              howFound:
+                "Opened the row target with TinyFish Browser and ran the dataset's generated Playwright extractor. No fallback columns were unresolved.",
+            });
+            if (metrics) metrics.rowsInserted++;
+            console.log(
+              `[run_subagent] row extractor inserted complete row entity="${entity_hint}" reason="${extractorResult.reason}"`,
+            );
+            return {
+              inserted: true,
+              reason: extractorResult.reason,
+              row_summary: extractorResult.rowSummary,
+              clues: undefined,
+            };
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            if (/duplicate/i.test(msg)) {
               return {
-                inserted: true,
-                reason: extractorResult.reason,
-                row_summary: extractorResult.rowSummary,
+                inserted: false,
+                reason: `${msg} Move on to the next entity.`,
+                row_summary: undefined,
                 clues: undefined,
               };
-            } catch (err) {
-              const msg = err instanceof Error ? err.message : String(err);
-              if (/duplicate/i.test(msg)) {
-                return {
-                  inserted: false,
-                  reason: `${msg} Move on to the next entity.`,
-                  row_summary: undefined,
-                  clues: undefined,
-                };
-              }
-              throw err;
             }
+            throw err;
           }
+        }
 
+        if (primaryKeyIssue) {
+          console.warn(
+            `[run_subagent] row extractor primary-key evidence insufficient entity="${entity_hint}" reason="${primaryKeyIssue}"`,
+          );
+        } else {
           console.log(
             `[run_subagent] row extractor drafted entity="${entity_hint}" filled=${extractorResult.extractedColumns?.length ?? 0} unresolved=${missingColumns.length}`,
           );
-        } else if (extractorResult.status === "failed") {
-          console.warn(
-            `[run_subagent] row extractor failed entity="${entity_hint}" reason="${extractorResult.reason}"`,
-          );
-        } else if (extractorResult.status === "miss") {
-          console.log(
-            `[run_subagent] row extractor missed entity="${entity_hint}" reason="${extractorResult.reason}"`,
-          );
         }
-
+      } else if (extractorResult.status === "failed") {
+        console.warn(
+          `[run_subagent] row extractor failed entity="${entity_hint}" reason="${extractorResult.reason}"`,
+        );
+      } else if (extractorResult.status === "miss") {
         console.log(
-          `[run_subagent] spawning subagent user=${authContext.authorizedUserId} run=${authContext.workflowRunId} dataset=${authorizedDatasetId} entity="${entity_hint}" pk=${JSON.stringify(primary_keys)}`,
+          `[run_subagent] row extractor missed entity="${entity_hint}" reason="${extractorResult.reason}"`,
         );
+      }
 
-        const browserFilledValues =
-          extractorResult.status === "extracted" ? extractorResult.data : undefined;
-        const browserFilledColumns =
-          extractorResult.status === "extracted"
-            ? filledColumnNames(extractorResult, columns)
-            : [];
-        const browserCandidateValues =
-          extractorResult.status === "extracted"
-            ? pickRowData(browserFilledValues, browserFilledColumns)
-            : undefined;
-        const browserSources =
-          extractorResult.status === "extracted" ? extractorResult.sources : undefined;
+      console.log(
+        `[run_subagent] spawning subagent user=${authContext.authorizedUserId} run=${authContext.workflowRunId} dataset=${authorizedDatasetId} entity="${entity_hint}" pk=${JSON.stringify(primary_keys)}`,
+      );
 
-        const agent = buildInvestigateAgent(
-          authorizedDatasetId,
-          authContext,
-          columns,
-          llmConfig,
-        );
+      const browserFilledValues =
+        extractorResult.status === "extracted" ? extractorResult.data : undefined;
+      const browserFilledColumns =
+        extractorResult.status === "extracted"
+          ? filledColumnNames(extractorResult, columns)
+          : [];
+      const browserCandidateValues =
+        extractorResult.status === "extracted"
+          ? pickRowData(browserFilledValues, browserFilledColumns)
+          : undefined;
+      const browserSources =
+        extractorResult.status === "extracted" ? extractorResult.sources : undefined;
 
-        const pkBlock = primary_keys
-          .map(({ column, value }) => `- ${column}: ${value}`)
-          .join("\n");
-        const urlsBlock =
-          urls && urls.length > 0
-            ? `\nUseful URLs to start from:\n${urls.map((u) => `- ${u}`).join("\n")}`
-            : "";
-        const notesBlock = notes ? `\nAdditional notes: ${notes}` : "";
-        const browserDraftBlock =
-          extractorResult.status === "extracted"
-            ? `
+      const agent = buildInvestigateAgent(
+        authorizedDatasetId,
+        authContext,
+        columns,
+        llmConfig,
+        { membershipSourceHint: datasetContext.sourceHint },
+      );
+
+      const pkBlock = primary_keys
+        .map(({ column, value }) => `- ${column}: ${value}`)
+        .join("\n");
+      const urlsBlock =
+        urls && urls.length > 0
+          ? `\nUseful URLs to start from:\n${urls.map((u) => `- ${u}`).join("\n")}`
+          : "";
+      const notesBlock = notes ? `\nAdditional notes: ${notes}` : "";
+      const browserDraftBlock =
+        extractorResult.status === "extracted"
+          ? `
 
 Browser extraction produced these candidate values, but this row still needs fallback verification. Treat them as hints, not locked facts. Re-verify all primary key values and any non-empty candidate before insert_row. If a URL primary key 404s, redirects to a different entity, or cannot be justified by source-backed evidence, do not insert the row:
 ${formatRowData(browserCandidateValues)}
@@ -324,7 +479,7 @@ ${formatUnresolvedColumns(columns, extractorResult, browserFilledColumns)}
 Browser sources already used:
 ${(browserSources ?? []).map((u) => `- ${u}`).join("\n") || "(none)"}
 `
-            : `
+          : `
 
 Browser extraction did not produce a usable draft for this row:
 - status: ${extractorResult.status}
@@ -332,7 +487,7 @@ Browser extraction did not produce a usable draft for this row:
 
 Research all non-primary columns normally.`;
 
-        const prompt = `Research this entity and insert a row if you find real, verified data.
+      const prompt = `Research this entity and insert a row if you find real, verified data.
 
 Entity: ${entity_hint}
 
@@ -342,51 +497,109 @@ ${pkBlock}
 Context (partial data already found):
 ${context}${urlsBlock}${notesBlock}${browserDraftBlock}`;
 
-        const abortSignal = getSignal(authorizedDatasetId);
-        const result = await agent.generate(prompt, {
-          abortSignal,
-          maxSteps: 25,
-          modelSettings: {
-            maxOutputTokens: AGENT_MAX_OUTPUT_TOKENS.INVESTIGATE_SUBAGENT,
-          },
-        });
-        if (metrics) {
-          // Use result.toolCalls (the flat accumulated list across all steps) rather
-          // than iterating result.steps[n].toolCalls. The per-step arrays are snapshots
-          // captured at step-finish time; tool-call chunks that arrive after their
-          // step-finish event end up attributed to the wrong step, causing systematic
-          // miscounts. result.toolCalls is the authoritative list maintained by Mastra's
-          // stream processor as chunks arrive.
-          metrics.countToolCalls(result.toolCalls ?? []);
-          metrics.addInvestigateResult(result);
-        }
-
-        const parsed = parseInvestigateResult(result.text);
-        if (metrics && parsed.inserted) metrics.rowsInserted++;
-
-        console.log(
-          `[run_subagent] done entity="${entity_hint}" inserted=${parsed.inserted} steps=${result.steps?.length ?? "?"} toolCalls=${result.toolCalls?.length ?? "?"}` +
-            (parsed.row_summary ? `\n  summary: ${parsed.row_summary}` : "") +
-            (parsed.reason ? `\n  reason:  ${parsed.reason}` : "") +
-            (parsed.clues ? `\n  clues:   ${parsed.clues}` : ""),
-        );
-        return parsed;
-      } catch (err) {
-        // Only propagate an AbortError if OUR signal was actually fired (i.e.
-        // the user pressed Stop). Network errors in Node.js can also surface as
-        // AbortError — re-throwing those would cause the orchestrator's
-        // agent.generate() to exit early and return a graceful empty result,
-        // producing a "0 rows" run without any user action.
-        if (err instanceof Error && err.name === "AbortError" && getSignal(authorizedDatasetId)?.aborted) throw err;
-        const msg = err instanceof Error ? err.message : String(err);
-        console.error(`[run_subagent] subagent error entity="${entity_hint}" err=${msg}`);
-        return {
-          inserted: false,
-          reason: `Subagent failed: ${msg}`,
-          row_summary: undefined,
-          clues: undefined,
-        };
+      const abortSignal = getSignal(authorizedDatasetId);
+      const result = await agent.generate(prompt, {
+        abortSignal,
+        maxSteps: 25,
+        modelSettings: {
+          maxOutputTokens: AGENT_MAX_OUTPUT_TOKENS.INVESTIGATE_SUBAGENT,
+        },
+      });
+      if (metrics) {
+        // Use result.toolCalls (the flat accumulated list across all steps) rather
+        // than iterating result.steps[n].toolCalls. The per-step arrays are snapshots
+        // captured at step-finish time; tool-call chunks that arrive after their
+        // step-finish event end up attributed to the wrong step, causing systematic
+        // miscounts. result.toolCalls is the authoritative list maintained by Mastra's
+        // stream processor as chunks arrive.
+        metrics.countToolCalls(result.toolCalls ?? []);
+        metrics.addInvestigateResult(result);
       }
+
+      const parsed = parseInvestigateResult(result.text);
+      if (metrics && parsed.inserted) metrics.rowsInserted++;
+
+      console.log(
+        `[run_subagent] done entity="${entity_hint}" inserted=${parsed.inserted} steps=${result.steps?.length ?? "?"} toolCalls=${result.toolCalls?.length ?? "?"}` +
+          (parsed.row_summary ? `\n  summary: ${parsed.row_summary}` : "") +
+          (parsed.reason ? `\n  reason:  ${parsed.reason}` : "") +
+          (parsed.clues ? `\n  clues:   ${parsed.clues}` : ""),
+      );
+      return parsed;
+    } catch (err) {
+      // Only propagate an AbortError if OUR signal was actually fired (i.e.
+      // the user pressed Stop). Network errors in Node.js can also surface as
+      // AbortError — re-throwing those would cause the orchestrator's
+      // agent.generate() to exit early and return a graceful empty result,
+      // producing a "0 rows" run without any user action.
+      if (err instanceof Error && err.name === "AbortError" && getSignal(authorizedDatasetId)?.aborted) throw err;
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[run_subagent] subagent error entity="${entity_hint}" err=${msg}`);
+      return {
+        inserted: false,
+        reason: `Subagent failed: ${msg}`,
+        row_summary: undefined,
+        clues: undefined,
+      };
+    }
+  };
+
+  const queue = new SubagentQueue(
+    Math.min(20, Math.max(1, authContext.modelConfig.rowExtractorConcurrency)),
+    processLead,
+  );
+  queuedSubagentsByRun.set(authContext.workflowRunId, queue);
+
+  const runSubagentTool = createTool({
+    id: "run_subagent",
+    description:
+      "Hand off a lead to a subagent that will research it deeply and insert a single row if it finds real, verified data. You MUST pass the primary key values (primary_keys) for the entity — the subagent will fill in the remaining columns. Also pass any URLs and context you have found.",
+    inputSchema: investigateInputSchema,
+    outputSchema: investigateOutputSchema,
+    execute: processLead,
+  });
+
+  const queueSubagentsTool = createTool({
+    id: "queue_subagents",
+    description:
+      "Queue a batch of candidate rows for background investigation. Use this when you have multiple leads so enumeration can continue while extractor builds and row research run in parallel. The workflow drains queued work before finishing.",
+    inputSchema: queueSubagentsInputSchema,
+    outputSchema: queueSubagentsOutputSchema,
+    execute: async ({ candidates }) => {
+      queue.enqueueMany(candidates);
+      const summary = queue.snapshot();
+      console.log(
+        `[queue_subagents] user=${authContext.authorizedUserId} run=${authContext.workflowRunId} dataset=${authorizedDatasetId} queued=${candidates.length} pending=${summary.pending} active=${summary.active} completed=${summary.completed}`,
+      );
+      return {
+        queued: candidates.length,
+        pending: summary.pending,
+        active: summary.active,
+        completed: summary.completed,
+        reason:
+          "Queued. Continue enumerating more candidates; call drain_subagents only when you need feedback or before finishing.",
+      };
     },
   });
+
+  const drainSubagentsTool = createTool({
+    id: "drain_subagents",
+    description:
+      "Wait for queued candidate investigations to finish and return a summary. Use this when you need feedback from queued rows or before you finish.",
+    inputSchema: z.object({}),
+    outputSchema: drainSubagentsOutputSchema,
+    execute: async () => {
+      const summary = await queue.drain();
+      console.log(
+        `[drain_subagents] user=${authContext.authorizedUserId} run=${authContext.workflowRunId} dataset=${authorizedDatasetId} completed=${summary.completed} inserted=${summary.inserted} failed=${summary.failed}`,
+      );
+      return summary;
+    },
+  });
+
+  return {
+    run_subagent: runSubagentTool,
+    queue_subagents: queueSubagentsTool,
+    drain_subagents: drainSubagentsTool,
+  };
 }

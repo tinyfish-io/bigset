@@ -12,6 +12,10 @@ import { createLanguageModel } from "../../config/llm.js";
 import { AGENT_MAX_OUTPUT_TOKENS } from "../../config/agent-output-tokens.js";
 import { requireLlmProviderConfig } from "../../local-credentials.js";
 import { buildPopulateAgent } from "../agents/populate.js";
+import {
+  clearQueuedSubagents,
+  drainQueuedSubagents,
+} from "../tools/investigate-tool.js";
 import { RunMetrics } from "../run-metrics.js";
 import { saveRunMetrics } from "../save-run-metrics.js";
 import { getSignal } from "../../abort-registry.js";
@@ -215,7 +219,8 @@ Data fields to collect:
 ${columnsDesc}${pkNote}${manifestNote}${strategyNote}
 
 Search the web broadly to find real entities that fit this dataset topic.
-For each lead you find, call run_subagent with the primary key values and any context/URLs you have found.
+When you find multiple leads, call queue_subagents with a batch of candidates so discovery can continue while row workers run in the background. Use run_subagent only when you need immediate feedback for one lead.
+Call drain_subagents before finishing if you want queued feedback; the workflow will also drain queued candidates automatically before completing.
 Example primary_keys format: [{"column": "company_name", "value": "Stripe"}]
 If run_subagent returns ROW_LIMIT_REACHED, stop immediately and do not make any more tool calls.
 Stop the populate run as soon as the dataset reaches ${inputData.maxRowCount} rows.`;
@@ -261,6 +266,7 @@ const agentStep = createStep({
     const startedAt = Date.now();
     let status: "success" | "error" = "success";
     let errorMsg: string | undefined;
+    let drainedQueuedSubagents = false;
 
     try {
       const agent = buildPopulateAgent(
@@ -292,6 +298,13 @@ const agentStep = createStep({
       metrics.addOrchestratorResult(result);
       // Use result.toolCalls (flat accumulated list) — same reasoning as investigate-tool.ts.
       metrics.countToolCalls(result.toolCalls ?? []);
+      const queueSummary = await drainQueuedSubagents(inputData.authContext.workflowRunId);
+      drainedQueuedSubagents = true;
+      if (queueSummary.completed > 0) {
+        console.log(
+          `[populate-agent] Drained queued subagents completed=${queueSummary.completed} inserted=${queueSummary.inserted} failed=${queueSummary.failed}`,
+        );
+      }
       return { text: result.text };
     } catch (err) {
       status = "error";
@@ -306,6 +319,9 @@ const agentStep = createStep({
       console.error(`[populate-agent] agent.generate failed: ${errorMsg}`);
       throw err;
     } finally {
+      if (!drainedQueuedSubagents) {
+        clearQueuedSubagents(inputData.authContext.workflowRunId);
+      }
       const finishedAt = Date.now();
       void saveRunMetrics({
         workflowRunId: inputData.authContext.workflowRunId,

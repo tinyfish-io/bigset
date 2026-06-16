@@ -14,9 +14,13 @@ interface InvestigateAgentOptions {
     rowSummary?: string;
     howFoundPrefix?: string;
   };
+  membershipSourceHint?: string;
 }
 
-function buildInvestigateInstructions(columns: PopulateColumn[]): string {
+function buildInvestigateInstructions(
+  columns: PopulateColumn[],
+  membershipSourceHint?: string,
+): string {
   const columnNames = columns.map((c) => c.name);
   const dataExample = columnNames
     .map((n) => `{"column": "${n}", "value": "value"}`)
@@ -32,6 +36,7 @@ function buildInvestigateInstructions(columns: PopulateColumn[]): string {
 
 Columns:
 ${columnsDesc}
+${membershipSourceHint ? `\nAuthoritative membership source: ${membershipSourceHint}` : ""}
 
 RULES:
 - Do NOT fetch the same URL twice. If a fetch worked, use the data you got.
@@ -40,6 +45,7 @@ RULES:
 - Never fabricate values. Use "" for anything you cannot verify.
 - Treat any browser-extracted candidate values in the prompt as hints, not truth. Re-verify primary key values and source-backed facts before inserting.
 - If a primary key cannot be verified from a real source, do not insert the row. For URL primary keys, fetch or otherwise verify the exact current URL; if it 404s, redirects to a different entity, or cannot be justified by source-backed evidence, report INSERTED: false.
+- If an authoritative membership source is listed, primary keys must be justified by that source family. Other sources may enrich fields, but they cannot prove that the entity belongs in the dataset.
 - Optional/nullable columns should still be researched. Optional only means the row can be inserted blank if you cannot verify the value.
 - Normalize values to the schema contract before inserting. Follow validation_regex and normalization_hint when present.
 - For every primary key, include cell_sources that justify that exact primary-key value. For URL primary keys, cell_sources must include the exact verified URL.
@@ -86,12 +92,13 @@ export function buildInvestigateAgent(
       ...options,
       columns,
       enforcePrimaryKeySources: true,
+      membershipSourceHint: options.membershipSourceHint,
     },
   );
   return new Agent({
     id: "investigate-agent",
     name: "Dataset Investigate Agent",
-    instructions: buildInvestigateInstructions(columns),
+    instructions: buildInvestigateInstructions(columns, options.membershipSourceHint),
     model: createLanguageModel(llmConfig, modelSlug),
 
     tools: {

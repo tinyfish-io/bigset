@@ -326,11 +326,15 @@ export const claimScheduledRefreshInternal = internalMutation({
 export const completeScheduledRefreshInternal = internalMutation({
   args: {
     id: v.id("datasets"),
+    runId: v.string(),
     now: v.number(),
   },
   handler: async (ctx, args) => {
     const dataset = await ctx.db.get(args.id);
     if (!dataset) return { outcome: "not_found" as const };
+    if (dataset.lastRefreshRunId !== args.runId) {
+      return { outcome: "stale_run" as const };
+    }
 
     const refreshCadence = dataset.refreshCadence ?? "manual";
     await ctx.db.patch(dataset._id, {
@@ -338,6 +342,7 @@ export const completeScheduledRefreshInternal = internalMutation({
       lastStatusError: undefined,
       lastRefreshAt: args.now,
       lastRefreshStartedAt: undefined,
+      lastRefreshRunId: undefined,
       nextRefreshAt: nextRefreshAtFor(refreshCadence, args.now),
     });
     return { outcome: "completed" as const };
@@ -347,18 +352,23 @@ export const completeScheduledRefreshInternal = internalMutation({
 export const failScheduledRefreshInternal = internalMutation({
   args: {
     id: v.id("datasets"),
+    runId: v.string(),
     now: v.number(),
     lastStatusError: v.string(),
   },
   handler: async (ctx, args) => {
     const dataset = await ctx.db.get(args.id);
     if (!dataset) return { outcome: "not_found" as const };
+    if (dataset.lastRefreshRunId !== args.runId) {
+      return { outcome: "stale_run" as const };
+    }
 
     const refreshCadence = dataset.refreshCadence ?? "manual";
     await ctx.db.patch(dataset._id, {
       status: "failed",
       lastStatusError: args.lastStatusError,
       lastRefreshStartedAt: undefined,
+      lastRefreshRunId: undefined,
       nextRefreshAt: nextRefreshAtFor(refreshCadence, args.now),
     });
     return { outcome: "failed" as const };
