@@ -618,6 +618,15 @@ export const remove = mutation({
     for (const row of rows) {
       await ctx.db.delete(row._id);
     }
+
+    const extractors = await ctx.db
+      .query("datasetExtractors")
+      .withIndex("by_dataset_site", (q) => q.eq("datasetId", dataset._id))
+      .collect();
+    for (const extractor of extractors) {
+      await ctx.db.delete(extractor._id);
+    }
+
     await ctx.db.delete(dataset._id);
   },
 });

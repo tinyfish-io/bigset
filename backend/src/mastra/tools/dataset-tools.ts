@@ -249,9 +249,8 @@ function normalizeHttpUrlForComparison(value: string): string | undefined {
     const parsed = new URL(value.trim());
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return undefined;
     parsed.hash = "";
-    parsed.search = "";
     parsed.pathname = parsed.pathname.replace(/\/+$/, "") || "/";
-    return parsed.toString().toLowerCase();
+    return parsed.toString();
   } catch {
     return undefined;
   }

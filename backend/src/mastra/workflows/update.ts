@@ -299,6 +299,10 @@ ${row.howFound ? `\nPreviously found via: ${row.howFound}` : ""}`;
       `[refresh-rows] Done: ${updatedCount} updated, ${errors} errors, ${rows.length - updatedCount - errors} unchanged`,
     );
 
+    const allRowsFailed = rows.length > 0 && errors === rows.length;
+    const refreshError =
+      errors > 0 ? `${errors} of ${rows.length} row(s) failed to refresh` : undefined;
+
     // Persist metrics — fire-and-forget; never block the workflow return.
     void saveRunMetrics({
       workflowRunId: authContext.workflowRunId,
@@ -310,10 +314,8 @@ ${row.howFound ? `\nPreviously found via: ${row.howFound}` : ""}`;
       // Total failure: every row errored. Partial failure: some rows errored
       // but at least one succeeded — still "success" overall, but the error
       // field records how many failed so partial issues are visible in the data.
-      status: errors > 0 && updatedCount === 0 ? "error" : "success",
-      error: errors > 0
-        ? `${errors} of ${rows.length} row(s) failed to refresh`
-        : undefined,
+      status: allRowsFailed ? "error" : "success",
+      error: refreshError,
       workflowType: "update",
     }).catch((err) =>
       console.error(
@@ -321,6 +323,10 @@ ${row.howFound ? `\nPreviously found via: ${row.howFound}` : ""}`;
         err,
       ),
     );
+
+    if (allRowsFailed) {
+      throw new Error(refreshError);
+    }
 
     return { updatedCount, totalCount: rows.length, errors };
   },

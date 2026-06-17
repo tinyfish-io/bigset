@@ -193,6 +193,7 @@ export default function SetupPage() {
         ...prev,
         [key]: nextModelId,
       }));
+      void getLocalSetupStatus().then(setStatus).catch(() => undefined);
       setActiveModelRole(null);
     } catch (err) {
       setModelError(

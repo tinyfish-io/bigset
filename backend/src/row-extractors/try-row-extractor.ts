@@ -133,6 +133,16 @@ interface AgenticExtractorBuildResult {
   probeSummary: string;
 }
 
+interface CachedExtractorScript {
+  script: string;
+  updatedAt: number;
+}
+
+interface RuntimeRepairResult {
+  script: string;
+  cachedExtractor?: CachedExtractorScript;
+}
+
 interface ExtractorSmokeTestCase {
   input: TryRowExtractorInput;
   url: string;
@@ -152,8 +162,8 @@ const GENERIC_EXTRACTOR_HOW_FOUND =
   "Opened the row target with TinyFish Browser and ran the dataset's sandboxed browser extractor.";
 const GENERIC_REFRESH_HOW_FOUND =
   "Refreshed the row target with TinyFish Browser and ran the dataset's sandboxed browser extractor.";
-const inFlightExtractorBuilds = new Map<string, Promise<string>>();
-const inFlightExtractorRepairs = new Map<string, Promise<string>>();
+const inFlightExtractorBuilds = new Map<string, Promise<CachedExtractorScript>>();
+const inFlightExtractorRepairs = new Map<string, Promise<RuntimeRepairResult>>();
 const extractorSmokeTests = new Map<string, ExtractorSmokeTestCase>();
 const EXTRACTOR_RUNNER_SOURCE = `
 import { chromium } from "playwright-core";
@@ -1059,7 +1069,8 @@ async function extractGenericRow(
   if (!apiKey) throw new Error("TINYFISH_API_KEY is not configured");
 
   const siteKey = siteKeyForInput(input, url);
-  const script = await getOrBuildExtractorScript(apiKey, input, url);
+  const cachedExtractor = await getOrBuildExtractorScript(apiKey, input, url);
+  const script = cachedExtractor.script;
   throwIfRunAborted(input.datasetId);
   const attempts = normalizedBrowserAttempts(input.browserAttempts);
   let lastError: unknown;
@@ -1100,6 +1111,7 @@ async function extractGenericRow(
     throw new NonRepairableExtractorFailure(failure);
   }
 
+  let extractorToMarkFailed = cachedExtractor;
   try {
     console.warn(
       `[row_extractor] generated extractor failed; requesting repair: ${failure}`,
@@ -1111,8 +1123,11 @@ async function extractGenericRow(
       script,
       failure,
     );
+    if (repaired.cachedExtractor) {
+      extractorToMarkFailed = repaired.cachedExtractor;
+    }
     console.log(`[row_extractor] running repaired sandboxed browser extractor for ${siteKey}`);
-    const raw = await runGeneratedExtractorScript(apiKey, input, url, repaired);
+    const raw = await runGeneratedExtractorScript(apiKey, input, url, repaired.script);
     const extraction = buildRowFromExtractorResult(input, url, raw, existingData);
     const qualityIssue = extractorQualityIssue(extraction, input.columns);
     if (qualityIssue) throw new Error(qualityIssue);
@@ -1124,9 +1139,16 @@ async function extractGenericRow(
     }
     const repairMsg = repairErr instanceof Error ? repairErr.message : String(repairErr);
     if (!isTransientBrowserFailure(repairMsg) && !isHttpSourceFailure(repairMsg)) {
-      await markExtractorFailed(input, url, repairMsg);
+      const markedFailed = await markExtractorFailed(
+        input,
+        url,
+        extractorToMarkFailed,
+        repairMsg,
+      );
       console.warn(
-        `[row_extractor] repair failed; marked cached extractor failed for ${siteKey}: ${repairMsg}`,
+        markedFailed
+          ? `[row_extractor] repair failed; marked cached extractor failed for ${siteKey}: ${repairMsg}`
+          : `[row_extractor] repair failed; skipped stale cached extractor failure for ${siteKey}: ${repairMsg}`,
       );
     } else {
       console.warn(
@@ -1148,7 +1170,7 @@ async function getOrBuildExtractorScript(
   apiKey: string,
   input: TryRowExtractorInput,
   url: string,
-): Promise<string> {
+): Promise<CachedExtractorScript> {
   const siteKey = siteKeyForInput(input, url);
   const columnsHash = hashColumns(input.columns);
   const buildKey = extractorBuildKey(input.datasetId, siteKey, columnsHash);
@@ -1156,10 +1178,10 @@ async function getOrBuildExtractorScript(
     datasetId: input.datasetId,
     siteKey,
     columnsHash,
-  })) as { script?: string } | null;
-  if (existing?.script) {
+  })) as { script?: string; updatedAt?: number } | null;
+  if (existing?.script && typeof existing.updatedAt === "number") {
     console.log(`[row_extractor] using cached generated sandboxed browser extractor for ${siteKey}`);
-    return existing.script;
+    return { script: existing.script, updatedAt: existing.updatedAt };
   }
 
   const inFlightBuild = inFlightExtractorBuilds.get(buildKey);
@@ -1179,23 +1201,28 @@ async function getOrBuildExtractorScript(
 async function markExtractorFailed(
   input: TryRowExtractorInput,
   url: string,
+  extractor: CachedExtractorScript,
   error: string,
-): Promise<void> {
+): Promise<boolean> {
   const siteKey = siteKeyForInput(input, url);
   const columnsHash = hashColumns(input.columns);
   try {
-    await convex.mutation(internal.datasetExtractors.markFailed, {
+    const markedId = await convex.mutation(internal.datasetExtractors.markFailed, {
       datasetId: input.datasetId,
       siteKey,
       columnsHash,
+      script: extractor.script,
+      updatedAt: extractor.updatedAt,
       error,
     });
+    return Boolean(markedId);
   } catch (err) {
     console.warn(
       `[row_extractor] failed to mark cached extractor failed for ${siteKey}: ${
         err instanceof Error ? err.message : String(err)
       }`,
     );
+    return false;
   }
 }
 
@@ -1205,21 +1232,21 @@ async function buildAndPersistExtractorScript(
   url: string,
   siteKey: string,
   columnsHash: string,
-): Promise<string> {
+): Promise<CachedExtractorScript> {
   const modelSlug = input.extractorBuilderModel ?? DEFAULT_MODEL_IDS.EXTRACTOR_BUILDER;
   const built = await buildExtractorScriptWithAgent(apiKey, input, url, modelSlug);
   const script = built.script;
   const validation = await validateExtractorScript(apiKey, input, url, script);
   if (validation.ok) {
-    await convex.mutation(internal.datasetExtractors.upsert, {
+    const stored = (await convex.mutation(internal.datasetExtractors.upsert, {
       datasetId: input.datasetId,
       siteKey,
       columnsHash,
       script,
       model: modelSlug,
       probeSummary: built.probeSummary,
-    });
-    return script;
+    })) as { updatedAt: number };
+    return { script, updatedAt: stored.updatedAt };
   }
 
   if (isNonRepairableValidationFailure(validation.reason)) {
@@ -1244,15 +1271,15 @@ async function buildAndPersistExtractorScript(
     throw new Error(`generated extractor failed validation: ${repairedValidation.reason}`);
   }
 
-  await convex.mutation(internal.datasetExtractors.upsert, {
+  const stored = (await convex.mutation(internal.datasetExtractors.upsert, {
     datasetId: input.datasetId,
     siteKey,
     columnsHash,
     script: repaired.script,
     model: modelSlug,
     probeSummary: repaired.probeSummary,
-  });
-  return repaired.script;
+  })) as { updatedAt: number };
+  return { script: repaired.script, updatedAt: stored.updatedAt };
 }
 
 function isNonRepairableValidationFailure(reason: string | undefined): boolean {
@@ -1888,7 +1915,7 @@ async function repairExtractorAfterRuntimeFailure(
   url: string,
   script: string,
   failure: string,
-): Promise<string> {
+): Promise<RuntimeRepairResult> {
   const repairKey = extractorBuildKeyForInput(input, url);
   const siteKey = siteKeyForInput(input, url);
   const inFlightRepair = inFlightExtractorRepairs.get(repairKey);
@@ -1916,7 +1943,7 @@ async function repairExtractorAfterRuntimeFailureImpl(
   url: string,
   script: string,
   failure: string,
-): Promise<string> {
+): Promise<RuntimeRepairResult> {
   const modelSlug = input.extractorBuilderModel ?? DEFAULT_MODEL_IDS.EXTRACTOR_BUILDER;
   const repaired = await buildExtractorScriptWithAgent(
     apiKey,
@@ -1965,18 +1992,21 @@ async function repairExtractorAfterRuntimeFailureImpl(
     console.warn(
       `[row_extractor] repaired extractor has no known-good regression row for ${siteKey}; using for this row without updating cache`,
     );
-    return repaired.script;
+    return { script: repaired.script };
   }
 
-  await convex.mutation(internal.datasetExtractors.upsert, {
+  const stored = (await convex.mutation(internal.datasetExtractors.upsert, {
     datasetId: input.datasetId,
     siteKey,
     columnsHash,
     script: repaired.script,
     model: modelSlug,
     probeSummary: repaired.probeSummary,
-  });
-  return repaired.script;
+  })) as { updatedAt: number };
+  return {
+    script: repaired.script,
+    cachedExtractor: { script: repaired.script, updatedAt: stored.updatedAt },
+  };
 }
 
 function isRowLevelQualityIssue(reason: string): boolean {

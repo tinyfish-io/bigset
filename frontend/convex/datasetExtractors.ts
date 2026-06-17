@@ -37,6 +37,9 @@ export const upsert = internalMutation({
     probeSummary: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    const dataset = await ctx.db.get(args.datasetId);
+    if (!dataset) throw new Error("Dataset not found");
+
     const now = Date.now();
     const existing = await ctx.db
       .query("datasetExtractors")
@@ -57,15 +60,16 @@ export const upsert = internalMutation({
 
     if (existing) {
       await ctx.db.patch(existing._id, patch);
-      return existing._id;
+      return { id: existing._id, updatedAt: now };
     }
 
-    return await ctx.db.insert("datasetExtractors", {
+    const id = await ctx.db.insert("datasetExtractors", {
       datasetId: args.datasetId,
       siteKey: args.siteKey,
       createdAt: now,
       ...patch,
     });
+    return { id, updatedAt: now };
   },
 });
 
@@ -74,6 +78,8 @@ export const markFailed = internalMutation({
     datasetId: v.id("datasets"),
     siteKey: v.string(),
     columnsHash: v.string(),
+    script: v.string(),
+    updatedAt: v.number(),
     error: v.string(),
   },
   handler: async (ctx, args) => {
@@ -83,7 +89,14 @@ export const markFailed = internalMutation({
         q.eq("datasetId", args.datasetId).eq("siteKey", args.siteKey),
       )
       .first();
-    if (!existing || existing.columnsHash !== args.columnsHash) return null;
+    if (
+      !existing ||
+      existing.columnsHash !== args.columnsHash ||
+      existing.script !== args.script ||
+      existing.updatedAt !== args.updatedAt
+    ) {
+      return null;
+    }
 
     await ctx.db.patch(existing._id, {
       status: "failed",

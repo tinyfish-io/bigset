@@ -18,6 +18,8 @@ interface CodificationClassificationInput {
 }
 
 const PROFILE_VERSION = 1;
+const BROAD_RESEARCH_TEXT_PATTERN =
+  /\b(across|around|from)\s+the\s+web\b|\bsearch\s+the\s+web\b|\bany\s+source\b/;
 
 export function schemaCodificationProfileToRuntime(
   profile: SchemaCodificationProfile,
@@ -60,31 +62,19 @@ export function classifyCodificationProfile(
   const sourceUrl = firstHttpUrl(input.sourceHint);
   const sourceFamily = sourceUrl ? familyFromUrl(sourceUrl) : undefined;
   const retrievalStrategy = input.retrievalStrategy ?? "search_fetch";
-  const searchableText = [
-    input.datasetName,
-    input.description,
-    input.sourceHint,
-    ...input.columns.map((column) => `${column.name} ${column.description ?? ""}`),
-  ]
-    .join(" ")
-    .toLowerCase();
+  const broadResearch = isBroadResearchInput(input);
+
+  if (!sourceUrl && broadResearch) {
+    return disabledProfile(
+      primaryKeyShape,
+      "Prompt describes broad web research rather than one stable page family.",
+    );
+  }
 
   if (!sourceUrl && primaryKeyShape !== "url") {
     return disabledProfile(
       primaryKeyShape,
       "No source URL or URL-shaped primary key; legacy metadata only supports broad investigation.",
-    );
-  }
-
-  if (
-    !sourceUrl &&
-    /\b(across|around|from)\s+the\s+web\b|\bsearch\s+the\s+web\b|\bany\s+source\b/.test(
-      searchableText,
-    )
-  ) {
-    return disabledProfile(
-      primaryKeyShape,
-      "Prompt describes broad web research rather than one stable page family.",
     );
   }
 
@@ -173,6 +163,10 @@ function hasConcreteCodificationRoute(
   );
   if (hasUsableTemplate) return true;
 
+  const broadResearch =
+    isBroadResearchDisableReason(profile.reason) || isBroadResearchInput(input);
+  if (broadResearch) return false;
+
   const rowUrl = firstHttpUrl(
     [
       ...Object.values(input.primaryKeys ?? {}),
@@ -180,8 +174,7 @@ function hasConcreteCodificationRoute(
       input.context,
     ].join(" "),
   );
-  const broadResearch = isBroadResearchDisableReason(profile.reason);
-  if (rowUrl && !broadResearch) return true;
+  if (rowUrl) return true;
 
   const sourceUrl = firstHttpUrl(input.sourceHint);
   const primaryKeyShape =
@@ -193,7 +186,6 @@ function hasConcreteCodificationRoute(
     primaryKeyShape === "slug" ||
     primaryKeyShape === "url";
   if (sourceUrl && structuredPrimaryKey) return true;
-  if (broadResearch) return false;
 
   const accessRiskOnly = /\b(block|blocked|captcha|bot|automation|browser|fetch|access|degrad)/i.test(
     profile.reason,
@@ -202,9 +194,22 @@ function hasConcreteCodificationRoute(
 }
 
 function isBroadResearchDisableReason(reason: string): boolean {
-  return /\b(broad web|arbitrary unrelated|unrelated domains|snippet-only|search snippets)\b/i.test(
-    reason,
-  );
+  return /\b(broad web|broad investigation|arbitrary unrelated|unrelated domains|snippet-only|search snippets)\b/i.test(reason);
+}
+
+function isBroadResearchInput(input: CodificationClassificationInput): boolean {
+  return BROAD_RESEARCH_TEXT_PATTERN.test(codificationSearchableText(input));
+}
+
+function codificationSearchableText(input: CodificationClassificationInput): string {
+  return [
+    input.datasetName,
+    input.description,
+    input.sourceHint,
+    ...input.columns.map((column) => `${column.name} ${column.description ?? ""}`),
+  ]
+    .join(" ")
+    .toLowerCase();
 }
 
 function hasTemplateValues(

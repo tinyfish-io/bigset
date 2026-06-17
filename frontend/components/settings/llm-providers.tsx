@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { CircleHelp, Plug, TriangleAlert } from "lucide-react";
 import type { LlmProviderType, ServiceSetupStatus } from "@/lib/backend";
 
@@ -456,26 +456,23 @@ export function LlmProviderSelector({
   value: LlmProviderOptionValue;
   onChange: (provider: LlmProviderOptionValue) => void;
 }) {
+  const selectedProviderIsExperimental = isExperimentalProvider(value);
   const [showExperimentalProviders, setShowExperimentalProviders] =
     useState(false);
+  const shouldShowExperimentalProviders =
+    showExperimentalProviders || selectedProviderIsExperimental;
   const orderedOptions = LLM_PROVIDER_GROUPS.flatMap((group) =>
     LLM_PROVIDER_OPTIONS.filter((option) =>
       group.categories.includes(option.category),
     ),
   ).filter(
     (option) =>
-      showExperimentalProviders || !isExperimentalProvider(option.value),
+      shouldShowExperimentalProviders || !isExperimentalProvider(option.value),
   );
-
-  useEffect(() => {
-    if (!showExperimentalProviders && isExperimentalProvider(value)) {
-      onChange("openrouter");
-    }
-  }, [onChange, showExperimentalProviders, value]);
 
   function handleExperimentalChange(checked: boolean) {
     setShowExperimentalProviders(checked);
-    if (!checked && isExperimentalProvider(value)) {
+    if (!checked && selectedProviderIsExperimental) {
       onChange("openrouter");
     }
   }
@@ -486,7 +483,7 @@ export function LlmProviderSelector({
         <label className="flex items-center gap-2">
           <input
             type="checkbox"
-            checked={showExperimentalProviders}
+            checked={shouldShowExperimentalProviders}
             onChange={(event) => handleExperimentalChange(event.target.checked)}
             className="size-4 rounded border-border bg-background accent-foreground"
           />

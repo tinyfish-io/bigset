@@ -95,6 +95,10 @@ interface DatasetContextForExtractor {
 
 type InvestigateLead = z.infer<typeof investigateInputSchema>;
 type InvestigateResult = z.infer<typeof investigateOutputSchema>;
+type ProcessLead = (
+  lead: InvestigateLead,
+  abortSignal?: AbortSignal,
+) => Promise<InvestigateResult>;
 
 interface QueueSummary {
   completed: number;
@@ -106,6 +110,7 @@ interface QueueSummary {
 }
 
 class SubagentQueue {
+  private readonly controller = new AbortController();
   private readonly waiting: Array<{
     lead: InvestigateLead;
     resolve: (result: InvestigateResult) => void;
@@ -118,7 +123,7 @@ class SubagentQueue {
 
   constructor(
     private readonly concurrency: number,
-    private readonly processLead: (lead: InvestigateLead) => Promise<InvestigateResult>,
+    private readonly processLead: ProcessLead,
     private readonly abortSignal?: AbortSignal,
   ) {
     if (abortSignal) {
@@ -153,6 +158,9 @@ class SubagentQueue {
   cancel(reason: string): void {
     if (this.canceledReason) return;
     this.canceledReason = reason;
+    if (!this.controller.signal.aborted) {
+      this.controller.abort(new DOMException(reason, "AbortError"));
+    }
     const waiting = this.waiting.splice(0);
     for (const pending of waiting) {
       const result = this.canceledResult();
@@ -182,7 +190,7 @@ class SubagentQueue {
       const next = this.waiting.shift();
       if (!next) continue;
       this.active++;
-      void this.processLead(next.lead)
+      void this.processLead(next.lead, this.controller.signal)
         .then((result) => {
           this.completed.push(result);
           next.resolve(result);
@@ -245,13 +253,46 @@ export async function drainQueuedSubagents(workflowRunId: string): Promise<Queue
   }
 }
 
-export function clearQueuedSubagents(workflowRunId: string): void {
+export async function clearQueuedSubagents(workflowRunId: string): Promise<QueueSummary> {
   const queue = queuedSubagentsByRun.get(workflowRunId);
-  if (queue) {
-    queue.cancel("Queued subagents cleared");
-    queue.dispose();
+  if (!queue) {
+    return { completed: 0, inserted: 0, failed: 0, pending: 0, active: 0, reasons: [] };
   }
-  queuedSubagentsByRun.delete(workflowRunId);
+  queue.cancel("Queued subagents cleared");
+  try {
+    return await queue.drain();
+  } finally {
+    queue.dispose();
+    queuedSubagentsByRun.delete(workflowRunId);
+  }
+}
+
+function abortSignalMessage(signal: AbortSignal): string {
+  const reason = signal.reason;
+  if (reason instanceof Error) return reason.message;
+  return reason ? String(reason) : "Run was stopped";
+}
+
+function throwIfAbortSignalAborted(signal: AbortSignal | undefined): void {
+  if (!signal?.aborted) return;
+  const reason = signal.reason;
+  if (reason instanceof Error) throw reason;
+  throw new DOMException(abortSignalMessage(signal), "AbortError");
+}
+
+function isStopped(
+  authorizedDatasetId: string,
+  abortSignal: AbortSignal | undefined,
+): boolean {
+  return isDatasetRunAborted(authorizedDatasetId) || abortSignal?.aborted === true;
+}
+
+function throwIfStopped(
+  authorizedDatasetId: string,
+  abortSignal: AbortSignal | undefined,
+): void {
+  throwIfDatasetRunAborted(authorizedDatasetId);
+  throwIfAbortSignalAborted(abortSignal);
 }
 
 function parseInvestigateResult(
@@ -374,21 +415,19 @@ export function buildSubagentTools(
   datasetContext: DatasetContextForExtractor,
   metrics?: RunMetrics,
 ) {
-  const throwIfStopped = () => throwIfDatasetRunAborted(authorizedDatasetId);
+  const throwIfStoppedForLead = (abortSignal?: AbortSignal) =>
+    throwIfStopped(authorizedDatasetId, abortSignal);
 
-  const processLead = async ({
-    entity_hint,
-    primary_keys,
-    context,
-    urls,
-    notes,
-  }: InvestigateLead): Promise<InvestigateResult> => {
+  const processLead: ProcessLead = async (
+    { entity_hint, primary_keys, context, urls, notes },
+    leadAbortSignal,
+  ): Promise<InvestigateResult> => {
     try {
-      throwIfStopped();
+      throwIfStoppedForLead(leadAbortSignal);
       const rowCount = await convex.query(internal.datasetRows.countByDataset, {
         datasetId: authorizedDatasetId,
       });
-      throwIfStopped();
+      throwIfStoppedForLead(leadAbortSignal);
       if (rowCount >= maxRowCount) {
         return {
           inserted: false,
@@ -403,7 +442,7 @@ export function buildSubagentTools(
         primary_keys.map(({ column, value }) => [column, value]),
       );
 
-      throwIfStopped();
+      throwIfStoppedForLead(leadAbortSignal);
       const extractorResult = await tryRowExtractorDraft({
         datasetId: authorizedDatasetId,
         columns,
@@ -417,8 +456,9 @@ export function buildSubagentTools(
         codificationProfile: datasetContext.codificationProfile,
         browserAttempts: authContext.modelConfig.rowExtractorBrowserAttempts,
         extractorBuilderModel: authContext.modelConfig.extractorBuilder,
+        abortSignal: leadAbortSignal,
       });
-      throwIfStopped();
+      throwIfStoppedForLead(leadAbortSignal);
       if (/duplicate/i.test(extractorResult.reason)) {
         return {
           inserted: false,
@@ -440,7 +480,7 @@ export function buildSubagentTools(
         );
         if (missingColumns.length === 0 && !primaryKeyIssue) {
           try {
-            throwIfStopped();
+            throwIfStoppedForLead(leadAbortSignal);
             await convex.mutation(internal.datasetRows.insert, {
               datasetId: authorizedDatasetId,
               data: extractorResult.data ?? {},
@@ -461,7 +501,9 @@ export function buildSubagentTools(
               clues: undefined,
             };
           } catch (err) {
-            if (isAbortLikeError(err) && isDatasetRunAborted(authorizedDatasetId)) throw err;
+            if (isAbortLikeError(err) && isStopped(authorizedDatasetId, leadAbortSignal)) {
+              throw err;
+            }
             const msg = err instanceof Error ? err.message : String(err);
             if (/duplicate/i.test(msg)) {
               return {
@@ -494,7 +536,7 @@ export function buildSubagentTools(
         );
       }
 
-      throwIfStopped();
+      throwIfStoppedForLead(leadAbortSignal);
       console.log(
         `[run_subagent] spawning subagent user=${authContext.authorizedUserId} run=${authContext.workflowRunId} dataset=${authorizedDatasetId} entity="${entity_hint}" pk=${JSON.stringify(primary_keys)}`,
       );
@@ -517,7 +559,10 @@ export function buildSubagentTools(
         authContext,
         columns,
         llmConfig,
-        { membershipSourceHint: datasetContext.sourceHint },
+        {
+          membershipSourceHint: datasetContext.sourceHint,
+          abortSignal: leadAbortSignal,
+        },
       );
 
       const pkBlock = primary_keys
@@ -559,10 +604,10 @@ ${pkBlock}
 Context (partial data already found):
 ${context}${urlsBlock}${notesBlock}${browserDraftBlock}`;
 
-      const abortSignal = getSignal(authorizedDatasetId);
-      throwIfStopped();
+      const agentAbortSignal = leadAbortSignal ?? getSignal(authorizedDatasetId);
+      throwIfStoppedForLead(leadAbortSignal);
       const result = await agent.generate(prompt, {
-        abortSignal,
+        abortSignal: agentAbortSignal,
         maxSteps: 25,
         modelSettings: {
           maxOutputTokens: AGENT_MAX_OUTPUT_TOKENS.INVESTIGATE_SUBAGENT,
@@ -595,7 +640,9 @@ ${context}${urlsBlock}${notesBlock}${browserDraftBlock}`;
       // AbortError — re-throwing those would cause the orchestrator's
       // agent.generate() to exit early and return a graceful empty result,
       // producing a "0 rows" run without any user action.
-      if (isAbortLikeError(err) && isDatasetRunAborted(authorizedDatasetId)) throw err;
+      if (isAbortLikeError(err) && isStopped(authorizedDatasetId, leadAbortSignal)) {
+        throw err;
+      }
       const msg = err instanceof Error ? err.message : String(err);
       console.error(`[run_subagent] subagent error entity="${entity_hint}" err=${msg}`);
       return {
@@ -630,7 +677,7 @@ ${context}${urlsBlock}${notesBlock}${browserDraftBlock}`;
     inputSchema: queueSubagentsInputSchema,
     outputSchema: queueSubagentsOutputSchema,
     execute: async ({ candidates }) => {
-      throwIfStopped();
+      throwIfStoppedForLead();
       queue.enqueueMany(candidates);
       const summary = queue.snapshot();
       console.log(

@@ -59,7 +59,7 @@ export const getInternal = internalQuery({
 export const upsertInternal = internalMutation({
   args: {
     service: serviceValidator,
-    keychainAccount: v.optional(v.string()),
+    keychainAccount: v.optional(v.union(v.string(), v.null())),
     connectionMethod: connectionMethodValidator,
     verifiedAt: v.number(),
     llmProvider: v.optional(llmProviderValidator),
@@ -72,10 +72,16 @@ export const upsertInternal = internalMutation({
       .withIndex("by_service", (q) => q.eq("service", args.service))
       .unique();
 
-    const update = {
-      ...(args.keychainAccount !== undefined
+    const keychainAccountPatch =
+      args.keychainAccount !== undefined
+        ? { keychainAccount: args.keychainAccount ?? undefined }
+        : {};
+    const keychainAccountInsert =
+      typeof args.keychainAccount === "string"
         ? { keychainAccount: args.keychainAccount }
-        : {}),
+        : {};
+
+    const update = {
       connectionMethod: args.connectionMethod,
       verifiedAt: args.verifiedAt,
       updatedAt: Date.now(),
@@ -98,12 +104,18 @@ export const upsertInternal = internalMutation({
       : {};
 
     if (existing) {
-      await ctx.db.patch(existing._id, { ...update, ...llmPatch, apiKey: undefined });
+      await ctx.db.patch(existing._id, {
+        ...keychainAccountPatch,
+        ...update,
+        ...llmPatch,
+        apiKey: undefined,
+      });
       return existing._id;
     }
 
     return await ctx.db.insert("localCredentials", {
       service: args.service,
+      ...keychainAccountInsert,
       ...update,
       ...llmInsert,
     });

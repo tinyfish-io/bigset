@@ -23,6 +23,7 @@ import {
   abortDataset,
   deregisterDataset,
   hasActiveDatasetRuns,
+  isDatasetRunAborted,
   registerDataset,
 } from "./abort-registry.js";
 import {
@@ -292,6 +293,36 @@ async function finaliseRunAsLive({
       rowCount,
       workflowType,
     });
+  }
+}
+
+async function clearPendingUpdateStatuses({
+  logger,
+  datasetId,
+  reason,
+}: {
+  logger: FastifyBaseLogger;
+  datasetId: string;
+  reason: string;
+}): Promise<number | null> {
+  try {
+    const cleared = await convex.mutation(
+      internal.datasetRows.clearAllPendingUpdateStatus,
+      { datasetId },
+    );
+    if (cleared > 0) {
+      logger.info(
+        { datasetId, cleared, reason },
+        "Cleared pending update row statuses",
+      );
+    }
+    return cleared;
+  } catch (err) {
+    logger.error(
+      { err, datasetId, reason },
+      "Failed to clear pending update row statuses",
+    );
+    return null;
   }
 }
 
@@ -1009,7 +1040,12 @@ fastify.post("/cli/datasets", async (req, reply) => {
   }
 
   try {
-    const schema = await inferSchema(parsed.data.prompt);
+    const { getModelConfig } = await import("./config/models.js");
+    const modelConfig = await getModelConfig(ownerId);
+    const schema = await inferSchema(
+      parsed.data.prompt,
+      modelConfig.schemaInference,
+    );
     const columns = schema.columns.map((column) => ({
       name: column.name,
       type: mapSchemaTypeToDatasetType(column.type),
@@ -1278,14 +1314,27 @@ await fastify.register(async (instance) => {
     if (toValidate.length > 0) {
       try {
         const models = await fetchModelsForCurrentLlmProvider();
-        for (const { role, slug } of toValidate) {
-          const found = models.some((m) => m.canonicalSlug === slug);
-          if (!found) {
-            req.log.warn({ role, slug }, "Saving model slug that was not returned by the current LLM provider");
-          }
+        const invalidModelSlugs = toValidate.filter(
+          ({ slug }) => !models.some((m) => m.canonicalSlug === slug),
+        );
+
+        if (invalidModelSlugs.length > 0) {
+          req.log.warn(
+            { invalidModelSlugs },
+            "Rejected model slugs that were not returned by the current LLM provider",
+          );
+          const [firstInvalidModelSlug] = invalidModelSlugs;
+          return reply.code(400).send({
+            error:
+              invalidModelSlugs.length === 1 && firstInvalidModelSlug
+                ? `Invalid model slug "${firstInvalidModelSlug.slug}" for ${firstInvalidModelSlug.role}`
+                : "One or more model slugs are not available for the current LLM provider",
+            details: { invalidModelSlugs },
+          });
         }
       } catch (err) {
-        req.log.error(err, "Failed to validate model slugs — allowing save");
+        req.log.error(err, "Failed to validate model slugs");
+        return reply.code(502).send({ error: "Failed to validate model preferences" });
       }
     }
 
