@@ -667,7 +667,7 @@ ${context}${urlsBlock}${notesBlock}${browserDraftBlock}`;
       "Hand off a lead to a subagent that will research it deeply and insert a single row if it finds real, verified data. You MUST pass the primary key values (primary_keys) for the entity — the subagent will fill in the remaining columns. Also pass any URLs and context you have found.",
     inputSchema: investigateInputSchema,
     outputSchema: investigateOutputSchema,
-    execute: processLead,
+    execute: async (lead) => processLead(lead),
   });
 
   const queueSubagentsTool = createTool({

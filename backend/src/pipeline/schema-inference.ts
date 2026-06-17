@@ -3,7 +3,12 @@ import { generateText, Output, NoObjectGeneratedError } from "ai";
 import { DEFAULT_MODEL_IDS } from "../config/models.js";
 import { createLanguageModel } from "../config/llm.js";
 import { requireLlmProviderConfig } from "../local-credentials.js";
-import { datasetSchemaSchema, type DatasetSchema } from "./types.js";
+import {
+  datasetSchemaSchema,
+  type ColumnDefinition,
+  type DatasetSchema,
+  type RetrievalStrategy,
+} from "./types.js";
 
 const SYSTEM_PROMPT = `You are a data engineering assistant that converts natural-language prompts into structured dataset schemas. Given a user prompt describing a dataset they want to build, you produce a precise schema definition.
 
@@ -39,6 +44,21 @@ Rules:
 - For marketplace/catalog identifiers with deterministic product pages, prefer a URL-template family over disabling codification. Use the site/schema's actual identifier and route shape; do not hardcode a source-specific template unless it is implied by the user prompt or discovered source hint.
 - When a column is a scalar numeric rating (e.g. average score like 4.3/5 for restaurants, cafes, hotels, products, apps): name it generically (e.g. "rating" not "yelp_rating") and write a retrieval_hint explaining that review sites (Yelp, TripAdvisor, Google Maps) block direct page fetches, so the agent must extract ratings from **search result snippets**. The hint should say: "Search for \\"<entity name> rating reviews\\" and include location terms only when location is part of the entity identity. Look for ratings in snippets from TripAdvisor (\\"rated X.X of 5\\"), Yelp search listings (\\"X.X (N reviews)\\"), or aggregator sites (Birdeye, joe.coffee, giftly, Uber Eats, menufyy). Do NOT try to fetch yelp.com or tripadvisor.com directly — they block automated access. Accept ratings from any reputable source." If including a rating column, also add a "rating_source" text column so the agent records where the rating came from. Do not rename review-count or review-text fields to "rating" — keep those as distinct columns (e.g. "review_count") when the user explicitly asks for them.`;
 
+export interface FinalizeSchemaColumnInput {
+  name: string;
+  type: ColumnDefinition["type"];
+  description?: string;
+  isPrimaryKey?: boolean;
+}
+
+export interface FinalizeSchemaInput {
+  prompt: string;
+  datasetName?: string;
+  columns: FinalizeSchemaColumnInput[];
+  retrievalStrategy?: RetrievalStrategy;
+  sourceHint?: string;
+}
+
 async function getModel(modelSlug?: string) {
   const config = await requireLlmProviderConfig();
   const resolvedSlug = modelSlug ?? config.defaultModel ?? DEFAULT_MODEL_IDS.SCHEMA_INFERENCE;
@@ -47,6 +67,21 @@ async function getModel(modelSlug?: string) {
 
 export async function inferSchema(prompt: string, modelSlug?: string): Promise<DatasetSchema> {
   const model = await getModel(modelSlug);
+  return await generateSchema(model, prompt);
+}
+
+export async function finalizeSchemaContracts(
+  input: FinalizeSchemaInput,
+  modelSlug?: string,
+): Promise<DatasetSchema> {
+  const model = await getModel(modelSlug);
+  return await generateSchema(model, buildFinalizePrompt(input));
+}
+
+async function generateSchema(
+  model: Parameters<typeof generateText>[0]["model"],
+  prompt: string,
+): Promise<DatasetSchema> {
   try {
     return await callOnce(model, prompt);
   } catch (error) {
@@ -57,6 +92,41 @@ export async function inferSchema(prompt: string, modelSlug?: string): Promise<D
     }
     throw error;
   }
+}
+
+function buildFinalizePrompt(input: FinalizeSchemaInput): string {
+  const columns = input.columns
+    .map((column, index) => {
+      const primaryKey = column.isPrimaryKey ? "yes" : "no";
+      const description = column.description?.trim() || "(none)";
+      return `${index + 1}. visible_name=${JSON.stringify(column.name)} type=${column.type} primary_key=${primaryKey} description=${JSON.stringify(description)}`;
+    })
+    .join("\n");
+
+  return `Refresh the hidden extraction contracts for this final, user-reviewed dataset schema.
+
+Original user request:
+${input.prompt}
+
+Final dataset display name:
+${input.datasetName?.trim() || "(not provided)"}
+
+Final visible columns:
+${columns}
+
+Current retrieval strategy: ${input.retrievalStrategy ?? "(not set)"}
+Current source hint: ${input.sourceHint?.trim() || "(not set)"}
+
+Return a complete DatasetSchema for the final visible schema above.
+
+Rules for this refresh:
+- Do not add, remove, split, or reorder columns. Return exactly ${input.columns.length} columns in the same order.
+- Preserve each column's type and visible meaning. Use a snake_case "name" derived from visible_name only because DatasetSchema requires it.
+- Keep primary_key flags as provided unless no column is marked primary_key=yes; in that case choose the best primary key from the final columns.
+- Use each visible description as the basis for retrieval_hint, refining only to clarify how to extract that same value.
+- Regenerate nullable, validation_regex, normalization_hint, source_hint, retrieval_strategy, and codification_profile from this final schema.
+- Include validation_regex for shaped values where it adds real validation value. Omit validation_regex for genuinely free-form text instead of emitting a catch-all regex.
+- validation_regex must validate the normalized final stored value, not raw page text.`;
 }
 
 async function callOnce(

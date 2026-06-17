@@ -55,6 +55,7 @@ export interface TryRowExtractorInput {
   codificationProfile?: CodificationProfile;
   browserAttempts?: number;
   extractorBuilderModel?: string;
+  abortSignal?: AbortSignal;
 }
 
 export interface TryRefreshRowExtractorInput extends TryRowExtractorInput {
@@ -710,8 +711,12 @@ class NonRepairableExtractorFailure extends Error {
   }
 }
 
-function runWasAborted(datasetId: string): boolean {
-  return getSignal(datasetId)?.aborted === true;
+function abortSignalReason(signal: AbortSignal): unknown {
+  return signal.reason ?? new DOMException("Run was stopped", "AbortError");
+}
+
+function runWasAborted(datasetId: string, abortSignal?: AbortSignal): boolean {
+  return getSignal(datasetId)?.aborted === true || abortSignal?.aborted === true;
 }
 
 function isAbortLikeError(err: unknown): boolean {
@@ -720,10 +725,21 @@ function isAbortLikeError(err: unknown): boolean {
   return err.name === "AbortError" || /Run was stopped|AbortError/i.test(err.message);
 }
 
-function throwIfRunAborted(datasetId: string): void {
-  if (runWasAborted(datasetId)) {
-    throw new DOMException("Run was stopped", "AbortError");
+function throwIfAbortSignalAborted(signal: AbortSignal | undefined): void {
+  if (!signal?.aborted) return;
+  const reason = abortSignalReason(signal);
+  if (reason instanceof Error) throw reason;
+  throw new DOMException(String(reason), "AbortError");
+}
+
+function throwIfRunAborted(datasetId: string, abortSignal?: AbortSignal): void {
+  const runSignal = getSignal(datasetId);
+  if (runSignal?.aborted) {
+    const reason = abortSignalReason(runSignal);
+    if (reason instanceof Error) throw reason;
+    throw new DOMException(String(reason), "AbortError");
   }
+  throwIfAbortSignalAborted(abortSignal);
 }
 
 function isTransientBrowserFailure(reason: string): boolean {
@@ -801,6 +817,7 @@ export async function tryRowExtractor(
 export async function tryRowExtractorDraft(
   input: TryRowExtractorInput,
 ): Promise<RowExtractorDraftResult> {
+  throwIfRunAborted(input.datasetId, input.abortSignal);
   const codificationProfile = normalizeCodificationProfile(input.codificationProfile, input);
   if (!shouldAttemptCodification(codificationProfile, input)) {
     return {
@@ -838,7 +855,7 @@ export async function tryRowExtractorDraft(
       columnStatuses: extraction.columnStatuses,
     };
   } catch (err) {
-    if (isAbortLikeError(err) && runWasAborted(input.datasetId)) {
+    if (isAbortLikeError(err) && runWasAborted(input.datasetId, input.abortSignal)) {
       throw err;
     }
     const msg = err instanceof Error ? err.message : String(err);
@@ -861,6 +878,7 @@ export async function tryRowExtractorDraft(
 export async function tryRefreshRowExtractor(
   input: TryRefreshRowExtractorInput,
 ): Promise<TryRowExtractorResult> {
+  throwIfRunAborted(input.datasetId, input.abortSignal);
   const codificationProfile = normalizeCodificationProfile(input.codificationProfile, input);
   if (!shouldAttemptCodification(codificationProfile, input)) {
     return {
@@ -920,7 +938,7 @@ export async function tryRefreshRowExtractor(
       sources: extraction.sources,
     };
   } catch (err) {
-    if (isAbortLikeError(err) && runWasAborted(input.datasetId)) {
+    if (isAbortLikeError(err) && runWasAborted(input.datasetId, input.abortSignal)) {
       throw err;
     }
     const msg = err instanceof Error ? err.message : String(err);
@@ -1071,7 +1089,7 @@ async function extractGenericRow(
   const siteKey = siteKeyForInput(input, url);
   const cachedExtractor = await getOrBuildExtractorScript(apiKey, input, url);
   const script = cachedExtractor.script;
-  throwIfRunAborted(input.datasetId);
+  throwIfRunAborted(input.datasetId, input.abortSignal);
   const attempts = normalizedBrowserAttempts(input.browserAttempts);
   let lastError: unknown;
   for (let attempt = 1; attempt <= attempts; attempt++) {
@@ -1093,8 +1111,10 @@ async function extractGenericRow(
       return extraction;
     } catch (err) {
       lastError = err;
-      if (isAbortLikeError(err) && runWasAborted(input.datasetId)) throw err;
-      if (runWasAborted(input.datasetId) || attempt === attempts) break;
+      if (isAbortLikeError(err) && runWasAborted(input.datasetId, input.abortSignal)) {
+        throw err;
+      }
+      if (runWasAborted(input.datasetId, input.abortSignal) || attempt === attempts) break;
       const msg = err instanceof Error ? err.message : String(err);
       console.warn(
         `[row_extractor] Browser attempt ${attempt}/${attempts} failed; retrying: ${msg}`,
@@ -1102,7 +1122,7 @@ async function extractGenericRow(
     }
   }
 
-  throwIfRunAborted(input.datasetId);
+  throwIfRunAborted(input.datasetId, input.abortSignal);
   const failure = lastError instanceof Error ? lastError.message : String(lastError);
   if (isNonRepairableRuntimeFailure(failure)) {
     console.warn(
@@ -1134,7 +1154,7 @@ async function extractGenericRow(
     rememberExtractorSmokeTest(input, url);
     return extraction;
   } catch (repairErr) {
-    if (isAbortLikeError(repairErr) && runWasAborted(input.datasetId)) {
+    if (isAbortLikeError(repairErr) && runWasAborted(input.datasetId, input.abortSignal)) {
       throw repairErr;
     }
     const repairMsg = repairErr instanceof Error ? repairErr.message : String(repairErr);
@@ -1412,15 +1432,20 @@ function samePrimaryKeys(
 
 async function probePage(
   apiKey: string,
-  datasetId: string,
+  input: TryRowExtractorInput,
   url: string,
 ): Promise<PageEvidence> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= TRANSIENT_BROWSER_ATTEMPTS; attempt++) {
     let browser: Browser | undefined;
     try {
-      throwIfRunAborted(datasetId);
-      const session = await createTinyFishBrowserSession(apiKey, url, datasetId);
+      throwIfRunAborted(input.datasetId, input.abortSignal);
+      const session = await createTinyFishBrowserSession(
+        apiKey,
+        url,
+        input.datasetId,
+        input.abortSignal,
+      );
       browser = await chromium.connectOverCDP(session.cdp_url, {
         timeout: CDP_CONNECT_TIMEOUT_MS,
       });
@@ -1436,7 +1461,9 @@ async function probePage(
 
       return await readPageEvidence(page);
     } catch (err) {
-      if (isAbortLikeError(err) && runWasAborted(datasetId)) throw err;
+      if (isAbortLikeError(err) && runWasAborted(input.datasetId, input.abortSignal)) {
+        throw err;
+      }
       lastError = err;
       const msg = err instanceof Error ? err.message : String(err);
       if (!isTransientBrowserFailure(msg) || attempt === TRANSIENT_BROWSER_ATTEMPTS) {
@@ -1457,18 +1484,23 @@ async function createTinyFishBrowserSession(
   apiKey: string,
   url: string,
   datasetId: string,
+  abortSignal?: AbortSignal,
 ): Promise<TinyFishBrowserSession> {
-  const response = await withRunTimeoutSignal(datasetId, FETCH_TIMEOUT_MS, (signal) =>
-    fetch("https://agent.tinyfish.ai/v1/browser", {
-      method: "POST",
-      headers: {
-        ...tinyFishHeaders(apiKey),
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      body: JSON.stringify({ url }),
-      signal,
-    }),
+  const response = await withRunTimeoutSignal(
+    datasetId,
+    FETCH_TIMEOUT_MS,
+    (signal) =>
+      fetch("https://agent.tinyfish.ai/v1/browser", {
+        method: "POST",
+        headers: {
+          ...tinyFishHeaders(apiKey),
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify({ url }),
+        signal,
+      }),
+    abortSignal,
   );
 
   if (!response.ok) {
@@ -1494,9 +1526,10 @@ async function withRunTimeoutSignal<T>(
   datasetId: string,
   timeoutMs: number,
   operation: (signal: AbortSignal) => Promise<T>,
+  abortSignal?: AbortSignal,
 ): Promise<T> {
+  throwIfRunAborted(datasetId, abortSignal);
   const runSignal = getSignal(datasetId);
-  if (runSignal?.aborted) throw new DOMException("Run was stopped", "AbortError");
 
   const controller = new AbortController();
   let timeout: ReturnType<typeof setTimeout>;
@@ -1510,46 +1543,64 @@ async function withRunTimeoutSignal<T>(
       reject(reason);
     }, timeoutMs);
   });
-  let abortFromRun: (() => void) | undefined;
+  const abortListeners: Array<{ signal: AbortSignal; listener: () => void }> = [];
   const abortPromise = new Promise<never>((_resolve, reject) => {
-    abortFromRun = () => {
-      const reason = runSignal?.reason ?? new DOMException("Run was stopped", "AbortError");
-      controller.abort(reason);
-      reject(reason);
+    const addAbortListener = (signal: AbortSignal | undefined) => {
+      if (!signal) return;
+      const listener = () => {
+        const reason = abortSignalReason(signal);
+        controller.abort(reason);
+        reject(reason);
+      };
+      signal.addEventListener("abort", listener, { once: true });
+      abortListeners.push({ signal, listener });
+      if (signal.aborted) listener();
     };
-
-    runSignal?.addEventListener("abort", abortFromRun, { once: true });
+    addAbortListener(runSignal);
+    addAbortListener(abortSignal);
   });
   try {
     return await Promise.race([operation(controller.signal), timeoutPromise, abortPromise]);
   } finally {
     clearTimeout(timeout!);
-    if (abortFromRun) runSignal?.removeEventListener("abort", abortFromRun);
+    for (const { signal, listener } of abortListeners) {
+      signal.removeEventListener("abort", listener);
+    }
   }
 }
 
 async function withRunAbortSignal<T>(
   datasetId: string,
   operation: (signal: AbortSignal) => Promise<T>,
+  abortSignal?: AbortSignal,
 ): Promise<T> {
+  throwIfRunAborted(datasetId, abortSignal);
   const runSignal = getSignal(datasetId);
-  if (runSignal?.aborted) throw new DOMException("Run was stopped", "AbortError");
 
   const controller = new AbortController();
-  let abortFromRun: (() => void) | undefined;
+  const abortListeners: Array<{ signal: AbortSignal; listener: () => void }> = [];
   const abortPromise = new Promise<never>((_resolve, reject) => {
-    abortFromRun = () => {
-      const reason = runSignal?.reason ?? new DOMException("Run was stopped", "AbortError");
-      controller.abort(reason);
-      reject(reason);
+    const addAbortListener = (signal: AbortSignal | undefined) => {
+      if (!signal) return;
+      const listener = () => {
+        const reason = abortSignalReason(signal);
+        controller.abort(reason);
+        reject(reason);
+      };
+      signal.addEventListener("abort", listener, { once: true });
+      abortListeners.push({ signal, listener });
+      if (signal.aborted) listener();
     };
-    runSignal?.addEventListener("abort", abortFromRun, { once: true });
+    addAbortListener(runSignal);
+    addAbortListener(abortSignal);
   });
 
   try {
     return await Promise.race([operation(controller.signal), abortPromise]);
   } finally {
-    if (abortFromRun) runSignal?.removeEventListener("abort", abortFromRun);
+    for (const { signal, listener } of abortListeners) {
+      signal.removeEventListener("abort", listener);
+    }
   }
 }
 
@@ -1725,7 +1776,7 @@ async function buildExtractorScriptWithAgent(
       try {
         const targetUrl = coerceHttpUrl(requestedUrl) ?? url;
         console.log(`[extractor_builder] ${phase} inspecting ${targetUrl}`);
-        const evidence = await probePage(apiKey, input.datasetId, targetUrl);
+        const evidence = await probePage(apiKey, input, targetUrl);
         lastEvidence = evidence;
         lastProbeSummary = summarizeEvidenceForStorage(evidence);
         return evidenceForTool(evidence);
@@ -1857,9 +1908,10 @@ async function buildExtractorScriptWithAgent(
           maxOutputTokens: AGENT_MAX_OUTPUT_TOKENS.EXTRACTOR_BUILDER,
         },
       }),
+      input.abortSignal,
     );
   } catch (err) {
-    if (isAbortLikeError(err) && runWasAborted(input.datasetId)) {
+    if (isAbortLikeError(err) && runWasAborted(input.datasetId, input.abortSignal)) {
       throw err;
     }
     if (finishedScript) {
@@ -1879,7 +1931,7 @@ async function buildExtractorScriptWithAgent(
     throw err;
   }
 
-  throwIfRunAborted(input.datasetId);
+  throwIfRunAborted(input.datasetId, input.abortSignal);
   console.log(
     `[extractor_builder] ${phase} ended for ${siteKey} steps=${result.steps?.length ?? "?"}`,
   );
@@ -2082,7 +2134,7 @@ async function testExtractorScriptDetailed(
     }
     return { ok: true, reason: "passed", extraction };
   } catch (err) {
-    if (isAbortLikeError(err) && runWasAborted(input.datasetId)) {
+    if (isAbortLikeError(err) && runWasAborted(input.datasetId, input.abortSignal)) {
       throw err;
     }
     return {
@@ -2337,10 +2389,10 @@ async function runGeneratedExtractorScriptForValidation(
   let lastError: unknown;
   for (let attempt = 1; attempt <= TRANSIENT_BROWSER_ATTEMPTS; attempt++) {
     try {
-      throwIfRunAborted(input.datasetId);
+      throwIfRunAborted(input.datasetId, input.abortSignal);
       return await runGeneratedExtractorScript(apiKey, input, url, script);
     } catch (err) {
-      if (isAbortLikeError(err) && runWasAborted(input.datasetId)) {
+      if (isAbortLikeError(err) && runWasAborted(input.datasetId, input.abortSignal)) {
         throw err;
       }
       lastError = err;
@@ -2363,9 +2415,14 @@ async function runGeneratedExtractorScript(
   url: string,
   script: string,
 ): Promise<GeneratedExtractorResult> {
-  throwIfRunAborted(input.datasetId);
+  throwIfRunAborted(input.datasetId, input.abortSignal);
   const sanitized = sanitizeGeneratedScript(script);
-  const session = await createTinyFishBrowserSession(apiKey, url, input.datasetId);
+  const session = await createTinyFishBrowserSession(
+    apiKey,
+    url,
+    input.datasetId,
+    input.abortSignal,
+  );
   const payload = JSON.stringify({
     cdpUrl: session.cdp_url,
     url,
@@ -2388,8 +2445,10 @@ async function runGeneratedExtractorScript(
 
   return await new Promise((resolve, reject) => {
     const runSignal = getSignal(input.datasetId);
-    if (runSignal?.aborted) {
-      reject(runSignal.reason ?? new DOMException("Run was stopped", "AbortError"));
+    try {
+      throwIfRunAborted(input.datasetId, input.abortSignal);
+    } catch (err) {
+      reject(err);
       return;
     }
 
@@ -2400,23 +2459,32 @@ async function runGeneratedExtractorScript(
     });
     let stdout = "";
     let stderr = "";
-    let abortFromRun: (() => void) | undefined;
+    const abortListeners: Array<{ signal: AbortSignal; listener: () => void }> = [];
     let timeout: ReturnType<typeof setTimeout> | undefined;
     const cleanup = () => {
       if (timeout) clearTimeout(timeout);
-      if (abortFromRun) runSignal?.removeEventListener("abort", abortFromRun);
+      for (const { signal, listener } of abortListeners) {
+        signal.removeEventListener("abort", listener);
+      }
+    };
+    const addAbortListener = (signal: AbortSignal | undefined) => {
+      if (!signal) return;
+      const listener = () => {
+        child.kill("SIGKILL");
+        cleanup();
+        reject(abortSignalReason(signal));
+      };
+      signal.addEventListener("abort", listener, { once: true });
+      abortListeners.push({ signal, listener });
+      if (signal.aborted) listener();
     };
     timeout = setTimeout(() => {
       child.kill("SIGKILL");
       cleanup();
       reject(new Error("generated extractor timed out"));
     }, EXTRACTOR_RUNNER_TIMEOUT_MS + 5_000);
-    abortFromRun = () => {
-      child.kill("SIGKILL");
-      cleanup();
-      reject(runSignal?.reason ?? new DOMException("Run was stopped", "AbortError"));
-    };
-    runSignal?.addEventListener("abort", abortFromRun, { once: true });
+    addAbortListener(runSignal);
+    addAbortListener(input.abortSignal);
 
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {

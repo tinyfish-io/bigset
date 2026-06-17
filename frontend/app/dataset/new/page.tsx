@@ -7,6 +7,7 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { EVENTS, track } from "@/lib/analytics";
 import {
+  finalizeSchema,
   inferSchema,
   type CodificationProfile,
   type InferredCodificationProfile,
@@ -27,9 +28,6 @@ interface ProposedColumn {
   type: ColumnType;
   description: string;
   isPrimaryKey: boolean;
-  nullable?: boolean;
-  validationRegex?: string;
-  normalizationHint?: string;
 }
 
 type Step = "describe" | "generating" | "review";
@@ -60,9 +58,6 @@ function mapBackendColumn(col: InferredColumn, index: number): ProposedColumn {
     type: BACKEND_TYPE_MAP[col.type],
     description: col.retrieval_hint,
     isPrimaryKey: col.is_primary_key,
-    nullable: col.nullable,
-    validationRegex: col.validation_regex,
-    normalizationHint: col.normalization_hint,
   };
 }
 
@@ -123,8 +118,6 @@ export default function NewDatasetPage() {
     "search_fetch" | "browser" | "hybrid" | null
   >(null);
   const [sourceHint, setSourceHint] = useState("");
-  const [codificationProfile, setCodificationProfile] =
-    useState<CodificationProfile | null>(null);
   const { getToken } = useAppAuth();
 
   const createDataset = useMutation(api.datasets.create);
@@ -174,7 +167,6 @@ export default function NewDatasetPage() {
       );
       setRetrievalStrategy(schema.retrieval_strategy);
       setSourceHint(schema.source_hint);
-      setCodificationProfile(mapCodificationProfile(schema.codification_profile));
       track(EVENTS.DATASET_SCHEMA_GENERATED, {
         column_count: schema.columns.length,
       });
@@ -219,23 +211,50 @@ export default function NewDatasetPage() {
     setError(null);
     let datasetId: string;
     try {
+      const token = await getToken();
+      if (!token) throw new Error("Not authenticated");
+
+      const finalizedSchema = await finalizeSchema(
+        {
+          prompt: prompt.trim(),
+          datasetName,
+          retrievalStrategy: retrievalStrategy ?? undefined,
+          sourceHint: sourceHint || undefined,
+          columns: columns.map((column) => ({
+            name: column.name,
+            type: column.type,
+            description: column.description || undefined,
+            isPrimaryKey: column.isPrimaryKey || undefined,
+          })),
+        },
+        token,
+      );
+      const finalizedColumns = columns.map((column, index) => {
+        const finalizedColumn = finalizedSchema.columns[index];
+        if (!finalizedColumn) {
+          throw new Error("Schema finalization returned an incomplete schema.");
+        }
+
+        return {
+          name: column.name,
+          type: column.type,
+          description: column.description || undefined,
+          isPrimaryKey: finalizedColumn.is_primary_key || undefined,
+          nullable: finalizedColumn.nullable,
+          validationRegex: finalizedColumn.validation_regex || undefined,
+          normalizationHint: finalizedColumn.normalization_hint || undefined,
+        };
+      });
+
       datasetId = await createDataset({
         name: datasetName,
         description: prompt,
         refreshCadence,
         maxRowCount,
-        columns: columns.map((c) => ({
-          name: c.name,
-          type: c.type,
-          description: c.description || undefined,
-          isPrimaryKey: c.isPrimaryKey || undefined,
-          nullable: c.nullable,
-          validationRegex: c.validationRegex || undefined,
-          normalizationHint: c.normalizationHint || undefined,
-        })),
-        retrievalStrategy: retrievalStrategy ?? undefined,
-        sourceHint: sourceHint || undefined,
-        codificationProfile: codificationProfile ?? undefined,
+        columns: finalizedColumns,
+        retrievalStrategy: finalizedSchema.retrieval_strategy ?? retrievalStrategy ?? undefined,
+        sourceHint: finalizedSchema.source_hint || sourceHint || undefined,
+        codificationProfile: mapCodificationProfile(finalizedSchema.codification_profile),
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to create dataset";

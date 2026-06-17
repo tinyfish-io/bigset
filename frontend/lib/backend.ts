@@ -62,6 +62,21 @@ export interface PopulateColumn {
   normalizationHint?: string;
 }
 
+export interface FinalizeSchemaColumn {
+  name: string;
+  type: PopulateColumn["type"];
+  description?: string;
+  isPrimaryKey?: boolean;
+}
+
+export interface FinalizeSchemaInput {
+  prompt: string;
+  datasetName?: string;
+  columns: FinalizeSchemaColumn[];
+  retrievalStrategy?: InferredSchema["retrieval_strategy"];
+  sourceHint?: string;
+}
+
 export interface PopulateStartResult {
   success: boolean;
   runId: string;
@@ -419,6 +434,28 @@ export async function inferSchema(
       Authorization: `Bearer ${token}`,
     },
     body: JSON.stringify({ prompt }),
+  });
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    const message = body?.error || `Backend error (${res.status})`;
+    throw new Error(message);
+  }
+
+  return res.json();
+}
+
+export async function finalizeSchema(
+  input: FinalizeSchemaInput,
+  token: string,
+): Promise<InferredSchema> {
+  const res = await fetch(`${BACKEND_URL}/finalize-schema`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(input),
   });
 
   if (!res.ok) {

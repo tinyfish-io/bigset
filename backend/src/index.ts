@@ -5,7 +5,10 @@ import { z } from "zod";
 
 import { env } from "./env.js";
 import clerkAuthPlugin, { requireAuth, getUserEmail } from "./clerk-auth.js";
-import { inferSchema } from "./pipeline/schema-inference.js";
+import {
+  finalizeSchemaContracts,
+  inferSchema,
+} from "./pipeline/schema-inference.js";
 import { datasetContextSchema, type DatasetContext } from "./pipeline/populate.js";
 import {
   normalizeCodificationProfile,
@@ -77,6 +80,8 @@ type RuntimeModelConfig = {
 };
 
 const refreshCadenceSchema = z.enum(["manual", "30m", "6h", "12h", "daily", "weekly"]);
+const datasetColumnTypeSchema = z.enum(["text", "number", "boolean", "url", "date"]);
+const retrievalStrategySchema = z.enum(["search_fetch", "browser", "hybrid"]);
 const cliCreateDatasetSchema = z.object({
   prompt: z.string().trim().min(1),
   maxRowCount: z.number().int().min(1).max(2500).default(100),
@@ -84,6 +89,23 @@ const cliCreateDatasetSchema = z.object({
 });
 const cliDatasetIdParamsSchema = z.object({
   datasetId: z.string().min(1),
+});
+const finalizeSchemaRequestSchema = z.object({
+  prompt: z.string().trim().min(1),
+  datasetName: z.string().trim().min(1).optional(),
+  columns: z
+    .array(
+      z.object({
+        name: z.string().trim().min(1),
+        type: datasetColumnTypeSchema,
+        description: z.string().optional(),
+        isPrimaryKey: z.boolean().optional(),
+      }),
+    )
+    .min(1),
+  retrievalStrategy: retrievalStrategySchema.optional(),
+  sourceHint: z.string().optional(),
+  modelSlug: z.string().optional(),
 });
 
 function cliDatasetNameFromSchemaName(name: string): string {
@@ -101,6 +123,12 @@ function mapSchemaTypeToDatasetType(
     return type;
   }
   return "text";
+}
+
+function mapDatasetTypeToSchemaType(
+  type: "text" | "number" | "boolean" | "url" | "date",
+): "string" | "number" | "boolean" | "url" | "date" {
+  return type === "text" ? "string" : type;
 }
 
 function requireLocalCli(reply: FastifyReply): string | null {
@@ -552,6 +580,69 @@ async function runScheduledUpdateWorkflowInBackground({
     }
   } finally {
     deregisterDataset(datasetId);
+  }
+}
+
+async function finaliseStoppedUpdateRun({
+  logger,
+  clerk,
+  datasetId,
+  authorizedUserId,
+}: {
+  logger: FastifyBaseLogger;
+  clerk: ClerkClient;
+  datasetId: string;
+  authorizedUserId: string;
+}): Promise<void> {
+  logger.info({ datasetId }, "Update workflow stopped by user; transitioning to live");
+
+  const cleared = await clearPendingUpdateStatuses({
+    logger,
+    datasetId,
+    reason: "stopped update workflow",
+  });
+
+  if (cleared === null) {
+    try {
+      await setDatasetPopulateStatus(
+        datasetId,
+        "failed",
+        "Workflow stopped but pending row cleanup failed",
+      );
+    } catch (fallbackErr) {
+      logger.error(
+        { err: fallbackErr, datasetId },
+        "Could not update dataset status after stopped update cleanup failure",
+      );
+    }
+    return;
+  }
+
+  try {
+    await finaliseRunAsLive({
+      logger,
+      clerk,
+      datasetId,
+      authorizedUserId,
+      workflowType: "update",
+    });
+  } catch (stopErr) {
+    logger.error(
+      { err: stopErr, datasetId },
+      "Failed to finalise stopped update run; marking as failed",
+    );
+    try {
+      await setDatasetPopulateStatus(
+        datasetId,
+        "failed",
+        "Workflow stopped but could not be finalised",
+      );
+    } catch (fallbackErr) {
+      logger.error(
+        { err: fallbackErr, datasetId },
+        "Could not update dataset status after stopped update finalisation failure",
+      );
+    }
   }
 }
 
@@ -1426,6 +1517,64 @@ await fastify.register(async (instance) => {
     } catch (err) {
       req.log.error(err, "Schema inference failed");
       return reply.code(502).send({ error: "Schema inference failed. Please try again." });
+    }
+  });
+
+  instance.post("/finalize-schema", async (req, reply) => {
+    const parsed = finalizeSchemaRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.code(400).send({
+        error: "Invalid request",
+        details: parsed.error.flatten().fieldErrors,
+      });
+    }
+    if (!(await ensureLocalSetupReady(reply))) return;
+
+    try {
+      const auth = req.auth;
+      let modelSlug = parsed.data.modelSlug;
+
+      if (!modelSlug && auth) {
+        const { getModelConfig } = await import("./config/models.js");
+        const config = await getModelConfig(auth.userId);
+        if (config?.schemaInference) {
+          modelSlug = config.schemaInference;
+        }
+      }
+
+      const schema = await finalizeSchemaContracts(
+        {
+          prompt: parsed.data.prompt,
+          datasetName: parsed.data.datasetName,
+          columns: parsed.data.columns.map((column) => ({
+            name: column.name,
+            type: mapDatasetTypeToSchemaType(column.type),
+            description: column.description,
+            isPrimaryKey: column.isPrimaryKey,
+          })),
+          retrievalStrategy: parsed.data.retrievalStrategy,
+          sourceHint: parsed.data.sourceHint,
+        },
+        modelSlug,
+      );
+
+      if (schema.columns.length !== parsed.data.columns.length) {
+        req.log.warn(
+          {
+            expectedColumnCount: parsed.data.columns.length,
+            actualColumnCount: schema.columns.length,
+          },
+          "Schema finalization returned a different column count",
+        );
+        return reply.code(502).send({
+          error: "Schema finalization failed. Please try again.",
+        });
+      }
+
+      return schema;
+    } catch (err) {
+      req.log.error(err, "Schema finalization failed");
+      return reply.code(502).send({ error: "Schema finalization failed. Please try again." });
     }
   });
 

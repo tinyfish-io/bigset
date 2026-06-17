@@ -23,26 +23,56 @@ const recentFetchFailures = new Map<
 
 interface WebToolOptions {
   datasetId?: string;
+  abortSignal?: AbortSignal;
 }
 
-function timeoutSignalForDataset(datasetId: string | undefined): {
+function abortSignalMessage(signal: AbortSignal): string {
+  const reason = signal.reason;
+  if (reason instanceof Error) return reason.message;
+  return reason ? String(reason) : "Run was stopped";
+}
+
+function throwIfAbortSignalAborted(signal: AbortSignal | undefined): void {
+  if (!signal?.aborted) return;
+  const reason = signal.reason;
+  if (reason instanceof Error) throw reason;
+  throw new DOMException(abortSignalMessage(signal), "AbortError");
+}
+
+function throwIfStopped(
+  datasetId: string | undefined,
+  abortSignal: AbortSignal | undefined,
+): void {
+  if (datasetId) throwIfDatasetRunAborted(datasetId);
+  throwIfAbortSignalAborted(abortSignal);
+}
+
+function timeoutSignalForDataset(
+  datasetId: string | undefined,
+  abortSignal: AbortSignal | undefined,
+): {
   signal: AbortSignal;
   cleanup: () => void;
   timedOut: () => boolean;
 } {
-  if (datasetId) throwIfDatasetRunAborted(datasetId);
+  throwIfStopped(datasetId, abortSignal);
 
   const controller = new AbortController();
   const runSignal = datasetId ? getSignal(datasetId) : undefined;
+  const abortListeners: Array<{ signal: AbortSignal; listener: () => void }> = [];
   let timedOut = false;
 
-  const abortForRunStop = () => {
-    controller.abort(runSignal?.reason ?? datasetAbortError());
+  const addAbortListener = (signal: AbortSignal | undefined) => {
+    if (!signal) return;
+    const listener = () => {
+      controller.abort(signal.reason ?? datasetAbortError());
+    };
+    signal.addEventListener("abort", listener, { once: true });
+    abortListeners.push({ signal, listener });
+    if (signal.aborted) listener();
   };
-  if (runSignal) {
-    runSignal.addEventListener("abort", abortForRunStop, { once: true });
-    if (runSignal.aborted) abortForRunStop();
-  }
+  addAbortListener(runSignal);
+  addAbortListener(abortSignal);
 
   const timeout = setTimeout(() => {
     timedOut = true;
@@ -53,20 +83,27 @@ function timeoutSignalForDataset(datasetId: string | undefined): {
     signal: controller.signal,
     cleanup: () => {
       clearTimeout(timeout);
-      if (runSignal) runSignal.removeEventListener("abort", abortForRunStop);
+      for (const { signal, listener } of abortListeners) {
+        signal.removeEventListener("abort", listener);
+      }
     },
     timedOut: () => timedOut,
   };
 }
 
-function throwIfStoppedAbort(err: unknown, datasetId: string | undefined): void {
-  if (!datasetId || getSignal(datasetId)?.aborted !== true) return;
-  if (
+function throwIfStoppedAbort(
+  err: unknown,
+  datasetId: string | undefined,
+  abortSignal: AbortSignal | undefined,
+): void {
+  const abortLike =
     isAbortLikeError(err) ||
-    (err instanceof Error && err.name === "TimeoutError")
-  ) {
+    (err instanceof Error && err.name === "TimeoutError");
+  if (!abortLike) return;
+  if (datasetId && getSignal(datasetId)?.aborted === true) {
     throw datasetAbortError();
   }
+  throwIfAbortSignalAborted(abortSignal);
 }
 
 function cachedFetchFailure(url: string): string | undefined {
@@ -117,6 +154,7 @@ function fetchPageErrorMessage(code: string, status: string | undefined): string
 
 function buildSearchWebTool(options: WebToolOptions = {}) {
   const datasetId = options.datasetId;
+  const abortSignal = options.abortSignal;
   return createTool({
   id: "search_web",
   description:
@@ -132,7 +170,7 @@ function buildSearchWebTool(options: WebToolOptions = {}) {
     query = query?.trim();
     if (!query)
       return { error: "query is required and cannot be empty." };
-    if (datasetId) throwIfDatasetRunAborted(datasetId);
+    throwIfStopped(datasetId, abortSignal);
 
     const apiKey = await getTinyFishApiKey();
     if (!apiKey)
@@ -141,13 +179,13 @@ function buildSearchWebTool(options: WebToolOptions = {}) {
     const url = `https://api.search.tinyfish.ai?query=${encodeURIComponent(query)}`;
     console.log(`[search_web] Searching: "${query}"`);
 
-    const request = timeoutSignalForDataset(datasetId);
+    const request = timeoutSignalForDataset(datasetId, abortSignal);
     try {
       const res = await fetch(url, {
         headers: tinyFishHeaders(apiKey),
         signal: request.signal,
       });
-      if (datasetId) throwIfDatasetRunAborted(datasetId);
+      throwIfStopped(datasetId, abortSignal);
 
       if (!res.ok) {
         const body = await res.text();
@@ -160,7 +198,7 @@ function buildSearchWebTool(options: WebToolOptions = {}) {
       }
 
       const data = await res.json();
-      if (datasetId) throwIfDatasetRunAborted(datasetId);
+      throwIfStopped(datasetId, abortSignal);
       const results = (data.results ?? []).map((r: Record<string, unknown>) => ({
         title: r.title as string,
         snippet: r.snippet as string,
@@ -172,7 +210,7 @@ function buildSearchWebTool(options: WebToolOptions = {}) {
         return { results: [], error: "No results found for this query. Try a broader search or use synthetic data." };
       return { results };
     } catch (err) {
-      throwIfStoppedAbort(err, datasetId);
+      throwIfStoppedAbort(err, datasetId, abortSignal);
       if (
         request.timedOut() ||
         (err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError"))
@@ -190,6 +228,7 @@ function buildSearchWebTool(options: WebToolOptions = {}) {
 
 function buildFetchPageTool(options: WebToolOptions = {}) {
   const datasetId = options.datasetId;
+  const abortSignal = options.abortSignal;
   return createTool({
   id: "fetch_page",
   description:
@@ -208,7 +247,7 @@ function buildFetchPageTool(options: WebToolOptions = {}) {
       return { error: "url is required and cannot be empty." };
     if (!targetUrl.startsWith("http://") && !targetUrl.startsWith("https://"))
       return { error: `Invalid URL "${targetUrl}". Must start with http:// or https://.` };
-    if (datasetId) throwIfDatasetRunAborted(datasetId);
+    throwIfStopped(datasetId, abortSignal);
 
     const apiKey = await getTinyFishApiKey();
     if (!apiKey)
@@ -219,7 +258,7 @@ function buildFetchPageTool(options: WebToolOptions = {}) {
 
     console.log(`[fetch_page] Fetching: ${targetUrl}`);
 
-    const request = timeoutSignalForDataset(datasetId);
+    const request = timeoutSignalForDataset(datasetId, abortSignal);
     try {
       const res = await fetch("https://api.fetch.tinyfish.ai", {
         method: "POST",
@@ -230,7 +269,7 @@ function buildFetchPageTool(options: WebToolOptions = {}) {
         body: JSON.stringify({ urls: [targetUrl], format: "markdown" }),
         signal: request.signal,
       });
-      if (datasetId) throwIfDatasetRunAborted(datasetId);
+      throwIfStopped(datasetId, abortSignal);
 
       if (!res.ok) {
         const body = await res.text();
@@ -243,7 +282,7 @@ function buildFetchPageTool(options: WebToolOptions = {}) {
       }
 
       const data = await res.json();
-      if (datasetId) throwIfDatasetRunAborted(datasetId);
+      throwIfStopped(datasetId, abortSignal);
 
       if (data.errors?.length > 0) {
         const err = data.errors[0];
@@ -273,7 +312,7 @@ function buildFetchPageTool(options: WebToolOptions = {}) {
         text,
       };
     } catch (err) {
-      throwIfStoppedAbort(err, datasetId);
+      throwIfStoppedAbort(err, datasetId, abortSignal);
       if (
         request.timedOut() ||
         (err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError"))
