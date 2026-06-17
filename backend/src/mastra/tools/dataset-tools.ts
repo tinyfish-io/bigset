@@ -91,6 +91,20 @@ interface PopulateToolOptions {
   columns?: PopulateColumn[];
   enforcePrimaryKeySources?: boolean;
   membershipSourceHint?: string;
+  abortSignal?: AbortSignal;
+}
+
+function abortSignalMessage(signal: AbortSignal): string {
+  const reason = signal.reason;
+  if (reason instanceof Error) return reason.message;
+  return reason ? String(reason) : "Run was stopped";
+}
+
+function throwIfAbortSignalAborted(signal: AbortSignal | undefined): void {
+  if (!signal?.aborted) return;
+  const reason = signal.reason;
+  if (reason instanceof Error) throw reason;
+  throw new DOMException(abortSignalMessage(signal), "AbortError");
 }
 
 function rowDataCellsToRecord(data: RowDataCell[]): Record<string, string> {
@@ -311,7 +325,10 @@ export function buildPopulateTools(
   // Short prefix used in every tool's structured log line so a run's
   // entries can be grep'd together in the backend logs without parsing.
   const logCtx = `user=${authContext.authorizedUserId} run=${authContext.workflowRunId} dataset=${authorizedDatasetId}`;
-  const throwIfStopped = () => throwIfDatasetRunAborted(authorizedDatasetId);
+  const throwIfStopped = () => {
+    throwIfDatasetRunAborted(authorizedDatasetId);
+    throwIfAbortSignalAborted(options.abortSignal);
+  };
 
   const insertRowTool = createTool({
     id: "insert_row",

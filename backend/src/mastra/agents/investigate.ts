@@ -15,6 +15,7 @@ interface InvestigateAgentOptions {
     howFoundPrefix?: string;
   };
   membershipSourceHint?: string;
+  abortSignal?: AbortSignal;
 }
 
 function buildInvestigateInstructions(
@@ -84,7 +85,10 @@ export function buildInvestigateAgent(
   options: InvestigateAgentOptions = {},
 ): Agent {
   const modelSlug = authContext.modelConfig!.investigateSubagent;
-  const webTools = buildWebTools({ datasetId: authorizedDatasetId });
+  const webTools = buildWebTools({
+    datasetId: authorizedDatasetId,
+    abortSignal: options.abortSignal,
+  });
 
   const { insert_row } = buildPopulateTools(
     authorizedDatasetId,
@@ -94,6 +98,7 @@ export function buildInvestigateAgent(
       columns,
       enforcePrimaryKeySources: true,
       membershipSourceHint: options.membershipSourceHint,
+      abortSignal: options.abortSignal,
     },
   );
   return new Agent({

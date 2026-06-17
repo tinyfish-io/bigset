@@ -408,11 +408,16 @@ async function runUpdateWorkflowInBackground({
       workflowType: "update",
     });
   } catch (err) {
-    // Note: a user-triggered stop is NOT handled here. The update workflow's
-    // refreshRowsStep detects the abort internally, clears pending row
-    // statuses, and returns normally — so run.start() returns { status:
-    // "success" } and the success path above handles the live transition.
-    // This catch only fires on genuine failures.
+    if (isDatasetRunAborted(datasetId)) {
+      await finaliseStoppedUpdateRun({
+        logger,
+        clerk,
+        datasetId,
+        authorizedUserId,
+      });
+      return;
+    }
+
     const lastStatusError = statusErrorMessage(err);
     logger.error({ err, datasetId }, "Update background workflow failed");
 
@@ -427,6 +432,11 @@ async function runUpdateWorkflowInBackground({
         );
         return;
       }
+      await clearPendingUpdateStatuses({
+        logger,
+        datasetId,
+        reason: "failed update workflow",
+      });
       await setDatasetPopulateStatus(datasetId, "failed", lastStatusError);
     } catch (statusErr) {
       logger.error(
@@ -486,8 +496,46 @@ async function runScheduledUpdateWorkflowInBackground({
       now: Date.now(),
     });
   } catch (err) {
+    if (isDatasetRunAborted(datasetId)) {
+      logger.info({ datasetId }, "Scheduled update workflow stopped; transitioning to live");
+      const cleared = await clearPendingUpdateStatuses({
+        logger,
+        datasetId,
+        reason: "stopped scheduled update workflow",
+      });
+
+      try {
+        if (cleared === null) {
+          await convex.mutation(internal.datasets.failScheduledRefreshInternal, {
+            id: datasetId,
+            runId: run.runId,
+            now: Date.now(),
+            lastStatusError: "Workflow stopped but pending row cleanup failed",
+          });
+        } else {
+          await convex.mutation(internal.datasets.completeScheduledRefreshInternal, {
+            id: datasetId,
+            runId: run.runId,
+            now: Date.now(),
+          });
+        }
+      } catch (statusErr) {
+        logger.error(
+          { err: statusErr, datasetId },
+          "Failed to record stopped scheduled refresh",
+        );
+      }
+      return;
+    }
+
     const lastStatusError = statusErrorMessage(err);
     logger.error({ err, datasetId }, "Scheduled update workflow failed");
+
+    await clearPendingUpdateStatuses({
+      logger,
+      datasetId,
+      reason: "failed scheduled update workflow",
+    });
 
     try {
       await convex.mutation(internal.datasets.failScheduledRefreshInternal, {

@@ -320,7 +320,7 @@ const agentStep = createStep({
       throw err;
     } finally {
       if (!drainedQueuedSubagents) {
-        clearQueuedSubagents(inputData.authContext.workflowRunId);
+        await clearQueuedSubagents(inputData.authContext.workflowRunId);
       }
       const finishedAt = Date.now();
       void saveRunMetrics({
