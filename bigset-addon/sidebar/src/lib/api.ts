@@ -196,6 +196,25 @@ export const api = {
   stopDataset(id: string) {
     return this.callBackend<{ success: boolean }>("/stop", "POST", { datasetId: id });
   },
+
+  listDatasets() {
+    return this.callBackend<{ datasets: Array<DatasetSummary & { _id: string }> }>("/addon/datasets", "GET").then(
+      (r) => r.datasets.map((d) => ({ ...d, id: d._id })),
+    );
+  },
+
+  listPublicDatasets() {
+    return this.callBackend<{ datasets: Array<DatasetSummary & { _id: string }> }>("/addon/datasets/public", "GET").then(
+      (r) => r.datasets.map((d) => ({ ...d, id: d._id })),
+    );
+  },
+
+  listPublicRows(datasetId: string) {
+    return this.callBackend<{ rows: DatasetRow[]; dataset: DatasetSummary & { _id: string } }>(
+      `/addon/datasets/public/${encodeURIComponent(datasetId)}/rows`,
+      "GET",
+    ).then((r) => ({ rows: r.rows, dataset: { ...r.dataset, id: r.dataset._id } }));
+  },
 };
 
 /** Where in the Svelte app we are. Useful for the route guard. */

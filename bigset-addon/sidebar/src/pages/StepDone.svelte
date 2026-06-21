@@ -40,6 +40,8 @@
       const headers = $wizard.dataset.columns.map((c) => c.name);
       const result = await api.insertRows(headers, $wizard.rows, true);
       insertResult = result;
+      // Reset back to home after a brief moment so the user sees confirmation.
+      setTimeout(() => resetWizard(), 1500);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Insert failed.";
       localError = msg;

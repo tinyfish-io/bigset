@@ -1528,6 +1528,42 @@ await fastify.register(async (instance) => {
     }
   });
 
+  instance.get("/addon/datasets/public", async (req, reply) => {
+    try {
+      const datasets = await convex.query(internal.datasets.listPublicInternal, {});
+      return { datasets };
+    } catch (err) {
+      req.log.error(err, "Addon public dataset list failed");
+      return reply.code(502).send({ error: "Failed to list public datasets" });
+    }
+  });
+
+  instance.get<{ Params: { datasetId: string } }>(
+    "/addon/datasets/public/:datasetId/rows",
+    async (req, reply) => {
+      const params = cliDatasetIdParamsSchema.safeParse(req.params);
+      if (!params.success) {
+        return reply.code(400).send({ error: "datasetId is required" });
+      }
+
+      try {
+        const dataset = await convex.query(internal.datasets.getInternal, {
+          id: params.data.datasetId,
+        });
+        if (!dataset || dataset.visibility !== "public") {
+          return reply.code(404).send({ error: "Dataset not found" });
+        }
+        const rows = await convex.query(internal.datasetRows.listInternal, {
+          datasetId: params.data.datasetId,
+        });
+        return { rows, dataset };
+      } catch (err) {
+        req.log.error(err, "Addon public rows get failed");
+        return reply.code(400).send({ error: "Invalid datasetId" });
+      }
+    },
+  );
+
   instance.get<{ Params: { datasetId: string } }>(
     "/addon/datasets/:datasetId",
     async (req, reply) => {
@@ -1569,12 +1605,12 @@ await fastify.register(async (instance) => {
         const dataset = await convex.query(internal.datasets.getInternal, {
           id: params.data.datasetId,
         });
-        if (!dataset || dataset.ownerId !== auth.userId) {
+        const isPublic = (dataset as Record<string, unknown> | null)?.visibility === "public";
+        if (!dataset || (dataset.ownerId !== auth.userId && !isPublic)) {
           return reply.code(404).send({ error: "Dataset not found" });
         }
-        const rows = await convex.query(internal.datasetRows.listByOwnedDatasetInternal, {
+        const rows = await convex.query(internal.datasetRows.listInternal, {
           datasetId: params.data.datasetId,
-          ownerId: auth.userId,
         });
         if (!rows) return reply.code(404).send({ error: "Dataset not found" });
         return { rows, dataset };
