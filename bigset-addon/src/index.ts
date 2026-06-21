@@ -51,6 +51,7 @@ function callBackend(path, method, body) {
   }
 
   if (body !== null && body !== undefined) {
+    options.contentType = "application/json";
     options.payload = JSON.stringify(body);
   }
 

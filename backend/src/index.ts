@@ -1144,8 +1144,10 @@ await fastify.register(async (instance) => {
   });
 
   instance.post("/populate", async (req, reply) => {
+    console.log("[populate] raw body:", JSON.stringify(req.body));
     const parsed = datasetContextSchema.safeParse(req.body);
     if (!parsed.success) {
+      console.log("[populate] Zod failed:", JSON.stringify(parsed.error.flatten().fieldErrors));
       return reply.code(400).send({
         error: "Invalid request",
         details: parsed.error.flatten().fieldErrors,

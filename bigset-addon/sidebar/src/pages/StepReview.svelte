@@ -70,7 +70,18 @@
 
       // Kick off populate
       try {
-        await api.populate(dataset.id);
+        await api.populate(
+          dataset.id,
+          schema.name.trim(),
+          schema.description.trim() || $wizard.prompt.trim(),
+          schema.maxRowCount,
+          schema.columns.map((c) => ({
+            name: c.name.trim(),
+            type: c.type,
+            description: c.description.trim() || undefined,
+            isPrimaryKey: c.isPrimaryKey || undefined,
+          })),
+        );
       } catch (err) {
         // Populate can take a while; we move to the populating view regardless
         // and let the polling figure out the truth.

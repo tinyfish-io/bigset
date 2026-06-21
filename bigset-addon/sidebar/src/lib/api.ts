@@ -159,30 +159,38 @@ export const api = {
     maxRowCount: number;
     refreshCadence?: "manual" | "30m" | "6h" | "12h" | "daily" | "weekly";
   }) {
-    return this.callBackend<{ dataset: DatasetSummary }>("/addon/datasets", "POST", schema).then(
-      (r) => r.dataset,
+    return this.callBackend<{ dataset: DatasetSummary & { _id: string } }>("/addon/datasets", "POST", schema).then(
+      (r) => ({ ...r.dataset, id: r.dataset._id }),
     );
   },
 
-  populate(datasetId: string) {
+  populate(
+    datasetId: string,
+    datasetName: string,
+    description: string,
+    maxRowCount: number,
+    columns: Array<{ name: string; type: ColumnType; description?: string; isPrimaryKey?: boolean }>,
+  ) {
     return this.callBackend<{ success: boolean; runId: string }>("/populate", "POST", {
       datasetId,
-      datasetName: "",
-      description: "",
-      maxRowCount: 0,
-      columns: [],
+      datasetName,
+      description,
+      maxRowCount,
+      columns,
     });
   },
 
   getDataset(id: string) {
-    return this.callBackend<{ dataset: DatasetSummary }>(`/addon/datasets/${encodeURIComponent(id)}`, "GET");
+    return this.callBackend<{ dataset: DatasetSummary & { _id: string } }>(`/addon/datasets/${encodeURIComponent(id)}`, "GET").then(
+      (r) => ({ ...r.dataset, id: r.dataset._id }),
+    );
   },
 
   listRows(id: string) {
-    return this.callBackend<{ rows: DatasetRow[]; dataset: DatasetSummary }>(
+    return this.callBackend<{ rows: DatasetRow[]; dataset: DatasetSummary & { _id: string } }>(
       `/addon/datasets/${encodeURIComponent(id)}/rows`,
       "GET",
-    );
+    ).then((r) => ({ rows: r.rows, dataset: { ...r.dataset, id: r.dataset._id } }));
   },
 
   stopDataset(id: string) {
