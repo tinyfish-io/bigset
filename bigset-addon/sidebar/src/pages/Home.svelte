@@ -8,6 +8,7 @@
   import StepDone from "./StepDone.svelte";
   import Datasets from "./Datasets.svelte";
   import Public from "./Public.svelte";
+  import DatasetDetail from "./DatasetDetail.svelte";
 
   type Tab = "generate" | "datasets" | "public";
   let tab: Tab = "generate";
@@ -16,52 +17,56 @@
 <div class="home">
   <Header title="BigSet" />
 
-  <nav class="tabs">
-    <button
-      class="tab"
-      class:active={tab === "generate"}
-      type="button"
-      on:click={() => (tab = "generate")}
-    >
-      Generate
-    </button>
-    <button
-      class="tab"
-      class:active={tab === "datasets"}
-      type="button"
-      on:click={() => (tab = "datasets")}
-    >
-      My Datasets
-    </button>
-    <button
-      class="tab"
-      class:active={tab === "public"}
-      type="button"
-      on:click={() => (tab = "public")}
-    >
-      Public
-    </button>
-  </nav>
+  {#if $wizard.selectedForInsert}
+    <DatasetDetail />
+  {:else}
+    <nav class="tabs">
+      <button
+        class="tab"
+        class:active={tab === "generate"}
+        type="button"
+        on:click={() => (tab = "generate")}
+      >
+        Generate
+      </button>
+      <button
+        class="tab"
+        class:active={tab === "datasets"}
+        type="button"
+        on:click={() => (tab = "datasets")}
+      >
+        My Datasets
+      </button>
+      <button
+        class="tab"
+        class:active={tab === "public"}
+        type="button"
+        on:click={() => (tab = "public")}
+      >
+        Public
+      </button>
+    </nav>
 
-  <main class="content">
-    {#if tab === "datasets"}
-      <Datasets />
-    {:else if tab === "public"}
-      <Public />
-    {:else}
-      {#if $wizard.step === "describe"}
-        <StepDescribe />
-      {:else if $wizard.step === "generating"}
-        <StepGenerating />
-      {:else if $wizard.step === "review"}
-        <StepReview />
-      {:else if $wizard.step === "populating"}
-        <StepPopulating />
-      {:else if $wizard.step === "done"}
-        <StepDone />
+    <main class="content">
+      {#if tab === "datasets"}
+        <Datasets />
+      {:else if tab === "public"}
+        <Public />
+      {:else}
+        {#if $wizard.step === "describe"}
+          <StepDescribe />
+        {:else if $wizard.step === "generating"}
+          <StepGenerating />
+        {:else if $wizard.step === "review"}
+          <StepReview />
+        {:else if $wizard.step === "populating"}
+          <StepPopulating />
+        {:else if $wizard.step === "done"}
+          <StepDone />
+        {/if}
       {/if}
-    {/if}
-  </main>
+    </main>
+  {/if}
 </div>
 
 <style>

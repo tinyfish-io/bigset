@@ -11,6 +11,7 @@
  * and offers to insert rows into the Sheet.
  */
 import { writable, derived, type Writable } from "svelte/store";
+import type { DatasetSummary, DatasetRow } from "../lib/api.js";
 
 export type Step = "describe" | "generating" | "review" | "populating" | "done";
 
@@ -52,6 +53,8 @@ export interface WizardState {
   error: string | null;
   /** Cached rows from /addon/datasets/:id/rows for insertion into the Sheet. */
   rows: Array<Record<string, unknown>>;
+  /** Dataset selected from the Datasets or Public tab for preview/insert. */
+  selectedForInsert: { dataset: DatasetSummary; rows: DatasetRow[] } | null;
 }
 
 function emptySchema(name = ""): SchemaDraft {
@@ -75,6 +78,7 @@ const initial: WizardState = {
   startedAt: null,
   error: null,
   rows: [],
+  selectedForInsert: null,
 };
 
 export const wizard: Writable<WizardState> = writable(initial);
@@ -126,6 +130,14 @@ export function setPopulating(): void {
 
 export function setDone(): void {
   wizard.update((s) => ({ ...s, step: "done" }));
+}
+
+export function setSelectedForInsert(ds: DatasetSummary, rows: DatasetRow[]): void {
+  wizard.update((s) => ({ ...s, selectedForInsert: { dataset: ds, rows } }));
+}
+
+export function clearSelectedForInsert(): void {
+  wizard.update((s) => ({ ...s, selectedForInsert: null }));
 }
 
 export function updateColumn(index: number, patch: Partial<ColumnDraft>): void {

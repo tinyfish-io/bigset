@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { api, type DatasetSummary } from "../lib/api.js";
+  import { setSelectedForInsert } from "../lib/wizardStore.js";
   import StatusBadge from "../lib/StatusBadge.svelte";
   import Icon from "../lib/Icon.svelte";
   import Spinner from "../lib/Spinner.svelte";
@@ -8,9 +9,7 @@
   let datasets: DatasetSummary[] = [];
   let loading = true;
   let loadError: string | null = null;
-
-  let insertingId: string | null = null;
-  let insertMsg: { ok: boolean; text: string } | null = null;
+  let previewingId: string | null = null;
 
   async function load() {
     loading = true;
@@ -24,30 +23,16 @@
     }
   }
 
-  async function insertDataset(ds: DatasetSummary) {
-    if (insertingId) return;
-    insertingId = ds.id;
-    insertMsg = null;
+  async function selectDataset(ds: DatasetSummary) {
+    if (previewingId) return;
+    previewingId = ds.id;
     try {
       const { rows } = await api.listPublicRows(ds.id);
-      if (rows.length === 0) {
-        insertMsg = { ok: false, text: "This dataset has no rows yet." };
-        return;
-      }
-      const headers = ds.columns.map((c) => c.name);
-      const result = await api.insertRows(
-        headers,
-        rows.map((r) => r.data),
-        true,
-      );
-      insertMsg = {
-        ok: true,
-        text: `Inserted ${result.rowsInserted} rows (${result.startCell}:${result.endCell}).`,
-      };
+      setSelectedForInsert(ds, rows);
     } catch (err) {
-      insertMsg = { ok: false, text: err instanceof Error ? err.message : "Insert failed." };
+      loadError = err instanceof Error ? err.message : "Failed to load rows.";
     } finally {
-      insertingId = null;
+      previewingId = null;
     }
   }
 
@@ -73,19 +58,13 @@
       <p class="muted">No public datasets available.</p>
     </div>
   {:else}
-    {#if insertMsg}
-      <div class="alert" class:alert-error={!insertMsg.ok} class:alert-info={insertMsg.ok}>
-        {insertMsg.text}
-      </div>
-    {/if}
-
     <div class="list">
       {#each datasets as ds (ds.id)}
         <button
           class="card"
           type="button"
-          on:click={() => insertDataset(ds)}
-          disabled={insertingId !== null}
+          on:click={() => selectDataset(ds)}
+          disabled={previewingId !== null}
         >
           <div class="card-top">
             <span class="card-name">{ds.name}</span>
@@ -96,8 +75,8 @@
           {/if}
           <div class="card-foot">
             <span class="muted small">{ds.rowCount} rows</span>
-            <span class="muted small">{ds.columns.length} columns</span>
-            {#if insertingId === ds.id}
+            <span class="muted small">{ds.columns.length} cols</span>
+            {#if previewingId === ds.id}
               <Spinner size="sm" />
             {:else}
               <Icon name="play" size={11} />
