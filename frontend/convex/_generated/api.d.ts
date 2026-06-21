@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as apiKeys from "../apiKeys.js";
 import type * as datasetRows from "../datasetRows.js";
 import type * as datasets from "../datasets.js";
 import type * as lib_authz from "../lib/authz.js";
@@ -27,6 +28,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  apiKeys: typeof apiKeys;
   datasetRows: typeof datasetRows;
   datasets: typeof datasets;
   "lib/authz": typeof lib_authz;

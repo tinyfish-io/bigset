@@ -186,4 +186,21 @@ export default defineSchema({
     .index("by_dataset", ["datasetId"])
     .index("by_user", ["userId"])
     .index("by_workflow_run", ["workflowRunId"]),
+
+  // API keys for non-browser clients (Google Sheets add-on, CLI, etc.).
+  // We never store the plaintext key — only a SHA-256 hash. The `keyPrefix`
+  // (first 8 chars) is returned in listings so users can identify a key
+  // without leaking the secret. Created by the backend, listed/revoked
+  // through HTTP routes under requireAuth.
+  apiKeys: defineTable({
+    ownerId: v.string(),
+    name: v.string(),
+    keyHash: v.string(),
+    keyPrefix: v.string(),
+    lastUsedAt: v.optional(v.number()),
+    createdAt: v.number(),
+    revokedAt: v.optional(v.number()),
+  })
+    .index("by_owner", ["ownerId"])
+    .index("by_hash", ["keyHash"]),
 });

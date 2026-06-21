@@ -25,6 +25,7 @@ import {
   verifyOpenRouterApiKey,
   verifyTinyFishApiKey,
 } from "./local-credentials.js";
+import { generateApiKey } from "./api-key.js";
 
 /** Domain part of an email, for analytics (we never log full addresses). */
 function emailDomain(email: string): string {
@@ -693,7 +694,7 @@ if (env.IS_LOCAL_MODE) {
 await fastify.register(fastifyCors, {
   origin: Array.from(allowedCorsOrigins),
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "Cookie"],
+  allowedHeaders: ["Content-Type", "Authorization", "Cookie", "X-API-Key"],
   credentials: true,
   maxAge: 86400,
 });
@@ -1368,6 +1369,219 @@ await fastify.register(async (instance) => {
       return reply.code(502).send({ error: "Failed to stop dataset run. Please try again." });
     }
   });
+
+  // ────────────────────────────────────────────────────────────────────────
+  //  API key management — generate / list / revoke. Only accessible with
+  //  a Clerk session (browser/frontend). Non-browser clients use the issued
+  //  key via the X-API-Key header on the other protected routes.
+  // ────────────────────────────────────────────────────────────────────────
+
+  instance.post("/api-keys", async (req, reply) => {
+    const auth = req.auth;
+    if (!auth) return reply.code(401).send({ error: "Authentication required" });
+
+    const body = req.body as { name?: string };
+    const name = (body?.name ?? "Default key").toString().slice(0, 60) || "Default key";
+
+    try {
+      const { key, keyHash, keyPrefix } = generateApiKey();
+      const { id } = await convex.mutation(internal.apiKeys.create, {
+        ownerId: auth.userId,
+        name,
+        keyHash,
+        keyPrefix,
+        createdAt: Date.now(),
+      });
+      // The plaintext key is returned ONCE here — never again.
+      return reply.code(201).send({ id, key, keyPrefix, name });
+    } catch (err) {
+      req.log.error(err, "Failed to create API key");
+      return reply.code(500).send({ error: "Failed to create API key" });
+    }
+  });
+
+  instance.get("/api-keys", async (req, reply) => {
+    const auth = req.auth;
+    if (!auth) return reply.code(401).send({ error: "Authentication required" });
+
+    try {
+      const rows = await convex.query(internal.apiKeys.listByOwner, { ownerId: auth.userId });
+      return {
+        keys: rows
+          .filter((k) => !k.revokedAt)
+          .map((k) => ({
+            id: k._id,
+            name: k.name,
+            keyPrefix: k.keyPrefix,
+            createdAt: k.createdAt,
+            lastUsedAt: k.lastUsedAt ?? null,
+          })),
+      };
+    } catch (err) {
+      req.log.error(err, "Failed to list API keys");
+      return reply.code(500).send({ error: "Failed to list API keys" });
+    }
+  });
+
+  instance.delete<{ Params: { id: string } }>("/api-keys/:id", async (req, reply) => {
+    const auth = req.auth;
+    if (!auth) return reply.code(401).send({ error: "Authentication required" });
+
+    const id = req.params?.id;
+    if (!id) return reply.code(400).send({ error: "id is required" });
+
+    try {
+      const result = await convex.mutation(internal.apiKeys.revoke, {
+        id: id as never,
+        ownerId: auth.userId,
+        revokedAt: Date.now(),
+      });
+      if (!result) return reply.code(404).send({ error: "Key not found" });
+      return { success: true };
+    } catch (err) {
+      req.log.error(err, "Failed to revoke API key");
+      return reply.code(500).send({ error: "Failed to revoke API key" });
+    }
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────
+//  Sheets add-on routes — accept either Clerk JWT OR API key.
+//  These mirror the CLI routes but live in the protected (or local) auth
+//  path so the add-on works for both self-hosted local users and
+//  Clerk-authenticated cloud users.
+// ────────────────────────────────────────────────────────────────────────
+
+const addonCreateDatasetSchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  description: z.string().trim().min(1),
+  columns: z.array(
+    z.object({
+      name: z.string().trim().min(1),
+      type: z.enum(["text", "number", "boolean", "url", "date"]),
+      description: z.optional(z.string()),
+      isPrimaryKey: z.optional(z.boolean()),
+    }),
+  ),
+  retrievalStrategy: z.optional(
+    z.enum(["search_fetch", "browser", "hybrid"]),
+  ),
+  sourceHint: z.optional(z.string()),
+  maxRowCount: z.number().int().min(1).max(2500).default(100),
+  refreshCadence: refreshCadenceSchema.default("manual"),
+});
+
+await fastify.register(async (instance) => {
+  instance.addHook("preHandler", requireAuth);
+
+  instance.post("/addon/datasets", async (req, reply) => {
+    const auth = req.auth;
+    if (!auth) return reply.code(401).send({ error: "Authentication required" });
+
+    const parsed = addonCreateDatasetSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.code(400).send({
+        error: "Invalid request",
+        details: parsed.error.flatten().fieldErrors,
+      });
+    }
+
+    try {
+      const datasetId = await convex.mutation(
+        internal.datasets.createForOwnerInternal,
+        {
+          ownerId: auth.userId,
+          name: parsed.data.name,
+          description: parsed.data.description,
+          refreshCadence: parsed.data.refreshCadence,
+          maxRowCount: parsed.data.maxRowCount,
+          columns: parsed.data.columns,
+          retrievalStrategy: parsed.data.retrievalStrategy,
+          sourceHint: parsed.data.sourceHint,
+        },
+      );
+
+      const dataset = await convex.query(internal.datasets.getInternal, {
+        id: datasetId,
+      });
+      return reply.code(201).send({ dataset });
+    } catch (err) {
+      req.log.error(err, "Addon dataset create failed");
+      return reply.code(502).send({ error: "Failed to create dataset" });
+    }
+  });
+
+  instance.get("/addon/datasets", async (req, reply) => {
+    const auth = req.auth;
+    if (!auth) return reply.code(401).send({ error: "Authentication required" });
+
+    try {
+      const datasets = await convex.query(internal.datasets.listByOwnerInternal, {
+        ownerId: auth.userId,
+      });
+      return { datasets };
+    } catch (err) {
+      req.log.error(err, "Addon dataset list failed");
+      return reply.code(502).send({ error: "Failed to list datasets" });
+    }
+  });
+
+  instance.get<{ Params: { datasetId: string } }>(
+    "/addon/datasets/:datasetId",
+    async (req, reply) => {
+      const auth = req.auth;
+      if (!auth) return reply.code(401).send({ error: "Authentication required" });
+
+      const params = cliDatasetIdParamsSchema.safeParse(req.params);
+      if (!params.success) {
+        return reply.code(400).send({ error: "datasetId is required" });
+      }
+
+      try {
+        const dataset = await convex.query(internal.datasets.getInternal, {
+          id: params.data.datasetId,
+        });
+        if (!dataset || dataset.ownerId !== auth.userId) {
+          return reply.code(404).send({ error: "Dataset not found" });
+        }
+        return { dataset };
+      } catch (err) {
+        req.log.error(err, "Addon dataset get failed");
+        return reply.code(400).send({ error: "Invalid datasetId" });
+      }
+    },
+  );
+
+  instance.get<{ Params: { datasetId: string } }>(
+    "/addon/datasets/:datasetId/rows",
+    async (req, reply) => {
+      const auth = req.auth;
+      if (!auth) return reply.code(401).send({ error: "Authentication required" });
+
+      const params = cliDatasetIdParamsSchema.safeParse(req.params);
+      if (!params.success) {
+        return reply.code(400).send({ error: "datasetId is required" });
+      }
+
+      try {
+        const dataset = await convex.query(internal.datasets.getInternal, {
+          id: params.data.datasetId,
+        });
+        if (!dataset || dataset.ownerId !== auth.userId) {
+          return reply.code(404).send({ error: "Dataset not found" });
+        }
+        const rows = await convex.query(internal.datasetRows.listByOwnedDatasetInternal, {
+          datasetId: params.data.datasetId,
+          ownerId: auth.userId,
+        });
+        if (!rows) return reply.code(404).send({ error: "Dataset not found" });
+        return { rows, dataset };
+      } catch (err) {
+        req.log.error(err, "Addon rows get failed");
+        return reply.code(400).send({ error: "Invalid datasetId" });
+      }
+    },
+  );
 });
 
 try {

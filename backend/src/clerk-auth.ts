@@ -9,6 +9,7 @@ import { createClerkClient, type ClerkClient } from "@clerk/backend";
 
 import { env } from "./env.js";
 import { LOCAL_USER_ID } from "./local-credentials.js";
+import { tryApiKeyAuth } from "./api-key.js";
 
 /**
  * Clerk JWT verification for the Fastify backend.
@@ -93,6 +94,9 @@ export async function requireAuth(
     req.auth = { userId: LOCAL_USER_ID };
     return;
   }
+
+  const apiKeyHandled = await tryApiKeyAuth(req, reply);
+  if (apiKeyHandled) return;
 
   if (!env.CLERK_SECRET_KEY) {
     req.log.error("CLERK_SECRET_KEY is not set; cannot verify request");
