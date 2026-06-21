@@ -46,8 +46,13 @@
         setStep("done");
         stopPolling();
       } else if (dataset.status === "failed") {
-        setError(dataset.lastStatusError ?? "Population failed.");
-        setStep("describe");
+        const errMsg = dataset.lastStatusError ?? "";
+        if (errMsg.includes("stopped") || errMsg.includes("interrupted") || errMsg.includes("aborted")) {
+          setStep("done");
+        } else {
+          setError(errMsg || "Population failed.");
+          setStep("describe");
+        }
         stopPolling();
       }
     } catch (err) {
@@ -80,8 +85,13 @@
   async function stop() {
     if (stopping || !$wizard.dataset) return;
     stopping = true;
+    stopPolling();
     try {
       await api.stopDataset($wizard.dataset.id);
+      const { rows } = await api.listRows($wizard.dataset.id);
+      setRows(rows.map((r) => r.data));
+      setRowCount(rows.length);
+      setStep("done");
     } catch (err) {
       console.warn("stop error", err);
     } finally {
