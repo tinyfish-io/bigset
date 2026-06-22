@@ -9,9 +9,10 @@
   import Datasets from "./Datasets.svelte";
   import Public from "./Public.svelte";
   import DatasetDetail from "./DatasetDetail.svelte";
+  import EnrichTab from "./enrich/EnrichTab.svelte";
 
-  type Tab = "generate" | "datasets" | "public";
-  let tab: Tab = "generate";
+  type Tab = "generate" | "datasets" | "enrich" | "public";
+  let tab: Tab = "enrich";
 </script>
 
 <div class="home">
@@ -39,6 +40,14 @@
       </button>
       <button
         class="tab"
+        class:active={tab === "enrich"}
+        type="button"
+        on:click={() => (tab = "enrich")}
+      >
+        Enrich
+      </button>
+      <button
+        class="tab"
         class:active={tab === "public"}
         type="button"
         on:click={() => (tab = "public")}
@@ -50,6 +59,8 @@
     <main class="content">
       {#if tab === "datasets"}
         <Datasets />
+      {:else if tab === "enrich"}
+        <EnrichTab />
       {:else if tab === "public"}
         <Public />
       {:else}

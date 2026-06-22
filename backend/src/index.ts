@@ -363,6 +363,82 @@ async function runUpdateWorkflowInBackground({
   }
 }
 
+/**
+ * Background runner for the enrichment workflow.
+ * Processes rows concurrently to fill empty columns with AI-researched data.
+ */
+async function runEnrichWorkflowInBackground({
+  input,
+  run,
+  authorizedUserId,
+  logger,
+}: {
+  input: {
+    datasetId: string;
+    sourceColumns: string[];
+    targetColumns: Array<{ name: string; type: "text" | "number" | "boolean" | "url" | "date"; description?: string }>;
+    authContext: {
+      authorizedUserId: string;
+      workflowRunId: string;
+      modelConfig: {
+        schemaInference: string;
+        populateOrchestrator: string;
+        investigateSubagent: string;
+      };
+    };
+    enrichmentRunId: string;
+  };
+  run: EnrichWorkflowRun;
+  authorizedUserId: string;
+  logger: FastifyBaseLogger;
+}): Promise<void> {
+  const datasetId = input.datasetId;
+
+  try {
+    const result = await run.start({
+      inputData: input,
+    });
+
+    logger.info(
+      {
+        workflowStatus: result.status,
+        steps: JSON.stringify(result.steps).slice(0, 2000),
+      },
+      "Enrich workflow completed",
+    );
+
+    if (result.status !== "success") {
+      throw new Error(`Enrich workflow ended with status: ${result.status}`);
+    }
+
+    logger.info(
+      { datasetId, result: JSON.stringify(result) },
+      "Enrich workflow finished",
+    );
+  } catch (err) {
+    const lastStatusError = statusErrorMessage(err);
+    logger.error({ err, datasetId }, "Enrich background workflow failed");
+
+    // Mark the enrichment run as failed
+    try {
+      await convex.mutation(internal.sheetsEnrichmentRuns.complete, {
+        id: input.enrichmentRunId as any,
+        rowsProcessed: 0,
+        rowsUpdated: 0,
+        rowsFound: 0,
+        status: "failed",
+      });
+    } catch (statusErr) {
+      logger.error(
+        { err: statusErr, datasetId },
+        "Failed to mark enrichment run as failed",
+      );
+    }
+  } finally {
+    deregisterDataset(datasetId);
+  }
+}
+
 async function runScheduledUpdateWorkflowInBackground({
   input,
   run,
@@ -1410,8 +1486,8 @@ await fastify.register(async (instance) => {
       const rows = await convex.query(internal.apiKeys.listByOwner, { ownerId: auth.userId });
       return {
         keys: rows
-          .filter((k) => !k.revokedAt)
-          .map((k) => ({
+          .filter((k: { revokedAt?: number }) => !k.revokedAt)
+          .map((k: { _id: unknown; name: string; keyPrefix: string; createdAt: number; lastUsedAt?: number }) => ({
             id: k._id,
             name: k.name,
             keyPrefix: k.keyPrefix,
@@ -1620,6 +1696,167 @@ await fastify.register(async (instance) => {
       }
     },
   );
+
+  // ────────────────────────────────────────────────────────────────────────
+  //  Data Enrichment — fill empty columns directly from sheet data
+  //  Independent of BigSet datasets
+  // ────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Enrich rows directly from sheet data.
+   * POST /sheets/enrich
+   *
+   * Request body:
+   * {
+   *   sourceColumns: string[],                    // Columns with identifying data
+   *   targetColumns: string[],                   // Columns to fill
+   *   rows: Array<{                              // Rows to enrich
+   *     rowIndex: number,                        // Row number in the sheet
+   *     sourceData: Record<string, unknown>      // Current values in source columns
+   *   }>
+   * }
+   *
+   * Response:
+   * {
+   *   results: Array<{
+   *     rowIndex: number,
+   *     values: Record<string, unknown>,         // Enriched values to write
+   *     error?: string
+   *   }>,
+   *   stats: {
+   *     rowsProcessed: number,
+   *     rowsEnriched: number,
+   *     rowsWithErrors: number
+   *   }
+   * }
+   */
+  instance.post<{
+    Body: {
+      sourceColumns: string[];
+      targetColumns: string[];
+      rows: Array<{
+        rowIndex: number;
+        sourceData: Record<string, unknown>;
+      }>;
+    };
+  }>("/sheets/enrich", async (req, reply) => {
+    const auth = req.auth;
+    if (!auth) return reply.code(401).send({ error: "Authentication required" });
+
+    const body = req.body;
+    if (!Array.isArray(body.sourceColumns) || body.sourceColumns.length === 0) {
+      return reply.code(400).send({ error: "At least one source column is required" });
+    }
+    if (!Array.isArray(body.targetColumns) || body.targetColumns.length === 0) {
+      return reply.code(400).send({ error: "At least one target column is required" });
+    }
+    if (!Array.isArray(body.rows) || body.rows.length === 0) {
+      return reply.code(400).send({ error: "At least one row is required" });
+    }
+
+    if (!(await ensureLocalSetupReady(reply))) return;
+
+    try {
+      const { getModelConfig } = await import("./config/models.js");
+      const modelConfig = await getModelConfig(auth.userId);
+      const { requireOpenRouterApiKey } = await import("./local-credentials.js");
+      const openRouterApiKey = await requireOpenRouterApiKey();
+
+      const { buildEnrichAgent, parseEnrichResponse } = await import("./mastra/agents/enrich-agent.js");
+
+      const results: Array<{
+        rowIndex: number;
+        values: Record<string, unknown>;
+        error?: string;
+      }> = new Array(body.rows.length);
+      let rowsEnriched = 0;
+      let rowsWithErrors = 0;
+
+      const mockAuthContext = {
+        authorizedUserId: auth.userId,
+        workflowRunId: `enrich-${Date.now()}`,
+        modelConfig,
+      };
+
+      const MAX_CONCURRENT = 5;
+      let idx = 0;
+
+      const workers = Array.from(
+        { length: Math.min(MAX_CONCURRENT, body.rows.length) },
+        async () => {
+          while (idx < body.rows.length) {
+            const i = idx++;
+            const row = body.rows[i];
+            try {
+              const sourceData: Record<string, unknown> = {};
+              for (const col of body.sourceColumns) {
+                if (row.sourceData[col] !== undefined && row.sourceData[col] !== null && row.sourceData[col] !== "") {
+                  sourceData[col] = row.sourceData[col];
+                }
+              }
+
+              if (Object.keys(sourceData).length === 0) {
+                results[i] = { rowIndex: row.rowIndex, values: {}, error: "No source data" };
+                continue;
+              }
+
+              const rowTargetCols = row.targetColumns ?? body.targetColumns;
+              const columnsToFill = rowTargetCols.map((name: string) => ({
+                name,
+                type: "text" as const,
+              }));
+
+              const agent = buildEnrichAgent(
+                "sheet-enrichment",
+                mockAuthContext as any,
+                sourceData,
+                columnsToFill,
+                openRouterApiKey,
+              );
+
+              const result = await agent.generate(
+                `Research and find values for these columns based on the entity information provided. Return ONLY a JSON object with the found values.`,
+                { maxSteps: 10 }
+              );
+
+              const foundValues = parseEnrichResponse(result.text, rowTargetCols);
+
+              if (foundValues && Object.keys(foundValues).length > 0) {
+                const cleanValues: Record<string, unknown> = {};
+                for (const [col, val] of Object.entries(foundValues)) {
+                  if (val !== null && val !== undefined && val !== "") {
+                    cleanValues[col] = val;
+                  }
+                }
+                results[i] = { rowIndex: row.rowIndex, values: cleanValues };
+                if (Object.keys(cleanValues).length > 0) rowsEnriched++;
+              } else {
+                results[i] = { rowIndex: row.rowIndex, values: {}, error: "No values found" };
+              }
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              results[i] = { rowIndex: row.rowIndex, values: {}, error: msg };
+              rowsWithErrors++;
+            }
+          }
+        }
+      );
+
+      await Promise.allSettled(workers);
+
+      return {
+        results,
+        stats: {
+          rowsProcessed: body.rows.length,
+          rowsEnriched,
+          rowsWithErrors,
+        },
+      };
+    } catch (err) {
+      req.log.error(err, "Enrich processing failed");
+      return reply.code(502).send({ error: "Failed to process enrichment. Please try again." });
+    }
+  });
 });
 
 try {

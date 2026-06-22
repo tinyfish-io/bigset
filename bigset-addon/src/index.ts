@@ -133,3 +133,158 @@ function insertRowsIntoActiveSheet(headers, rows, clearFirst) {
 function showErrorToast(message) {
   SpreadsheetApp.getActiveSpreadsheet().toast(message, "BigSet", 5);
 }
+
+// ─────────────────────────────────────────────────────────────────────
+//  Sheet Enrichment — read selection, enrich, write back
+// ─────────────────────────────────────────────────────────────────────
+
+/**
+ * Read the user's selected range from the active sheet.
+ * Expects the first row of the selection to contain column headers.
+ *
+ * Returns:
+ *   { headers: string[], rows: Array<{ rowIndex: number, data: {} }>, range: string }
+ *
+ * Only includes rows where at least one cell is non-empty.
+ */
+function getSelectedRange() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getActiveSheet();
+  const activeRange = sheet.getActiveRange();
+
+  if (!activeRange) {
+    return { headers: [], rows: [], range: "" };
+  }
+
+  const rowStart = activeRange.getRow();
+  const colStart = activeRange.getColumn();
+  const numRows = activeRange.getNumRows();
+  const numCols = activeRange.getNumColumns();
+
+  const rawRangeStr = `${columnLetter(colStart)}${rowStart}:${columnLetter(colStart + numCols - 1)}${rowStart + numRows - 1}`;
+
+  if (numRows < 2) {
+    return { headers: [], rows: [], range: rawRangeStr };
+  }
+
+  const values = activeRange.getValues();
+
+  // Find the last column with a non-empty header
+  let lastCol = 0;
+  for (let j = values[0].length - 1; j >= 0; j--) {
+    const header = values[0][j];
+    if (header !== "" && header !== null && header !== undefined) {
+      lastCol = j + 1;
+      break;
+    }
+  }
+
+  if (lastCol === 0) {
+    return { headers: [], rows: [], range: rawRangeStr };
+  }
+
+  // Find the last row with at least one non-empty value
+  let lastRow = 0;
+  for (let i = values.length - 1; i >= 1; i--) {
+    for (let j = 0; j < lastCol; j++) {
+      const val = values[i][j];
+      if (val !== "" && val !== null && val !== undefined) {
+        lastRow = i;
+        break;
+      }
+    }
+    if (lastRow > 0) break;
+  }
+
+  if (lastRow === 0) {
+    return { headers: [], rows: [], range: rawRangeStr };
+  }
+
+  // Build headers from trimmed columns
+  var headers = [];
+  for (let j = 0; j < lastCol; j++) {
+    headers.push(String(values[0][j]));
+  }
+
+  // Build rows from trimmed data
+  const rowsData = [];
+  for (let i = 1; i <= lastRow; i++) {
+    const rowData = {};
+    let hasValue = false;
+    for (let j = 0; j < lastCol; j++) {
+      const val = values[i][j];
+      if (val !== "" && val !== null && val !== undefined) {
+        rowData[headers[j]] = val;
+        hasValue = true;
+      } else {
+        rowData[headers[j]] = null;
+      }
+    }
+    if (hasValue) {
+      rowsData.push({
+        rowIndex: rowStart + i,
+        data: rowData,
+      });
+    }
+  }
+
+  const trimmedRange = `${columnLetter(colStart)}${rowStart}:${columnLetter(colStart + lastCol - 1)}${rowStart + lastRow}`;
+
+  return { headers, rows: rowsData, range: trimmedRange };
+}
+
+function columnLetter(col) {
+  let letter = "";
+  while (col > 0) {
+    col--;
+    letter = String.fromCharCode(65 + (col % 26)) + letter;
+    col = Math.floor(col / 26);
+  }
+  return letter;
+}
+
+/**
+ * Write enrichment results back to the sheet.
+ * Only writes to cells that are currently empty — never overwrites data.
+ *
+ * @param {Array<{rowIndex: number, columnName: string, value: any}>} updates
+ */
+function updateSheetCells(updates) {
+  if (!updates || updates.length === 0) {
+    return { updated: 0 };
+  }
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getActiveSheet();
+  const activeRange = sheet.getActiveRange();
+
+  if (!activeRange) return { updated: 0 };
+
+  const colStart = activeRange.getColumn();
+  const numCols = activeRange.getNumColumns();
+  const headersRange = sheet.getRange(activeRange.getRow(), colStart, 1, numCols);
+  const headers = headersRange.getValues()[0].map(String);
+
+  let updated = 0;
+
+  for (const update of updates) {
+    const colIndex = headers.indexOf(update.columnName);
+    if (colIndex === -1) continue;
+
+    const rowIndex = parseInt(update.rowIndex, 10);
+    if (isNaN(rowIndex) || rowIndex < 2) continue;
+
+    const cell = sheet.getRange(rowIndex, colStart + colIndex);
+    const currentValue = cell.getValue();
+
+    // NEVER overwrite existing data
+    if (currentValue !== "" && currentValue !== null && currentValue !== undefined) {
+      continue;
+    }
+
+    cell.setValue(update.value);
+    updated++;
+  }
+
+  return { updated };
+}

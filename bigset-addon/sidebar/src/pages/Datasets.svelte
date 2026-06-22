@@ -23,6 +23,8 @@
     }
   }
 
+  onMount(load);
+
   async function selectDataset(ds: DatasetSummary) {
     if (previewingId) return;
     previewingId = ds.id;
@@ -35,8 +37,6 @@
       previewingId = null;
     }
   }
-
-  onMount(load);
 </script>
 
 <section class="datasets">

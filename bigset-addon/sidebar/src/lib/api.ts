@@ -215,6 +215,41 @@ export const api = {
       "GET",
     ).then((r) => ({ rows: r.rows, dataset: { ...r.dataset, id: r.dataset._id } }));
   },
+
+  // ────────────────────────────────────────────────────────────────────────
+  //  Data Enrichment API
+  // ────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Enrich rows directly from sheet data.
+   * This is the independent enrichment that doesn't require a BigSet dataset.
+   */
+  enrichRows(params: {
+    sourceColumns: string[];
+    targetColumns: string[];
+    rows: Array<{
+      rowIndex: number;
+      sourceData: Record<string, unknown>;
+      targetColumns?: string[];
+    }>;
+  }) {
+    return this.callBackend<{
+      results: Array<{
+        rowIndex: number;
+        values: Record<string, unknown>;
+        error?: string;
+      }>;
+      stats: {
+        rowsProcessed: number;
+        rowsEnriched: number;
+        rowsWithErrors: number;
+      };
+    }>("/sheets/enrich", "POST", {
+      sourceColumns: params.sourceColumns,
+      targetColumns: params.targetColumns,
+      rows: params.rows,
+    });
+  },
 };
 
 /** Where in the Svelte app we are. Useful for the route guard. */
