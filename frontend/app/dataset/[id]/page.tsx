@@ -153,12 +153,12 @@ const updateDetails = useMutation(api.datasets.updateDetails);
   }, [dataset, userId, handlePopulate]);
 
   async function handleExport(format: "csv" | "xlsx") {
-    if (!dataset || !displayRows || exporting) return;
+    if (!dataset || !rows || exporting) return;
 
     const exportRows =
       selectedCount > 0
         ? displayRows.filter((r) => selection.selected.has(r._id))
-        : displayRows;
+        : rows;
     if (exportRows.length === 0) return;
 
     setExporting(format);
@@ -171,7 +171,7 @@ const updateDetails = useMutation(api.datasets.updateDetails);
       track(EVENTS.DATASET_EXPORTED, {
         format,
         row_count: exportRows.length,
-        total_rows: displayRows.length,
+        total_rows: rows.length,
         selected_only: selectedCount > 0,
         seedKey: dataset.seedKey,
       });
@@ -589,7 +589,7 @@ const updateDetails = useMutation(api.datasets.updateDetails);
 
       {confirmPopulate && (
         <ConfirmPopulateModal
-          rowCount={displayRows.length}
+          rowCount={rows.length}
           onConfirm={() => {
             setConfirmPopulate(false);
             handlePopulate();
