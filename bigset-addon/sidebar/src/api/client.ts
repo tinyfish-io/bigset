@@ -45,6 +45,7 @@ export interface DatasetSchema {
   description: string;
   columns: Array<{
     name: string;
+    display_name: string;
     type: string;
     retrieval_hint?: string;
     is_primary_key?: boolean;

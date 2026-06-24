@@ -223,13 +223,15 @@
             >
               <Icon name="trash" size={12} />
             </button>
-            <textarea
-              class="textarea desc-input"
-              rows="1"
-              value={col.description}
-              on:input={(e) => updateColumn(i, { description: e.currentTarget.value })}
-              placeholder="Optional description"
-            ></textarea>
+            {#if col.description}
+              <textarea
+                class="textarea desc-input"
+                rows={Math.min(Math.max(col.description.split("\n").length, 1), 5)}
+                value={col.description}
+                on:input={(e) => updateColumn(i, { description: e.currentTarget.value })}
+                placeholder="Optional description"
+              ></textarea>
+            {/if}
           </div>
         {/each}
       </div>
@@ -402,12 +404,12 @@
     grid-area: desc;
     font-size: 11px;
     padding: 4px 8px;
-    min-height: 24px;
     line-height: 1.4;
     background-color: var(--background);
     border-color: var(--border);
-    resize: none;
-    overflow: hidden;
+    resize: vertical;
+    max-height: 160px;
+    overflow-y: auto;
   }
 
   .pk-banner {

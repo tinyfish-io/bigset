@@ -29,7 +29,7 @@
         sourceHint: schema.source_hint ?? null,
         maxRowCount: 100,
         columns: (schema.columns ?? []).map((c) => ({
-          name: c.name,
+          name: c.display_name,
           type: toSchemaType(c.type),
           description: c.retrieval_hint ?? "",
           isPrimaryKey: Boolean(c.is_primary_key),
