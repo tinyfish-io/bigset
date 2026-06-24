@@ -8,7 +8,7 @@ Build and enrich datasets from any Google Sheet using natural language. The add-
 
 ## Architecture
 
-```
+```text
 bigset-addon/
 ├── src/                    # Google Apps Script (TypeScript → pushed to Google)
 │   ├── index.ts            # Add-on entry: menu, sidebar, HTTP proxy, sheet ops
@@ -43,7 +43,7 @@ You need an Apps Script project to push to. Create one at <https://script.google
 1. Click **+ New project** (top left).
 2. Rename it to `BigSet Addon` (click the title in the toolbar).
 3. Copy the **script ID** from the URL bar — it looks like:
-   ```
+   ```text
    https://script.google.com/home/projects/1Lu2qMd7YE8QUvECiKQpPdv-1_tQU-LAMWRvVUHQ-m5lEIG-q0HPQ1X-t/edit
    ```
    The long string between `/projects/` and `/edit` is your script ID.

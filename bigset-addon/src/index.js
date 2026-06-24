@@ -48,8 +48,8 @@ function callBackend(path, method, body) {
     if (!baseUrl) {
         throw new Error("Backend URL is not configured. Open the BigSet sidebar → Settings and set your backend URL.");
     }
-    if (!/^https?:\/\//i.test(baseUrl)) {
-        throw new Error(`Backend URL must start with http:// or https:// (got "${baseUrl}"). Update it in Settings.`);
+    if (!/^https:\/\//i.test(baseUrl)) {
+        throw new Error(`Backend URL must use HTTPS (got "${baseUrl}"). Update it in Settings to an https:// URL — the add-on sends your API key on every request.`);
     }
     const url = `${baseUrl.replace(/\/+$/, "")}${path.startsWith("/") ? path : `/${path}`}`;
     const options = {
@@ -193,6 +193,19 @@ function getSelectedRange() {
     var headers = [];
     for (let j = 0; j < lastCol; j++) {
         headers.push(String(values[0][j]));
+    }
+    // Validate: every header must be non-empty and unique. rowData is keyed by
+    // header text, so duplicates would collapse columns and updateSheetCells()
+    // would route every update with that columnName to the first occurrence.
+    for (let j = 0; j < headers.length; j++) {
+        if (!headers[j]) {
+            throw new Error(`Column ${columnLetter(colStart + j)} has a blank header. Add a header or remove the column before enriching.`);
+        }
+        if (headers.indexOf(headers[j]) !== j) {
+            const first = columnLetter(colStart + headers.indexOf(headers[j]));
+            const dup = columnLetter(colStart + j);
+            throw new Error(`Duplicate header "${headers[j]}" at columns ${first} and ${dup}. Rename one to make headers unique.`);
+        }
     }
     // Build rows from trimmed data
     const rowsData = [];

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { wizard, setPrompt, setStep, setError, setSchema, type SchemaDraft } from "../stores/wizardStore.js";
   import { api } from "../api/client.js";
+  import { snakeToTitleCase } from "../lib/format.js";
   import Icon from "../components/Icon.svelte";
   import Spinner from "../components/Spinner.svelte";
 
@@ -21,7 +22,7 @@
     try {
       const schema = await api.inferSchema($wizard.prompt.trim());
       const draft: SchemaDraft = {
-        name: schema.dataset_name || "",
+        name: snakeToTitleCase(schema.dataset_name || ""),
         description: schema.description || $wizard.prompt.trim(),
         primaryKey: schema.primary_key ?? null,
         retrievalStrategy: schema.retrieval_strategy ?? null,
