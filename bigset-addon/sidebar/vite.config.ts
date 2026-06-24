@@ -12,7 +12,6 @@ export default defineConfig({
     commonjsOptions: {
       sourceMap: true
     },
-    // polyfillModulePreload: false,
     rollupOptions: {
       input: {
         main: resolve(__dirname, 'sidebar.html'),

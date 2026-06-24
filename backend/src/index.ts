@@ -4,7 +4,7 @@ import type { ClerkClient } from "@clerk/backend";
 import { z } from "zod";
 
 import { env } from "./env.js";
-import clerkAuthPlugin, { requireAuth, getUserEmail } from "./clerk-auth.js";
+import clerkAuthPlugin, { requireAuth, requireClerkAuth, getUserEmail } from "./clerk-auth.js";
 import { inferSchema } from "./pipeline/schema-inference.js";
 import { datasetContextSchema, type DatasetContext } from "./pipeline/populate.js";
 import { populateWorkflow } from "./mastra/workflows/populate.js";
@@ -1220,10 +1220,9 @@ await fastify.register(async (instance) => {
   });
 
   instance.post("/populate", async (req, reply) => {
-    console.log("[populate] raw body:", JSON.stringify(req.body));
     const parsed = datasetContextSchema.safeParse(req.body);
     if (!parsed.success) {
-      console.log("[populate] Zod failed:", JSON.stringify(parsed.error.flatten().fieldErrors));
+      req.log.info({ validationErrors: parsed.error.flatten().fieldErrors }, "populate validation failed");
       return reply.code(400).send({
         error: "Invalid request",
         details: parsed.error.flatten().fieldErrors,
@@ -1454,72 +1453,75 @@ await fastify.register(async (instance) => {
   //  key via the X-API-Key header on the other protected routes.
   // ────────────────────────────────────────────────────────────────────────
 
-  instance.post("/api-keys", async (req, reply) => {
-    const auth = req.auth;
-    if (!auth) return reply.code(401).send({ error: "Authentication required" });
+  await instance.register(async (apiKeysInstance) => {
+    apiKeysInstance.addHook("preHandler", requireClerkAuth);
 
-    const body = req.body as { name?: string };
-    const name = (body?.name ?? "Default key").toString().slice(0, 60) || "Default key";
+    apiKeysInstance.post("/api-keys", async (req, reply) => {
+      const auth = req.auth;
+      if (!auth) return reply.code(401).send({ error: "Authentication required" });
 
-    try {
-      const { key, keyHash, keyPrefix } = generateApiKey();
-      const { id } = await convex.mutation(internal.apiKeys.create, {
-        ownerId: auth.userId,
-        name,
-        keyHash,
-        keyPrefix,
-        createdAt: Date.now(),
-      });
-      // The plaintext key is returned ONCE here — never again.
-      return reply.code(201).send({ id, key, keyPrefix, name });
-    } catch (err) {
-      req.log.error(err, "Failed to create API key");
-      return reply.code(500).send({ error: "Failed to create API key" });
-    }
-  });
+      const body = req.body as { name?: string };
+      const name = (body?.name ?? "Default key").toString().slice(0, 60) || "Default key";
 
-  instance.get("/api-keys", async (req, reply) => {
-    const auth = req.auth;
-    if (!auth) return reply.code(401).send({ error: "Authentication required" });
+      try {
+        const { key, keyHash, keyPrefix } = generateApiKey();
+        const { id } = await convex.mutation(internal.apiKeys.create, {
+          ownerId: auth.userId,
+          name,
+          keyHash,
+          keyPrefix,
+          createdAt: Date.now(),
+        });
+        return reply.code(201).send({ id, key, keyPrefix, name });
+      } catch (err) {
+        req.log.error(err, "Failed to create API key");
+        return reply.code(500).send({ error: "Failed to create API key" });
+      }
+    });
 
-    try {
-      const rows = await convex.query(internal.apiKeys.listByOwner, { ownerId: auth.userId });
-      return {
-        keys: rows
-          .filter((k: { revokedAt?: number }) => !k.revokedAt)
-          .map((k: { _id: unknown; name: string; keyPrefix: string; createdAt: number; lastUsedAt?: number }) => ({
-            id: k._id,
-            name: k.name,
-            keyPrefix: k.keyPrefix,
-            createdAt: k.createdAt,
-            lastUsedAt: k.lastUsedAt ?? null,
-          })),
-      };
-    } catch (err) {
-      req.log.error(err, "Failed to list API keys");
-      return reply.code(500).send({ error: "Failed to list API keys" });
-    }
-  });
+    apiKeysInstance.get("/api-keys", async (req, reply) => {
+      const auth = req.auth;
+      if (!auth) return reply.code(401).send({ error: "Authentication required" });
 
-  instance.delete<{ Params: { id: string } }>("/api-keys/:id", async (req, reply) => {
-    const auth = req.auth;
-    if (!auth) return reply.code(401).send({ error: "Authentication required" });
+      try {
+        const rows = await convex.query(internal.apiKeys.listByOwner, { ownerId: auth.userId });
+        return {
+          keys: rows
+            .filter((k: { revokedAt?: number }) => !k.revokedAt)
+            .map((k: { _id: unknown; name: string; keyPrefix: string; createdAt: number; lastUsedAt?: number }) => ({
+              id: k._id,
+              name: k.name,
+              keyPrefix: k.keyPrefix,
+              createdAt: k.createdAt,
+              lastUsedAt: k.lastUsedAt ?? null,
+            })),
+        };
+      } catch (err) {
+        req.log.error(err, "Failed to list API keys");
+        return reply.code(500).send({ error: "Failed to list API keys" });
+      }
+    });
 
-    const id = req.params?.id;
-    if (!id) return reply.code(400).send({ error: "id is required" });
+    apiKeysInstance.delete<{ Params: { id: string } }>("/api-keys/:id", async (req, reply) => {
+      const auth = req.auth;
+      if (!auth) return reply.code(401).send({ error: "Authentication required" });
 
-    try {
-      const result = await convex.mutation(internal.apiKeys.revoke, {
-        id: id as never,
-        ownerId: auth.userId,
-        revokedAt: Date.now(),
-      });
-      if (!result) return reply.code(404).send({ error: "Key not found" });
-      return { success: true };
-    } catch (err) {
-      req.log.error(err, "Failed to revoke API key");
-      return reply.code(500).send({ error: "Failed to revoke API key" });
-    }
+      const id = req.params?.id;
+      if (!id) return reply.code(400).send({ error: "id is required" });
+
+      try {
+        const result = await convex.mutation(internal.apiKeys.revoke, {
+          id: id as never,
+          ownerId: auth.userId,
+          revokedAt: Date.now(),
+        });
+        if (!result) return reply.code(404).send({ error: "Key not found" });
+        return { success: true };
+      } catch (err) {
+        req.log.error(err, "Failed to revoke API key");
+        return reply.code(500).send({ error: "Failed to revoke API key" });
+      }
+    });
   });
 });
 
@@ -1737,6 +1739,7 @@ await fastify.register(async (instance) => {
       rows: Array<{
         rowIndex: number;
         sourceData: Record<string, unknown>;
+        targetColumns?: string[];
       }>;
     };
   }>("/sheets/enrich", async (req, reply) => {

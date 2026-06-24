@@ -229,7 +229,7 @@ export default function ApiKeysSettingsPage() {
                     )}
                   </div>
                   <button
-                    onClick={() => handleRevoke(k.id)}
+                    onClick={() => { if (confirm("Revoke this API key? This action cannot be undone.")) handleRevoke(k.id); }}
                     disabled={revokingId === k.id}
                     className="inline-flex items-center justify-center h-8 w-8 rounded-lg text-muted hover:text-red-600 hover:bg-red-500/8 transition-colors disabled:opacity-50"
                     title="Revoke"

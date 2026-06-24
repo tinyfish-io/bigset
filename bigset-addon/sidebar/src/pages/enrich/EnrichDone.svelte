@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { enrichStore } from "../../lib/enrichStore.js";
+  import { enrichStore } from "../../stores/enrichStore.js";
 
   $: state = $enrichStore;
 

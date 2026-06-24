@@ -59,7 +59,10 @@ export function buildEnrichAgent(
   targetColumns: EnrichColumn[],
   openRouterApiKey: string,
 ): Agent {
-  const modelSlug = authContext.modelConfig!.investigateSubagent;
+  if (!authContext.modelConfig?.investigateSubagent) {
+    throw new Error("modelConfig.investigateSubagent is not configured");
+  }
+  const modelSlug = authContext.modelConfig.investigateSubagent;
   const openrouter = createOpenRouter({
     apiKey: openRouterApiKey,
     baseURL: process.env.OPENROUTER_BASE_URL,
@@ -92,7 +95,7 @@ export function parseEnrichResponse(
     const parsed = JSON.parse(braceMatch[0]);
     const result: Record<string, unknown> = {};
     for (const col of targetColumns) {
-      if (col in parsed && parsed[col] !== null && parsed[col] !== "" && parsed[col] !== 0) {
+      if (col in parsed && parsed[col] !== null && parsed[col] !== "") {
         result[col] = parsed[col];
       }
     }

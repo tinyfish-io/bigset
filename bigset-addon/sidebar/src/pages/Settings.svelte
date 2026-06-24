@@ -1,10 +1,10 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { push } from "svelte-spa-router";
-  import Header from "../lib/Header.svelte";
-  import { api } from "../lib/api.js";
-  import Icon from "../lib/Icon.svelte";
-  import Spinner from "../lib/Spinner.svelte";
+  import Header from "../components/Header.svelte";
+  import { api } from "../api/client.js";
+  import Icon from "../components/Icon.svelte";
+  import Spinner from "../components/Spinner.svelte";
 
   let backendUrl = "";
   let apiKey = "";
@@ -39,8 +39,6 @@
       savedBackendUrl = backendUrl.trim();
       savedApiKey = apiKey.trim();
       testResult = null;
-    } catch (err) {
-      console.warn("settings save error", err);
     } finally {
       saving = false;
     }
@@ -103,7 +101,7 @@
         <span class="eyebrow">Authentication</span>
         <h3>API key</h3>
         <p class="muted">
-          Generate one at <a href="http://localhost:3500/dashboard/settings/api-keys" target="_blank" rel="noopener" class="text-link">BigSet dashboard → Settings → API keys</a> and paste it here.
+          Generate one at <a href="{import.meta.env.VITE_DASHBOARD_URL ?? 'http://localhost:3500'}/dashboard/settings/api-keys" target="_blank" rel="noopener" class="text-link">BigSet dashboard → Settings → API keys</a> and paste it here.
         </p>
         <div class="key-row">
           {#if showKey}

@@ -1,9 +1,9 @@
 <script lang="ts">
-  import { wizard, clearSelectedForInsert } from "../lib/wizardStore.js";
-  import { api } from "../lib/api.js";
-  import StatusBadge from "../lib/StatusBadge.svelte";
-  import Icon from "../lib/Icon.svelte";
-  import Spinner from "../lib/Spinner.svelte";
+  import { wizard, clearSelectedForInsert } from "../stores/wizardStore.js";
+  import { api } from "../api/client.js";
+  import StatusBadge from "../components/StatusBadge.svelte";
+  import Icon from "../components/Icon.svelte";
+  import Spinner from "../components/Spinner.svelte";
 
   let inserting = false;
   let insertResult: { rowsInserted: number; startCell: string; endCell: string } | null = null;

@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { FastifyReply, FastifyRequest } from "fastify";
 
+import { env } from "./env.js";
 import { convex, internal } from "./convex.js";
 import { LOCAL_USER_ID } from "./local-credentials.js";
 
@@ -81,7 +82,7 @@ export async function requireApiKeyOrCli(
   req: FastifyRequest,
   reply: FastifyReply,
 ): Promise<boolean> {
-  if (process.env.PROD !== "1") {
+  if (env.IS_LOCAL_MODE) {
     req.auth = { userId: LOCAL_USER_ID };
     return true;
   }

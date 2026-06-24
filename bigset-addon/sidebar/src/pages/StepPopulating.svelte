@@ -7,11 +7,11 @@
     setError,
     setStep,
     setRows,
-  } from "../lib/wizardStore.js";
-  import { api } from "../lib/api.js";
-  import StatusBadge from "../lib/StatusBadge.svelte";
-  import Spinner from "../lib/Spinner.svelte";
-  import Icon from "../lib/Icon.svelte";
+  } from "../stores/wizardStore.js";
+  import { api } from "../api/client.js";
+  import StatusBadge from "../components/StatusBadge.svelte";
+  import Spinner from "../components/Spinner.svelte";
+  import Icon from "../components/Icon.svelte";
 
   let pollHandle: number | null = null;
   let stopping = false;

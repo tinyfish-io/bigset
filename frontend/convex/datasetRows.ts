@@ -486,11 +486,7 @@ export const bulkUpdateCells = internalMutation({
 
     for (const update of args.updates) {
       try {
-        const existing = await ctx.db.get(update.rowId);
-        if (!existing || existing.datasetId !== args.datasetId) {
-          results.push({ rowId: update.rowId, success: false, error: "Row not found" });
-          continue;
-        }
+        const existing = await assertRowInDataset(ctx, update.rowId, args.datasetId);
 
         const oldData = existing.data as Record<string, unknown>;
         const mergedData: Record<string, unknown> = { ...oldData };

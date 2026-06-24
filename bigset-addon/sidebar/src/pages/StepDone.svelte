@@ -4,13 +4,14 @@
     wizard,
     setStep,
     setRows,
+    setRowCount,
     setError,
     resetWizard,
-  } from "../lib/wizardStore.js";
-  import { api } from "../lib/api.js";
-  import StatusBadge from "../lib/StatusBadge.svelte";
-  import Icon from "../lib/Icon.svelte";
-  import Spinner from "../lib/Spinner.svelte";
+  } from "../stores/wizardStore.js";
+  import { api } from "../api/client.js";
+  import StatusBadge from "../components/StatusBadge.svelte";
+  import Icon from "../components/Icon.svelte";
+  import Spinner from "../components/Spinner.svelte";
 
   let inserting = false;
   let insertResult: { rowsInserted: number; startCell: string; endCell: string } | null = null;
@@ -23,7 +24,7 @@
       try {
         const { rows, dataset } = await api.listRows($wizard.dataset.id);
         setRows(rows.map((r) => r.data));
-        // Refresh dataset info too
+        setRowCount(dataset.rowCount ?? rows.length);
         $wizard.dataset.rowCount = dataset.rowCount ?? rows.length;
         $wizard.dataset.columns = dataset.columns;
       } catch (err) {

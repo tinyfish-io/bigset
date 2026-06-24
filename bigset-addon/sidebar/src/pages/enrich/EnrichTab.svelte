@@ -1,8 +1,8 @@
 <script lang="ts">
-  import { enrichStore } from "../../lib/enrichStore.js";
+  import { enrichStore } from "../../stores/enrichStore.js";
   import EnrichConfirm from "./EnrichConfirm.svelte";
   import EnrichDone from "./EnrichDone.svelte";
-  import Spinner from "../../lib/Spinner.svelte";
+  import Spinner from "../../components/Spinner.svelte";
 
   $: status = $enrichStore.status;
   $: error = $enrichStore.error;

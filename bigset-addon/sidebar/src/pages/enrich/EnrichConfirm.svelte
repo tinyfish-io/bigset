@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { enrichStore, eligibleCount } from "../../lib/enrichStore.js";
+  import { enrichStore, eligibleCount } from "../../stores/enrichStore.js";
 
   $: state = $enrichStore;
   $: totalEmpty = $eligibleCount;

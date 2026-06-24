@@ -131,7 +131,7 @@ function createStore() {
             ),
           }));
 
-        const { api } = await import("./api.js");
+        const { api } = await import("../api/client.js");
         const resp = await api.enrichRows({
           sourceColumns: state.sourceColumns,
           targetColumns: state.targetColumns,
@@ -157,7 +157,7 @@ function createStore() {
               .withFailureHandler((e: Error | string) =>
                 reject(new Error(typeof e === "string" ? e : e.message))
               )
-              .updateSheetCells(updates);
+              .updateSheetCells(updates, state.range);
           });
         }
 

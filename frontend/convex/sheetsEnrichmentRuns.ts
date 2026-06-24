@@ -6,7 +6,7 @@ import {
 } from "./_generated/server.js";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel.js";
-import { loadOwnedDataset } from "./lib/authz.js";
+import { loadOwnedDataset, requireIdentity } from "./lib/authz.js";
 
 /**
  * Creates a new enrichment run tracking record.
@@ -134,7 +134,6 @@ export const listByDataset = internalQuery({
 export const listByUser = query({
   args: {},
   handler: async (ctx) => {
-    const { requireIdentity } = await import("./lib/authz.js");
     const identity = await requireIdentity(ctx);
 
     return await ctx.db

@@ -1,10 +1,10 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { api, type DatasetSummary } from "../lib/api.js";
-  import { setSelectedForInsert } from "../lib/wizardStore.js";
-  import StatusBadge from "../lib/StatusBadge.svelte";
-  import Icon from "../lib/Icon.svelte";
-  import Spinner from "../lib/Spinner.svelte";
+  import { api, type DatasetSummary } from "../api/client.js";
+  import { setSelectedForInsert } from "../stores/wizardStore.js";
+  import StatusBadge from "../components/StatusBadge.svelte";
+  import Icon from "../components/Icon.svelte";
+  import Spinner from "../components/Spinner.svelte";
 
   let datasets: DatasetSummary[] = [];
   let loading = true;

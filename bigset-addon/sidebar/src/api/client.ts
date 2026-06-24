@@ -1,14 +1,14 @@
 /**
  * Thin client over `google.script.run` for the sidebar. Apps Script can't
  * make HTTP calls directly from the iframe, but the server-side
- * (src/api.ts in the Apps Script project) can via UrlFetchApp.fetch().
+ * (src/index.ts in the Apps Script project) can via UrlFetchApp.fetch().
  *
  * Every method here returns a Promise that resolves with whatever the
  * Apps Script server function returned, or rejects with an Error whose
  * message contains the backend's error string.
  *
  * For Svelte code:
- *   import { api } from "../lib/api";
+ *   import { api } from "../api/client";
  *   const rows = await api.listRows(datasetId);
  *
  * The runtime also exposes `invoke(name, payload)` for one-off server
@@ -79,20 +79,6 @@ interface ServerApi {
     rows: Array<Record<string, unknown>>,
     clearFirst: boolean,
   ): Promise<InsertRowsResult>;
-  showErrorToast(message: string): Promise<void>;
-}
-
-declare global {
-  interface Window {
-    google?: {
-      script: {
-        run: {
-          withSuccessHandler<T = unknown>(cb: (value: T) => void): ServerApi;
-          withFailureHandler(cb: (err: Error | string) => void): ServerApi;
-        };
-      };
-    };
-  }
 }
 
 function invoke<T>(name: keyof ServerApi, ...args: unknown[]): Promise<T> {
@@ -110,16 +96,12 @@ function invoke<T>(name: keyof ServerApi, ...args: unknown[]): Promise<T> {
             : err?.message || "Apps Script call failed";
         reject(new Error(message));
       });
-    const fn = runner[name] as unknown as (...a: unknown[]) => unknown;
+    const fn = runner[name] as (...a: unknown[]) => unknown;
     if (typeof fn !== "function") {
       reject(new Error(`Server function "${String(name)}" is not available`));
       return;
     }
-    try {
-      fn.apply(runner, args);
-    } catch (err) {
-      reject(err instanceof Error ? err : new Error(String(err)));
-    }
+    fn(...args);
   });
 }
 
@@ -142,8 +124,6 @@ export const api = {
   /** Insert rows into the active Google Sheet. */
   insertRows: (headers: string[], rows: Array<Record<string, unknown>>, clearFirst = true) =>
     invoke<InsertRowsResult>("insertRowsIntoActiveSheet", headers, rows, clearFirst),
-
-  showErrorToast: (message: string) => invoke<void>("showErrorToast", message),
 
   /** High-level helpers wrapping the backend endpoints. */
   inferSchema(prompt: string) {

@@ -1,6 +1,6 @@
 <script lang="ts">
-  import Spinner from "../lib/Spinner.svelte";
-  import { wizard } from "../lib/wizardStore.js";
+  import Spinner from "../components/Spinner.svelte";
+  import { wizard } from "../stores/wizardStore.js";
 </script>
 
 <section class="generating">

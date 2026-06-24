@@ -1,8 +1,8 @@
 <script lang="ts">
-  import { wizard, setPrompt, setStep, setError, setSchema, type SchemaDraft } from "../lib/wizardStore.js";
-  import { api } from "../lib/api.js";
-  import Icon from "../lib/Icon.svelte";
-  import Spinner from "../lib/Spinner.svelte";
+  import { wizard, setPrompt, setStep, setError, setSchema, type SchemaDraft } from "../stores/wizardStore.js";
+  import { api } from "../api/client.js";
+  import Icon from "../components/Icon.svelte";
+  import Spinner from "../components/Spinner.svelte";
 
   let generating = false;
   let localError: string | null = null;

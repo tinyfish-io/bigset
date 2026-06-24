@@ -11,7 +11,7 @@
  * and offers to insert rows into the Sheet.
  */
 import { writable, derived, type Writable } from "svelte/store";
-import type { DatasetSummary, DatasetRow } from "../lib/api.js";
+import type { DatasetSummary, DatasetRow } from "../api/client.js";
 
 export type Step = "describe" | "generating" | "review" | "populating" | "done";
 

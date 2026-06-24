@@ -1,7 +1,7 @@
 /**
  * Lightweight, reactive theme store. The actual DOM attribute is set
- * pre-hydration in the inline <script> in sidebar.html / settings.html,
- * so the first paint already has the right colors.
+ * pre-hydration in the inline <script> in sidebar.html, so the first
+ * paint already has the right colors.
  *
  * BigSet stores theme in localStorage under "bigset:theme" and broadcasts
  * a `bigset:theme-changed` event for cross-component sync (mirrors the

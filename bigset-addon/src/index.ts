@@ -1,21 +1,27 @@
+// ─────────────────────────────────────────────────────────────────────────────
+//  BigSet — Google Sheet Add-on
+//  Entry point for Apps Script. All functions here are globally accessible
+//  via google.script.run from the sidebar iframe.
+// ─────────────────────────────────────────────────────────────────────────────
+
 const ADDON_NAME = "BigSet";
 const SCRIPT_PROPERTY_KEY = "BIGSET_API_KEY";
 const SCRIPT_PROPERTY_URL = "BIGSET_BACKEND_URL";
-const DEFAULT_BACKEND_URL = "https://eab6-2a09-bac1-36e0-5d68-00-2a8-5d.ngrok-free.app";
+const DEFAULT_BACKEND_URL = "";
 
-/**
- * @OnlyCurrentDoc
- */
+// ─── Add-on lifecycle ─────────────────────────────────────────────────────────
 
-function onOpen(e) {
+function onOpen(_e: unknown) {
   SpreadsheetApp.getUi()
     .createAddonMenu()
     .addItem("Open", "showSidebar")
     .addToUi();
 }
 
-function onInstall(e) {
-  onOpen(e);
+
+//on Install is called when the user installs the add-on for the first time. It calls onOpen to set up the menu.
+function onInstall(_e: unknown) {
+  onOpen(_e);
 }
 
 function showSidebar() {
@@ -25,17 +31,45 @@ function showSidebar() {
   SpreadsheetApp.getUi().showSidebar(ui);
 }
 
-// ─────────────────────────────────────────────────────────────────────
-//  Backend HTTP proxy — called by google.script.run from the sidebar
-// ─────────────────────────────────────────────────────────────────────
+// ─── User settings (per-user, stored in script properties) ────────────────────
 
-function callBackend(path, method, body) {
-  const baseUrl = PropertiesService.getScriptProperties().getProperty(SCRIPT_PROPERTY_URL) || DEFAULT_BACKEND_URL;
-  const apiKey = PropertiesService.getScriptProperties().getProperty(SCRIPT_PROPERTY_KEY) || "";
-  const url = `${baseUrl.replace(/\/+$/, "")}${path}`;
+function getApiKey(): string {
+  return PropertiesService.getUserProperties().getProperty(SCRIPT_PROPERTY_KEY) || "";
+}
+
+function setApiKey(key: string): void {
+  PropertiesService.getUserProperties().setProperty(SCRIPT_PROPERTY_KEY, key);
+}
+
+function getBackendUrl(): string {
+  return PropertiesService.getUserProperties().getProperty(SCRIPT_PROPERTY_URL) || DEFAULT_BACKEND_URL;
+}
+
+function setBackendUrl(url: string): void {
+  PropertiesService.getUserProperties().setProperty(SCRIPT_PROPERTY_URL, url);
+}
+
+// ─── Backend HTTP proxy ────────────────────────────────────────────────────────
+
+/**
+ * Make an authenticated request to the BigSet backend.
+ * Runs server-side via UrlFetchApp so CORS is not an issue.
+ */
+function callBackend(path: string, method: string | null, body: unknown) {
+  const baseUrl = (PropertiesService.getUserProperties().getProperty(SCRIPT_PROPERTY_URL) || DEFAULT_BACKEND_URL).trim();
+  const apiKey = PropertiesService.getUserProperties().getProperty(SCRIPT_PROPERTY_KEY) || "";
+
+  if (!baseUrl) {
+    throw new Error("Backend URL is not configured. Open the BigSet sidebar → Settings and set your backend URL.");
+  }
+  if (!/^https?:\/\//i.test(baseUrl)) {
+    throw new Error(`Backend URL must start with http:// or https:// (got "${baseUrl}"). Update it in Settings.`);
+  }
+
+  const url = `${baseUrl.replace(/\/+$/, "")}${path.startsWith("/") ? path : `/${path}`}`;
 
   const options = {
-    method: method || "POST",
+    method: (method || "POST") as GoogleAppsScript.URL_Fetch.HttpMethod,
     headers: {
       "Content-Type": "application/json",
       Accept: "application/json",
@@ -43,11 +77,11 @@ function callBackend(path, method, body) {
     muteHttpExceptions: true,
     followRedirects: true,
     timeout: 30000,
-  };
+  } as GoogleAppsScript.URL_Fetch.URLFetchRequestOptions;
 
   if (apiKey) {
-    options.headers["X-API-Key"] = apiKey;
-    options.headers.Authorization = `Bearer ${apiKey}`;
+    options.headers!["X-API-Key"] = apiKey;
+    options.headers!["Authorization"] = `Bearer ${apiKey}`;
   }
 
   if (body !== null && body !== undefined) {
@@ -59,10 +93,10 @@ function callBackend(path, method, body) {
   const status = response.getResponseCode();
   const text = response.getContentText();
 
-  let parsed = null;
+  let parsed: unknown = null;
   try {
     parsed = JSON.parse(text);
-  } catch (_e) {
+  } catch {
     // not JSON
   }
 
@@ -71,32 +105,21 @@ function callBackend(path, method, body) {
   }
 
   const errorMsg =
-    parsed && typeof parsed === "object" && parsed.error
-      ? String(parsed.error)
+    parsed && typeof parsed === "object" && (parsed as Record<string, unknown>).error
+      ? String((parsed as Record<string, unknown>).error)
       : `Backend responded with ${status}`;
 
   throw new Error(errorMsg);
 }
 
-function getApiKey() {
-  return PropertiesService.getScriptProperties().getProperty(SCRIPT_PROPERTY_KEY) || "";
-}
+// ─── Sheet operations ──────────────────────────────────────────────────────────
 
-function setApiKey(key) {
-  PropertiesService.getScriptProperties().setProperty(SCRIPT_PROPERTY_KEY, key);
-}
-
-function getBackendUrl() {
-  return PropertiesService.getScriptProperties().getProperty(SCRIPT_PROPERTY_URL) || DEFAULT_BACKEND_URL;
-}
-
-function setBackendUrl(url) {
-  PropertiesService.getScriptProperties().setProperty(SCRIPT_PROPERTY_URL, url);
-}
-
-function insertRowsIntoActiveSheet(headers, rows, clearFirst) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getActiveSheet();
+/**
+ * Insert rows into the active sheet, optionally clearing existing content first.
+ * Returns the range that was written.
+ */
+function insertRowsIntoActiveSheet(headers: string[], rows: Record<string, unknown>[], clearFirst: boolean) {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
 
   if (clearFirst) {
     sheet.clearContents();
@@ -110,7 +133,7 @@ function insertRowsIntoActiveSheet(headers, rows, clearFirst) {
     return { rowsInserted: 0, startCell: "A1", endCell: "A1" };
   }
 
-  const data = [headers];
+  const data: unknown[][] = [headers];
   for (const row of rows) {
     const values = headers.map((h) => {
       const val = row[h];
@@ -121,35 +144,45 @@ function insertRowsIntoActiveSheet(headers, rows, clearFirst) {
 
   const numRows = data.length;
   const numCols = headers.length;
-  const range = sheet.getRange(1, 1, numRows, numCols);
-  range.setValues(data);
+  sheet.getRange(1, 1, numRows, numCols).setValues(data as GoogleAppsScript.Spreadsheet.Range[][]);
 
-  const startCell = "A1";
-  const endCell = `${String.fromCharCode(64 + numCols)}${numRows}`;
-
-  return { rowsInserted: rows.length, startCell, endCell };
+  return { rowsInserted: rows.length, startCell: "A1", endCell: `${columnLetter(numCols)}${numRows}` };
 }
 
-function showErrorToast(message) {
-  SpreadsheetApp.getActiveSpreadsheet().toast(message, "BigSet", 5);
+// ─── Column index helpers ───────────────────────────────────────────────────────
+
+/** Convert 1-based column number to letters (1→A, 27→AA). */
+function columnLetter(col: number): string {
+  let letter = "";
+  while (col > 0) {
+    col--;
+    letter = String.fromCharCode(65 + (col % 26)) + letter;
+    col = Math.floor(col / 26);
+  }
+  return letter;
 }
 
-// ─────────────────────────────────────────────────────────────────────
-//  Sheet Enrichment — read selection, enrich, write back
-// ─────────────────────────────────────────────────────────────────────
+/** Convert column letters to 1-based index (A→1, AA→27). */
+function colToIndex(colStr: string): number {
+  let idx = 0;
+  for (let i = 0; i < colStr.length; i++) {
+    idx = idx * 26 + (colStr.charCodeAt(i) - 64);
+  }
+  return idx;
+}
+
+// ─── Enrichment — read / write ─────────────────────────────────────────────────
 
 /**
  * Read the user's selected range from the active sheet.
  * Expects the first row of the selection to contain column headers.
  *
- * Returns:
- *   { headers: string[], rows: Array<{ rowIndex: number, data: {} }>, range: string }
+ * Returns: { headers: string[], rows: Array<{ rowIndex: number, data: {} }>, range: string }
  *
  * Only includes rows where at least one cell is non-empty.
  */
 function getSelectedRange() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getActiveSheet();
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
   const activeRange = sheet.getActiveRange();
 
   if (!activeRange) {
@@ -167,7 +200,7 @@ function getSelectedRange() {
     return { headers: [], rows: [], range: rawRangeStr };
   }
 
-  const values = activeRange.getValues();
+  const values = activeRange.getValues() as unknown[][];
 
   // Find the last column with a non-empty header
   let lastCol = 0;
@@ -201,15 +234,15 @@ function getSelectedRange() {
   }
 
   // Build headers from trimmed columns
-  var headers = [];
+  var headers: string[] = [];
   for (let j = 0; j < lastCol; j++) {
     headers.push(String(values[0][j]));
   }
 
   // Build rows from trimmed data
-  const rowsData = [];
+  const rowsData: Array<{ rowIndex: number; data: Record<string, unknown> }> = [];
   for (let i = 1; i <= lastRow; i++) {
-    const rowData = {};
+    const rowData: Record<string, unknown> = {};
     let hasValue = false;
     for (let j = 0; j < lastCol; j++) {
       const val = values[i][j];
@@ -233,37 +266,34 @@ function getSelectedRange() {
   return { headers, rows: rowsData, range: trimmedRange };
 }
 
-function columnLetter(col) {
-  let letter = "";
-  while (col > 0) {
-    col--;
-    letter = String.fromCharCode(65 + (col % 26)) + letter;
-    col = Math.floor(col / 26);
-  }
-  return letter;
-}
-
 /**
  * Write enrichment results back to the sheet.
  * Only writes to cells that are currently empty — never overwrites data.
  *
- * @param {Array<{rowIndex: number, columnName: string, value: any}>} updates
+ * @param updates       Array of { rowIndex, columnName, value } to write
+ * @param rangeStr     Original range snapshot from getSelectedRange() — used to
+ *                     resolve columns without re-querying the active selection
  */
-function updateSheetCells(updates) {
+function updateSheetCells(
+  updates: Array<{ rowIndex: number; columnName: string; value: unknown }>,
+  rangeStr: string,
+) {
   if (!updates || updates.length === 0) {
     return { updated: 0 };
   }
 
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getActiveSheet();
-  const activeRange = sheet.getActiveRange();
+  if (!rangeStr) return { updated: 0 };
 
-  if (!activeRange) return { updated: 0 };
+  const parts = rangeStr.match(/([A-Z]+)(\d+):([A-Z]+)(\d+)/);
+  if (!parts) return { updated: 0 };
 
-  const colStart = activeRange.getColumn();
-  const numCols = activeRange.getNumColumns();
-  const headersRange = sheet.getRange(activeRange.getRow(), colStart, 1, numCols);
-  const headers = headersRange.getValues()[0].map(String);
+  const colStart = colToIndex(parts[1]);
+  const rowStart = parseInt(parts[2], 10);
+  const lastCol = colToIndex(parts[3]);
+
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+  const headersRange = sheet.getRange(rowStart, colStart, 1, lastCol - colStart + 1);
+  const headers = (headersRange.getValues()[0] as unknown[]).map(String);
 
   let updated = 0;
 
@@ -271,13 +301,13 @@ function updateSheetCells(updates) {
     const colIndex = headers.indexOf(update.columnName);
     if (colIndex === -1) continue;
 
-    const rowIndex = parseInt(update.rowIndex, 10);
+    const rowIndex = parseInt(String(update.rowIndex), 10);
     if (isNaN(rowIndex) || rowIndex < 2) continue;
 
     const cell = sheet.getRange(rowIndex, colStart + colIndex);
-    const currentValue = cell.getValue();
+    if (cell.getFormula() !== "") continue;
 
-    // NEVER overwrite existing data
+    const currentValue = cell.getValue();
     if (currentValue !== "" && currentValue !== null && currentValue !== undefined) {
       continue;
     }

@@ -10,12 +10,12 @@
     setError,
     setPopulating,
     type ColumnType,
-  } from "../lib/wizardStore.js";
-  import { api } from "../lib/api.js";
-  import ColumnIcon from "../lib/ColumnIcon.svelte";
-  import Icon from "../lib/Icon.svelte";
-  import Spinner from "../lib/Spinner.svelte";
-  import StatusBadge from "../lib/StatusBadge.svelte";
+  } from "../stores/wizardStore.js";
+  import { api } from "../api/client.js";
+  import ColumnIcon from "../components/ColumnIcon.svelte";
+  import Icon from "../components/Icon.svelte";
+  import Spinner from "../components/Spinner.svelte";
+  import StatusBadge from "../components/StatusBadge.svelte";
 
   let creating = false;
   let localError: string | null = null;
@@ -65,7 +65,6 @@
         status: dataset.status,
         rowCount: dataset.rowCount,
         columns: dataset.columns,
-        description: dataset.description,
       });
 
       // Kick off populate

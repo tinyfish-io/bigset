@@ -6,5 +6,7 @@ sidebar/
 package*.json
 tsconfig.json
 vite.config.ts
+*.ts
 
 !src/**
+src/**/*.ts

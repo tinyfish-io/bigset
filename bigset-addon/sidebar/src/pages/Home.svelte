@@ -1,6 +1,6 @@
 <script lang="ts">
-  import Header from "../lib/Header.svelte";
-  import { wizard } from "../lib/wizardStore.js";
+  import Header from "../components/Header.svelte";
+  import { wizard } from "../stores/wizardStore.js";
   import StepDescribe from "./StepDescribe.svelte";
   import StepGenerating from "./StepGenerating.svelte";
   import StepReview from "./StepReview.svelte";
