@@ -9,7 +9,7 @@
     "lint": "node ../scripts/with-root-env.mjs eslint"
   },
   "dependencies": {
-    "@clerk/nextjs": "^7.3.7",
+    "@clerk/nextjs": "^7.4.2",
     "@tanstack/react-table": "^8.21.3",
     "convex": "^1.39.1",
     "lucide-react": "^1.17.0",
@@ -18,7 +18,7 @@
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "react-window": "^1.8.11",
-    "xlsx": "^0.18.5"
+    "write-excel-file": "^4.0.7"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",

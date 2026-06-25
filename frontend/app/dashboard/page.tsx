@@ -26,18 +26,18 @@ export default function DashboardPage() {
   const mine = useQuery(
     api.datasets.listMine,
     isAuthenticated ? {} : "skip",
-  );
+  ) as DatasetCardData[] | undefined;
   const showCurated = !isLocalMode;
   const curated = useQuery(
     api.datasets.listPublic,
     showCurated ? {} : "skip",
-  );
+  ) as DatasetCardData[] | undefined;
 
   // Quota limits are cloud-only. Local mode can create datasets without this gate.
   const usage = useQuery(
     api.quota.getMy,
     !isLocalMode && isAuthenticated ? {} : "skip",
-  );
+  ) as { remaining: number } | undefined;
   const atLimit = !isLocalMode && usage !== undefined && usage.remaining === 0;
 
   // Fire dashboard_viewed once per mount when both queries have resolved,
@@ -61,7 +61,7 @@ export default function DashboardPage() {
 
   const { filteredMine, filteredCurated } = useMemo(() => {
     const q = search.trim().toLowerCase();
-    const apply = (list: typeof mine) =>
+    const apply = (list: DatasetCardData[] | undefined) =>
       (list ?? []).filter((ds) =>
         !q ||
         ds.name.toLowerCase().includes(q) ||
@@ -187,7 +187,7 @@ export default function DashboardPage() {
           eyebrow="Yours"
           heading="Datasets you own"
           isLoading={mine === undefined}
-          datasets={filteredMine as unknown as DatasetCardData[]}
+          datasets={filteredMine}
           emptyState={
             search
               ? `No datasets of yours match "${search}".`
@@ -205,7 +205,7 @@ export default function DashboardPage() {
               eyebrow="Curated by BigSet"
               heading="Explore live datasets"
               isLoading={curated === undefined}
-              datasets={filteredCurated as unknown as DatasetCardData[]}
+              datasets={filteredCurated}
               emptyState={
                 search
                   ? `No curated datasets match "${search}".`

@@ -14,7 +14,7 @@ const PUBLIC_GRID_COUNT = 9;
 
 export default function Home() {
   const { isAuthenticated, isLoading } = useAppConvexAuth();
-  const publicDatasets = useQuery(api.datasets.listPublic, {});
+  const publicDatasets = useQuery(api.datasets.listPublic, {}) as DatasetCardData[] | undefined;
 
   // Fire once when the landing page actually displays to an anonymous
   // visitor. Skip if we'll immediately redirect them to the dashboard.
@@ -103,7 +103,7 @@ export default function Home() {
                 {shownDatasets.map((ds) => (
                   <DatasetCard
                     key={ds._id}
-                    dataset={ds as unknown as DatasetCardData}
+                    dataset={ds}
                   />
                 ))}
               </div>
