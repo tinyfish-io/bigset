@@ -27,17 +27,56 @@ export const columnDefinitionSchema = z.object({
   is_enumerable: z.boolean(),
   retrieval_hint: z.string(),
   nullable: z.boolean(),
+  validation_regex: z.string().optional(),
+  normalization_hint: z.string().optional(),
 });
 export type ColumnDefinition = z.infer<typeof columnDefinitionSchema>;
+
+export const codificationModeSchema = z.enum([
+  "disabled",
+  "candidate",
+  "required",
+  "unknown",
+]);
+export type CodificationMode = z.infer<typeof codificationModeSchema>;
+
+export const primaryKeyShapeSchema = z.enum([
+  "url",
+  "slug",
+  "name",
+  "id",
+  "mixed",
+  "unknown",
+]);
+export type PrimaryKeyShape = z.infer<typeof primaryKeyShapeSchema>;
+
+export const codificationFamilySchema = z.object({
+  label: z.string().regex(snakeCase, "must be snake_case"),
+  source_host: z.string().optional(),
+  source_path_prefix: z.string().optional(),
+  url_template: z.string().optional(),
+  primary_key_regex: z.string().optional(),
+});
+export type CodificationFamily = z.infer<typeof codificationFamilySchema>;
+
+export const codificationProfileSchema = z.object({
+  version: z.literal(1),
+  mode: codificationModeSchema,
+  reason: z.string().min(1),
+  primary_key_shape: primaryKeyShapeSchema,
+  families: z.array(codificationFamilySchema),
+});
+export type CodificationProfile = z.infer<typeof codificationProfileSchema>;
 
 export const datasetSchemaSchema = z
   .object({
     dataset_name: z.string().regex(snakeCase, "must be snake_case"),
     description: z.string().min(1),
     columns: z.array(columnDefinitionSchema).min(1),
-    primary_key: z.union([z.string(), z.array(z.string())]),
+    primary_key: z.array(z.string()).min(1),
     retrieval_strategy: retrievalStrategySchema,
     source_hint: z.string().min(1),
+    codification_profile: codificationProfileSchema,
   })
   .superRefine((data, ctx) => {
     const names = data.columns.map((c) => c.name);
@@ -61,9 +100,7 @@ export const datasetSchemaSchema = z
     }
 
     const pkNames = pkCols.map((c) => c.name);
-    const declaredPkRaw = Array.isArray(data.primary_key)
-      ? data.primary_key
-      : [data.primary_key];
+    const declaredPkRaw = data.primary_key;
     const declaredPk = [...new Set(declaredPkRaw)];
     if (
       declaredPk.length !== declaredPkRaw.length ||

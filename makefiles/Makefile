@@ -33,7 +33,9 @@ dev: validate-dev-env install-deps start-local-keychain
 	@echo "  Mastra Studio:    http://localhost:4111"
 	@echo "  Convex Dashboard: http://localhost:6791"
 	@echo ""
-	docker compose -f docker-compose.dev.yml logs -f
+	@echo "Streaming app logs (frontend, backend, mastra)."
+	@echo "For Convex logs: docker compose -f docker-compose.dev.yml logs -f convex"
+	docker compose -f docker-compose.dev.yml logs -f frontend backend mastra
 
 validate-dev-env:
 	@if [ ! -f .env ]; then \
@@ -62,7 +64,7 @@ validate-dev-env:
 	fi
 	@prod="$$(grep '^PROD=' .env | cut -d= -f2-)"; \
 	if [[ "$$prod" != "1" ]]; then \
-		echo "Local mode: Clerk, TinyFish, and OpenRouter env validation skipped."; \
+		echo "Local mode: Clerk, TinyFish, and LLM provider env validation skipped."; \
 	fi
 	@prod="$$(grep '^PROD=' .env | cut -d= -f2-)"; \
 	if [[ "$$prod" != "1" ]]; then exit 0; fi; \
@@ -198,7 +200,9 @@ convex-env:
 	fi; \
 	if [[ "$$prod" != "1" ]]; then \
 		$(CONVEX_CLI_RUN) -e CONVEX_SELF_HOSTED_ADMIN_KEY="$$admin_key" frontend sh -lc \
-		'npx convex env set BIGSET_LOCAL_MODE 1 --url $(CONVEX_CLI_URL) --admin-key "$$CONVEX_SELF_HOSTED_ADMIN_KEY"'; \
+		'npx convex env set BIGSET_LOCAL_MODE 1 --url $(CONVEX_CLI_URL) --admin-key "$$CONVEX_SELF_HOSTED_ADMIN_KEY"' || exit 1; \
+		$(CONVEX_CLI_RUN) -e CONVEX_SELF_HOSTED_ADMIN_KEY="$$admin_key" frontend sh -lc \
+		'npx convex env set CLERK_JWT_ISSUER_DOMAIN "https://bigset.local.invalid" --url $(CONVEX_CLI_URL) --admin-key "$$CONVEX_SELF_HOSTED_ADMIN_KEY"' || exit 1; \
 		exit 0; \
 	fi; \
 	issuer="$$(grep '^CLERK_JWT_ISSUER_DOMAIN=' .env | cut -d= -f2-)"; \

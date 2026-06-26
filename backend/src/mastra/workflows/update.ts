@@ -4,10 +4,17 @@ import { datasetContextSchema, populateColumnSchema } from "../../pipeline/popul
 import { convex, internal } from "../../convex.js";
 import { buildRefreshAgent } from "../agents/refresh.js";
 import { authContextSchema } from "./populate.js";
-import { requireOpenRouterApiKey } from "../../local-credentials.js";
+import { requireLlmProviderConfig } from "../../local-credentials.js";
 import { RunMetrics } from "../run-metrics.js";
 import { saveRunMetrics } from "../save-run-metrics.js";
-import { getSignal } from "../../abort-registry.js";
+import {
+  getSignal,
+  isAbortLikeError,
+  isDatasetRunAborted,
+  throwIfDatasetRunAborted,
+} from "../../abort-registry.js";
+import { tryRefreshRowExtractor } from "../../row-extractors/try-row-extractor.js";
+import { AGENT_MAX_OUTPUT_TOKENS } from "../../config/agent-output-tokens.js";
 
 export const updateInputSchema = datasetContextSchema.extend({
   authContext: authContextSchema,
@@ -31,6 +38,7 @@ const markAndFetchStep = createStep({
   inputSchema: updateInputSchema,
   outputSchema: markAndFetchOutputSchema,
   execute: async ({ inputData }) => {
+    throwIfDatasetRunAborted(inputData.datasetId);
     const selective = inputData.rowIds && inputData.rowIds.length > 0;
     console.log(
       `[mark-and-fetch] Marking ${selective ? inputData.rowIds!.length : "all"} rows for dataset ${inputData.datasetId}`,
@@ -40,10 +48,12 @@ const markAndFetchStep = createStep({
       datasetId: inputData.datasetId,
       ...(selective ? { rowIds: inputData.rowIds } : {}),
     });
+    throwIfDatasetRunAborted(inputData.datasetId);
 
     const rawRows = await convex.query(internal.datasetRows.listInternal, {
       datasetId: inputData.datasetId,
     });
+    throwIfDatasetRunAborted(inputData.datasetId);
 
     let rows = (rawRows as Record<string, unknown>[]).map((r) => ({
       _id: String(r._id),
@@ -69,8 +79,6 @@ const refreshOutputSchema = z.object({
   errors: z.number(),
 });
 
-const MAX_CONCURRENT = 5;
-
 async function processWithConcurrency<T>(
   items: T[],
   handler: (item: T) => Promise<void>,
@@ -94,23 +102,92 @@ const refreshRowsStep = createStep({
   inputSchema: markAndFetchOutputSchema,
   outputSchema: refreshOutputSchema,
   execute: async ({ inputData }) => {
-    const { datasetId, columns, authContext, rows } = inputData;
+    const {
+      datasetId,
+      columns,
+      authContext,
+      rows,
+      datasetName,
+      description,
+      retrievalStrategy,
+      sourceHint,
+    } = inputData;
     let updatedCount = 0;
     let errors = 0;
 
     const metrics = new RunMetrics();
     const startedAt = Date.now();
-    const openRouterApiKey = await requireOpenRouterApiKey();
+    let llmConfigPromise: ReturnType<typeof requireLlmProviderConfig> | undefined;
+    const getLlmConfig = () => {
+      llmConfigPromise ??= requireLlmProviderConfig();
+      return llmConfigPromise;
+    };
 
     const pkColumns = columns.filter((c) => c.isPrimaryKey);
+    const maxConcurrent = authContext.modelConfig.rowExtractorConcurrency;
 
     async function processRow(row: z.infer<typeof rowSchema>) {
       try {
+        throwIfDatasetRunAborted(datasetId);
+        const primaryKeyRecord = Object.fromEntries(
+          pkColumns
+            .map((column) => [column.name, String(row.data[column.name] ?? "").trim()])
+            .filter(([, value]) => value.length > 0),
+        );
+
+        const extractorResult = await tryRefreshRowExtractor({
+          datasetId,
+          rowId: row._id,
+          columns,
+          primaryKeys: primaryKeyRecord,
+          existingData: row.data,
+          urls: row.sources,
+          context: [row.rowSummary, row.howFound].filter(Boolean).join("\n"),
+          datasetName,
+          description,
+          retrievalStrategy,
+          sourceHint,
+          codificationProfile: inputData.codificationProfile,
+          browserAttempts: authContext.modelConfig.rowExtractorBrowserAttempts,
+          extractorBuilderModel: authContext.modelConfig.extractorBuilder,
+        });
+        throwIfDatasetRunAborted(datasetId);
+
+        if (extractorResult.status === "updated") {
+          updatedCount++;
+          metrics.rowsUpdated++;
+          console.log(
+            `[refresh-rows] Row ${row._id}: updated=true via=row_extractor reason="${extractorResult.reason}"`,
+          );
+          return;
+        }
+
+        if (extractorResult.status === "unchanged") {
+          console.log(
+            `[refresh-rows] Row ${row._id}: updated=false via=row_extractor reason="${extractorResult.reason}"`,
+          );
+          return;
+        }
+
+        if (extractorResult.status === "miss") {
+          console.log(
+            `[refresh-rows] Row ${row._id}: row extractor missed; falling back to refresh agent: ${extractorResult.reason}`,
+          );
+        }
+
+        if (extractorResult.status === "failed") {
+          if (isDatasetRunAborted(datasetId)) throwAbortError();
+          console.warn(
+            `[refresh-rows] Row ${row._id}: row extractor failed; falling back to refresh agent: ${extractorResult.reason}`,
+          );
+        }
+
+        throwIfDatasetRunAborted(datasetId);
         const agent = buildRefreshAgent(
           datasetId,
           authContext,
           columns,
-          openRouterApiKey,
+          await getLlmConfig(),
         );
 
         const pkBlock =
@@ -141,7 +218,14 @@ ${row.rowSummary ? `\nPrevious summary: ${row.rowSummary}` : ""}
 ${row.howFound ? `\nPreviously found via: ${row.howFound}` : ""}`;
 
         const abortSignal = getSignal(datasetId);
-        const result = await agent.generate(prompt, { abortSignal, maxSteps: 10 });
+        throwIfDatasetRunAborted(datasetId);
+        const result = await agent.generate(prompt, {
+          abortSignal,
+          maxSteps: 10,
+          modelSettings: {
+            maxOutputTokens: AGENT_MAX_OUTPUT_TOKENS.REFRESH_AGENT,
+          },
+        });
 
         // Accumulate token usage into the investigate tier (refresh agents map
         // to the investigate tier so the runStats schema needs no new columns).
@@ -168,7 +252,7 @@ ${row.howFound ? `\nPreviously found via: ${row.howFound}` : ""}`;
         // Only re-throw if OUR signal was actually fired. Spurious network
         // AbortErrors must not terminate a worker — they should be counted as
         // row errors so the rest of the dataset continues refreshing.
-        if (err instanceof Error && err.name === "AbortError" && getSignal(datasetId)?.aborted) throw err;
+        if (isAbortLikeError(err) && isDatasetRunAborted(datasetId)) throw err;
         const msg = err instanceof Error ? err.message : String(err);
         console.error(
           `[refresh-rows] Row ${row._id} failed: ${msg}`,
@@ -191,9 +275,9 @@ ${row.howFound ? `\nPreviously found via: ${row.howFound}` : ""}`;
     }
 
     console.log(
-      `[refresh-rows] Processing ${rows.length} rows (max ${MAX_CONCURRENT} concurrent)`,
+      `[refresh-rows] Processing ${rows.length} rows (max ${maxConcurrent} concurrent)`,
     );
-    await processWithConcurrency(rows, processRow, MAX_CONCURRENT);
+    await processWithConcurrency(rows, processRow, maxConcurrent);
     const finishedAt = Date.now();
 
     // If the run was stopped mid-update, workers exited early via AbortError.
@@ -215,6 +299,10 @@ ${row.howFound ? `\nPreviously found via: ${row.howFound}` : ""}`;
       `[refresh-rows] Done: ${updatedCount} updated, ${errors} errors, ${rows.length - updatedCount - errors} unchanged`,
     );
 
+    const allRowsFailed = rows.length > 0 && errors === rows.length;
+    const refreshError =
+      errors > 0 ? `${errors} of ${rows.length} row(s) failed to refresh` : undefined;
+
     // Persist metrics — fire-and-forget; never block the workflow return.
     void saveRunMetrics({
       workflowRunId: authContext.workflowRunId,
@@ -226,10 +314,8 @@ ${row.howFound ? `\nPreviously found via: ${row.howFound}` : ""}`;
       // Total failure: every row errored. Partial failure: some rows errored
       // but at least one succeeded — still "success" overall, but the error
       // field records how many failed so partial issues are visible in the data.
-      status: errors > 0 && updatedCount === 0 ? "error" : "success",
-      error: errors > 0
-        ? `${errors} of ${rows.length} row(s) failed to refresh`
-        : undefined,
+      status: allRowsFailed ? "error" : "success",
+      error: refreshError,
       workflowType: "update",
     }).catch((err) =>
       console.error(
@@ -238,9 +324,19 @@ ${row.howFound ? `\nPreviously found via: ${row.howFound}` : ""}`;
       ),
     );
 
+    if (allRowsFailed) {
+      throw new Error(refreshError);
+    }
+
     return { updatedCount, totalCount: rows.length, errors };
   },
 });
+
+function throwAbortError(): never {
+  const err = new Error("Run was stopped");
+  err.name = "AbortError";
+  throw err;
+}
 
 export const updateWorkflow = createWorkflow({
   id: "update-workflow",

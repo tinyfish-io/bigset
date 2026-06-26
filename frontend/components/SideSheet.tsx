@@ -117,8 +117,8 @@ export function SideSheet({ open, onClose, children }: SideSheetProps) {
 interface CellDetailProps {
   column: DatasetColumn;
   value: unknown;
-  /** Row-level sources stored by the populate agent. */
-  sources?: string[];
+  cellSources?: string[];
+  rowSources?: string[];
 }
 
 function isValidHttpUrl(src: string): boolean {
@@ -130,7 +130,7 @@ function isValidHttpUrl(src: string): boolean {
   }
 }
 
-export function CellDetail({ column, value, sources }: CellDetailProps) {
+export function CellDetail({ column, value, cellSources, rowSources }: CellDetailProps) {
   const [copied, setCopied] = useState(false);
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const displayValue = value == null || value === "" ? "—" : String(value);
@@ -192,14 +192,49 @@ export function CellDetail({ column, value, sources }: CellDetailProps) {
         </div>
       </div>
 
-      {/* Sources */}
-      {sources && sources.length > 0 && (
+      {/* Cell sources */}
+      {cellSources && cellSources.length > 0 && (
         <div>
           <p className="text-[11px] font-medium text-muted uppercase tracking-wide mb-1.5">
             Sources
           </p>
           <ul className="space-y-1.5">
-            {sources.map((src, i) => (
+            {cellSources.map((src, i) => (
+              <li key={src || i}>
+                {isValidHttpUrl(src) ? (
+                  <a
+                    href={src}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-start gap-1.5 text-xs text-link hover:underline break-all"
+                    data-ph-mask-text="true"
+                  >
+                    <span className="mt-0.5 shrink-0"><IconExternalLink /></span>
+                    {src}
+                  </a>
+                ) : (
+                  <span className="flex items-start gap-1.5 text-xs text-muted break-all" data-ph-mask-text="true">
+                    <span className="mt-0.5 shrink-0"><IconExternalLink /></span>
+                    {src}
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* Row sources */}
+      {rowSources && rowSources.length > 0 && (
+        <div>
+          <p className="text-[11px] font-medium text-muted uppercase tracking-wide mb-1.5">
+            Row Sources
+          </p>
+          <p className="mb-2 text-xs text-muted">
+            These URLs were recorded for the row, not as proof for this specific cell.
+          </p>
+          <ul className="space-y-1.5">
+            {rowSources.map((src, i) => (
               <li key={src || i}>
                 {isValidHttpUrl(src) ? (
                   <a

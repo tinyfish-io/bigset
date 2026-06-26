@@ -5,8 +5,15 @@ import { z } from "zod";
 
 import { env } from "./env.js";
 import clerkAuthPlugin, { requireAuth, getUserEmail } from "./clerk-auth.js";
-import { inferSchema } from "./pipeline/schema-inference.js";
+import {
+  finalizeSchemaContracts,
+  inferSchema,
+} from "./pipeline/schema-inference.js";
 import { datasetContextSchema, type DatasetContext } from "./pipeline/populate.js";
+import {
+  normalizeCodificationProfile,
+  schemaCodificationProfileToRuntime,
+} from "./pipeline/codification.js";
 import { populateWorkflow } from "./mastra/workflows/populate.js";
 import { updateWorkflow } from "./mastra/workflows/update.js";
 import { convex, internal } from "./convex.js";
@@ -14,7 +21,14 @@ import { sendTransactionalEmail } from "./email/send.js";
 import { datasetReadyTemplate } from "./email/templates/dataset-ready.js";
 import { capture, shutdown as shutdownAnalytics } from "./analytics/posthog.js";
 import { EVENTS } from "./analytics/events.js";
-import { registerDataset, deregisterDataset, abortDataset } from "./abort-registry.js";
+import {
+  activeDatasetRunCount,
+  abortDataset,
+  deregisterDataset,
+  hasActiveDatasetRuns,
+  isDatasetRunAborted,
+  registerDataset,
+} from "./abort-registry.js";
 import {
   LOCAL_USER_ID,
   clearLegacyPlaintextLocalCredentials,
@@ -22,9 +36,17 @@ import {
   getLocalSetupStatus,
   requireLocalSetupComplete,
   saveLocalCredential,
+  saveLocalLlmProviderConfig,
+  setActiveLocalLlmProvider,
   verifyOpenRouterApiKey,
   verifyTinyFishApiKey,
 } from "./local-credentials.js";
+import {
+  isLlmProviderType,
+  normalizeLlmProviderInput,
+  verifyLlmProviderConfig,
+  type LlmProviderInput,
+} from "./config/llm.js";
 
 /** Domain part of an email, for analytics (we never log full addresses). */
 function emailDomain(email: string): string {
@@ -48,8 +70,18 @@ type DatasetUpdateBeginOutcome =
   | "already_building"
   | "already_updating";
 type UpdateWorkflowRun = Awaited<ReturnType<typeof updateWorkflow.createRun>>;
+type RuntimeModelConfig = {
+  schemaInference: string;
+  populateOrchestrator: string;
+  investigateSubagent: string;
+  extractorBuilder: string;
+  rowExtractorConcurrency: number;
+  rowExtractorBrowserAttempts: number;
+};
 
 const refreshCadenceSchema = z.enum(["manual", "30m", "6h", "12h", "daily", "weekly"]);
+const datasetColumnTypeSchema = z.enum(["text", "number", "boolean", "url", "date"]);
+const retrievalStrategySchema = z.enum(["search_fetch", "browser", "hybrid"]);
 const cliCreateDatasetSchema = z.object({
   prompt: z.string().trim().min(1),
   maxRowCount: z.number().int().min(1).max(2500).default(100),
@@ -57,6 +89,23 @@ const cliCreateDatasetSchema = z.object({
 });
 const cliDatasetIdParamsSchema = z.object({
   datasetId: z.string().min(1),
+});
+const finalizeSchemaRequestSchema = z.object({
+  prompt: z.string().trim().min(1),
+  datasetName: z.string().trim().min(1).optional(),
+  columns: z
+    .array(
+      z.object({
+        name: z.string().trim().min(1),
+        type: datasetColumnTypeSchema,
+        description: z.string().optional(),
+        isPrimaryKey: z.boolean().optional(),
+      }),
+    )
+    .min(1),
+  retrievalStrategy: retrievalStrategySchema.optional(),
+  sourceHint: z.string().optional(),
+  modelSlug: z.string().optional(),
 });
 
 function cliDatasetNameFromSchemaName(name: string): string {
@@ -74,6 +123,12 @@ function mapSchemaTypeToDatasetType(
     return type;
   }
   return "text";
+}
+
+function mapDatasetTypeToSchemaType(
+  type: "text" | "number" | "boolean" | "url" | "date",
+): "string" | "number" | "boolean" | "url" | "date" {
+  return type === "text" ? "string" : type;
 }
 
 function requireLocalCli(reply: FastifyReply): string | null {
@@ -115,6 +170,30 @@ async function beginDatasetPopulate(
   });
 
   return claim.outcome;
+}
+
+async function withCodificationProfile(
+  input: DatasetContext,
+  logger: FastifyBaseLogger,
+): Promise<DatasetContext> {
+  if (input.codificationProfile) return input;
+
+  const codificationProfile = normalizeCodificationProfile(undefined, input);
+  try {
+    await convex.mutation(internal.datasets.setCodificationProfileInternal, {
+      id: input.datasetId,
+      codificationProfile,
+    });
+  } catch (err) {
+    logger.warn(
+      { err, datasetId: input.datasetId },
+      "Failed to persist legacy codification profile; continuing with in-memory profile",
+    );
+  }
+  return {
+    ...input,
+    codificationProfile,
+  };
 }
 
 async function sendDatasetReadyNotification({
@@ -200,7 +279,7 @@ async function ensureLocalSetupReady(reply: FastifyReply): Promise<boolean> {
     return true;
   } catch {
     await reply.code(428).send({
-      error: "Local setup is incomplete. Connect TinyFish and OpenRouter first.",
+      error: "Local setup is incomplete. Connect TinyFish and an LLM provider first.",
     });
     return false;
   }
@@ -245,6 +324,36 @@ async function finaliseRunAsLive({
   }
 }
 
+async function clearPendingUpdateStatuses({
+  logger,
+  datasetId,
+  reason,
+}: {
+  logger: FastifyBaseLogger;
+  datasetId: string;
+  reason: string;
+}): Promise<number | null> {
+  try {
+    const cleared = await convex.mutation(
+      internal.datasetRows.clearAllPendingUpdateStatus,
+      { datasetId },
+    );
+    if (cleared > 0) {
+      logger.info(
+        { datasetId, cleared, reason },
+        "Cleared pending update row statuses",
+      );
+    }
+    return cleared;
+  } catch (err) {
+    logger.error(
+      { err, datasetId, reason },
+      "Failed to clear pending update row statuses",
+    );
+    return null;
+  }
+}
+
 async function beginDatasetUpdate(
   datasetId: string,
   ownerId: string,
@@ -269,11 +378,7 @@ async function runUpdateWorkflowInBackground({
   authorizedUserId: string;
   logger: FastifyBaseLogger;
   clerk: ClerkClient;
-  modelConfig: {
-    schemaInference: string;
-    populateOrchestrator: string;
-    investigateSubagent: string;
-  };
+  modelConfig: RuntimeModelConfig;
 }): Promise<void> {
   const datasetId = input.datasetId;
   // registerDataset is called by the route handler before void-ing this
@@ -331,11 +436,16 @@ async function runUpdateWorkflowInBackground({
       workflowType: "update",
     });
   } catch (err) {
-    // Note: a user-triggered stop is NOT handled here. The update workflow's
-    // refreshRowsStep detects the abort internally, clears pending row
-    // statuses, and returns normally — so run.start() returns { status:
-    // "success" } and the success path above handles the live transition.
-    // This catch only fires on genuine failures.
+    if (isDatasetRunAborted(datasetId)) {
+      await finaliseStoppedUpdateRun({
+        logger,
+        clerk,
+        datasetId,
+        authorizedUserId,
+      });
+      return;
+    }
+
     const lastStatusError = statusErrorMessage(err);
     logger.error({ err, datasetId }, "Update background workflow failed");
 
@@ -350,6 +460,11 @@ async function runUpdateWorkflowInBackground({
         );
         return;
       }
+      await clearPendingUpdateStatuses({
+        logger,
+        datasetId,
+        reason: "failed update workflow",
+      });
       await setDatasetPopulateStatus(datasetId, "failed", lastStatusError);
     } catch (statusErr) {
       logger.error(
@@ -373,11 +488,7 @@ async function runScheduledUpdateWorkflowInBackground({
   run: UpdateWorkflowRun;
   authorizedUserId: string;
   logger: FastifyBaseLogger;
-  modelConfig: {
-    schemaInference: string;
-    populateOrchestrator: string;
-    investigateSubagent: string;
-  };
+  modelConfig: RuntimeModelConfig;
 }): Promise<void> {
   const datasetId = input.datasetId;
   registerDataset(datasetId);
@@ -409,15 +520,55 @@ async function runScheduledUpdateWorkflowInBackground({
 
     await convex.mutation(internal.datasets.completeScheduledRefreshInternal, {
       id: datasetId,
+      runId: run.runId,
       now: Date.now(),
     });
   } catch (err) {
+    if (isDatasetRunAborted(datasetId)) {
+      logger.info({ datasetId }, "Scheduled update workflow stopped; transitioning to live");
+      const cleared = await clearPendingUpdateStatuses({
+        logger,
+        datasetId,
+        reason: "stopped scheduled update workflow",
+      });
+
+      try {
+        if (cleared === null) {
+          await convex.mutation(internal.datasets.failScheduledRefreshInternal, {
+            id: datasetId,
+            runId: run.runId,
+            now: Date.now(),
+            lastStatusError: "Workflow stopped but pending row cleanup failed",
+          });
+        } else {
+          await convex.mutation(internal.datasets.completeScheduledRefreshInternal, {
+            id: datasetId,
+            runId: run.runId,
+            now: Date.now(),
+          });
+        }
+      } catch (statusErr) {
+        logger.error(
+          { err: statusErr, datasetId },
+          "Failed to record stopped scheduled refresh",
+        );
+      }
+      return;
+    }
+
     const lastStatusError = statusErrorMessage(err);
     logger.error({ err, datasetId }, "Scheduled update workflow failed");
+
+    await clearPendingUpdateStatuses({
+      logger,
+      datasetId,
+      reason: "failed scheduled update workflow",
+    });
 
     try {
       await convex.mutation(internal.datasets.failScheduledRefreshInternal, {
         id: datasetId,
+        runId: run.runId,
         now: Date.now(),
         lastStatusError,
       });
@@ -429,6 +580,69 @@ async function runScheduledUpdateWorkflowInBackground({
     }
   } finally {
     deregisterDataset(datasetId);
+  }
+}
+
+async function finaliseStoppedUpdateRun({
+  logger,
+  clerk,
+  datasetId,
+  authorizedUserId,
+}: {
+  logger: FastifyBaseLogger;
+  clerk: ClerkClient;
+  datasetId: string;
+  authorizedUserId: string;
+}): Promise<void> {
+  logger.info({ datasetId }, "Update workflow stopped by user; transitioning to live");
+
+  const cleared = await clearPendingUpdateStatuses({
+    logger,
+    datasetId,
+    reason: "stopped update workflow",
+  });
+
+  if (cleared === null) {
+    try {
+      await setDatasetPopulateStatus(
+        datasetId,
+        "failed",
+        "Workflow stopped but pending row cleanup failed",
+      );
+    } catch (fallbackErr) {
+      logger.error(
+        { err: fallbackErr, datasetId },
+        "Could not update dataset status after stopped update cleanup failure",
+      );
+    }
+    return;
+  }
+
+  try {
+    await finaliseRunAsLive({
+      logger,
+      clerk,
+      datasetId,
+      authorizedUserId,
+      workflowType: "update",
+    });
+  } catch (stopErr) {
+    logger.error(
+      { err: stopErr, datasetId },
+      "Failed to finalise stopped update run; marking as failed",
+    );
+    try {
+      await setDatasetPopulateStatus(
+        datasetId,
+        "failed",
+        "Workflow stopped but could not be finalised",
+      );
+    } catch (fallbackErr) {
+      logger.error(
+        { err: fallbackErr, datasetId },
+        "Could not update dataset status after stopped update finalisation failure",
+      );
+    }
   }
 }
 
@@ -447,11 +661,7 @@ async function runPopulateWorkflowInBackground({
   authorizedUserId: string;
   logger: FastifyBaseLogger;
   clerk: ClerkClient;
-  modelConfig: {
-    schemaInference: string;
-    populateOrchestrator: string;
-    investigateSubagent: string;
-  };
+  modelConfig: RuntimeModelConfig;
 }): Promise<void> {
   const datasetId = input.datasetId;
 
@@ -466,6 +676,16 @@ async function runPopulateWorkflowInBackground({
         },
       },
     });
+
+    if (controller.signal.aborted) {
+      await finaliseStoppedPopulateRun({
+        logger,
+        clerk,
+        datasetId,
+        authorizedUserId,
+      });
+      return;
+    }
 
     logger.info(
       {
@@ -509,21 +729,12 @@ async function runPopulateWorkflowInBackground({
     });
   } catch (err) {
     if (controller.signal.aborted) {
-      // User pressed Stop — treat whatever was collected as the final dataset.
-      logger.info({ datasetId }, "Populate workflow stopped by user; transitioning to live");
-      try {
-        await finaliseRunAsLive({ logger, clerk, datasetId, authorizedUserId });
-      } catch (stopErr) {
-        logger.error({ err: stopErr, datasetId }, "Failed to finalise stopped populate run; marking as failed");
-        // Ensure the dataset always leaves "building" — without this fallback,
-        // a failed finalisation leaves the dataset with no active registry entry
-        // and no way for /stop to act on it again.
-        try {
-          await setDatasetPopulateStatus(datasetId, "failed", "Workflow stopped but could not be finalised");
-        } catch (fallbackErr) {
-          logger.error({ err: fallbackErr, datasetId }, "Could not update dataset status after stop finalisation failure");
-        }
-      }
+      await finaliseStoppedPopulateRun({
+        logger,
+        clerk,
+        datasetId,
+        authorizedUserId,
+      });
       return;
     }
 
@@ -557,6 +768,43 @@ async function runPopulateWorkflowInBackground({
   }
 }
 
+async function finaliseStoppedPopulateRun({
+  logger,
+  clerk,
+  datasetId,
+  authorizedUserId,
+}: {
+  logger: FastifyBaseLogger;
+  clerk: ClerkClient;
+  datasetId: string;
+  authorizedUserId: string;
+}): Promise<void> {
+  logger.info({ datasetId }, "Populate workflow stopped by user; transitioning to live");
+  try {
+    await finaliseRunAsLive({ logger, clerk, datasetId, authorizedUserId });
+  } catch (stopErr) {
+    logger.error(
+      { err: stopErr, datasetId },
+      "Failed to finalise stopped populate run; marking as failed",
+    );
+    // Ensure the dataset always leaves "building" — without this fallback,
+    // a failed finalisation leaves the dataset with no active registry entry
+    // and no way for /stop to act on it again.
+    try {
+      await setDatasetPopulateStatus(
+        datasetId,
+        "failed",
+        "Workflow stopped but could not be finalised",
+      );
+    } catch (fallbackErr) {
+      logger.error(
+        { err: fallbackErr, datasetId },
+        "Could not update dataset status after stop finalisation failure",
+      );
+    }
+  }
+}
+
 async function backfillDatasetRefreshSettings(
   logger: FastifyBaseLogger,
 ): Promise<void> {
@@ -587,6 +835,14 @@ function startLocalRefreshScheduler(
     ticking = true;
 
     try {
+      if (hasActiveDatasetRuns()) {
+        logger.debug(
+          { activeRuns: activeDatasetRunCount() },
+          "Skipping scheduled refresh tick while dataset run is active",
+        );
+        return;
+      }
+
       if (env.IS_LOCAL_MODE) {
         const setup = await getLocalSetupStatus();
         if (!setup.complete) return;
@@ -631,15 +887,22 @@ function startLocalRefreshScheduler(
         const dataset = claim.dataset;
         const { getModelConfig } = await import("./config/models.js");
         const modelConfig = await getModelConfig(dataset.ownerId);
-
-        void runScheduledUpdateWorkflowInBackground({
-          input: {
+        const input = await withCodificationProfile(
+          {
             datasetId: dataset.datasetId,
             datasetName: dataset.datasetName,
             description: dataset.description,
             maxRowCount: dataset.maxRowCount ?? 100,
             columns: dataset.columns,
+            retrievalStrategy: dataset.retrievalStrategy,
+            sourceHint: dataset.sourceHint,
+            codificationProfile: dataset.codificationProfile,
           },
+          logger,
+        );
+
+        await runScheduledUpdateWorkflowInBackground({
+          input,
           run,
           authorizedUserId: dataset.ownerId,
           logger,
@@ -752,6 +1015,54 @@ fastify.post("/local-setup/tinyfish", async (req, reply) => {
   }
 });
 
+fastify.post("/local-setup/llm-provider", async (req, reply) => {
+  if (!env.IS_LOCAL_MODE) {
+    return reply.code(404).send({ error: "Not found" });
+  }
+
+  const body = (req.body ?? {}) as Partial<LlmProviderInput>;
+  const provider = body.provider;
+  if (!isLlmProviderType(provider)) {
+    return reply.code(400).send({ error: "Choose a supported LLM provider" });
+  }
+
+  try {
+    const apiKey = body.apiKey?.trim() ?? "";
+    const isKeylessProvider =
+      provider === "custom" || provider === "ollama" || provider === "lmstudio";
+    const isNewKeylessProvider =
+      isKeylessProvider && (provider !== "custom" || !!body.baseUrl?.trim());
+
+    if (!apiKey && !isNewKeylessProvider) {
+      const status = await getLocalSetupStatus();
+      const savedProvider = status.services.llmProviders?.[provider];
+      if (!savedProvider?.configured) {
+        return reply.code(400).send({ error: `${savedProvider?.providerLabel ?? provider} API key is required` });
+      }
+      await setActiveLocalLlmProvider(provider);
+      return await getLocalSetupStatus();
+    }
+
+    const config = normalizeLlmProviderInput(
+      {
+        provider,
+        apiKey,
+        baseUrl: body.baseUrl,
+        defaultModel: body.defaultModel,
+      },
+      "local",
+    );
+    await verifyLlmProviderConfig(config);
+    await saveLocalLlmProviderConfig(config, "api_key");
+    return await getLocalSetupStatus();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "LLM provider verification failed";
+    req.log.warn({ err }, "LLM provider local setup verification failed");
+    return reply.code(400).send({ error: message });
+  }
+});
+
+// Backward-compatible endpoint for older setup UI builds.
 fastify.post("/local-setup/openrouter-key", async (req, reply) => {
   if (!env.IS_LOCAL_MODE) {
     return reply.code(404).send({ error: "Not found" });
@@ -823,6 +1134,18 @@ fastify.get("/openrouter/models", async (req, reply) => {
   }
 });
 
+fastify.get("/llm-provider/models", async (req, reply) => {
+  const { fetchModelsForCurrentLlmProvider } = await import("./config/models.js");
+  try {
+    const models = await fetchModelsForCurrentLlmProvider();
+    return { models };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Failed to load models";
+    req.log.error(err, "Failed to load current LLM provider models");
+    return reply.code(500).send({ error: message });
+  }
+});
+
 // ────────────────────────────────────────────────────────────────────────
 //  Local trusted CLI routes
 // ────────────────────────────────────────────────────────────────────────
@@ -856,12 +1179,20 @@ fastify.post("/cli/datasets", async (req, reply) => {
   }
 
   try {
-    const schema = await inferSchema(parsed.data.prompt);
+    const { getModelConfig } = await import("./config/models.js");
+    const modelConfig = await getModelConfig(ownerId);
+    const schema = await inferSchema(
+      parsed.data.prompt,
+      modelConfig.schemaInference,
+    );
     const columns = schema.columns.map((column) => ({
       name: column.name,
       type: mapSchemaTypeToDatasetType(column.type),
       description: column.retrieval_hint,
       isPrimaryKey: column.is_primary_key || undefined,
+      nullable: column.nullable,
+      validationRegex: column.validation_regex || undefined,
+      normalizationHint: column.normalization_hint || undefined,
     }));
 
     const datasetId = await convex.mutation(
@@ -875,6 +1206,7 @@ fastify.post("/cli/datasets", async (req, reply) => {
         columns,
         retrievalStrategy: schema.retrieval_strategy,
         sourceHint: schema.source_hint,
+        codificationProfile: schemaCodificationProfileToRuntime(schema.codification_profile),
       },
     );
 
@@ -971,15 +1303,22 @@ fastify.post("/cli/datasets/:datasetId/populate", async (req, reply) => {
     const modelConfig = await getModelConfig(ownerId);
     const run = await populateWorkflow.createRun();
     const controller = registerDataset(dataset._id);
-
-    void runPopulateWorkflowInBackground({
-      input: {
+    const input = await withCodificationProfile(
+      {
         datasetId: dataset._id,
         datasetName: dataset.name,
         description: dataset.description,
         maxRowCount: dataset.maxRowCount ?? 100,
         columns: dataset.columns,
+        retrievalStrategy: dataset.retrievalStrategy,
+        sourceHint: dataset.sourceHint,
+        codificationProfile: dataset.codificationProfile,
       },
+      req.log,
+    );
+
+    void runPopulateWorkflowInBackground({
+      input,
       run,
       controller,
       authorizedUserId: ownerId,
@@ -1074,39 +1413,78 @@ await fastify.register(async (instance) => {
   });
 
   instance.post("/settings/models", async (req, reply) => {
-    const { upsertModelConfig, validateModelSlug, getCachedModels } = await import("./config/models.js");
+    const { upsertModelConfig, fetchModelsForCurrentLlmProvider } = await import("./config/models.js");
     const body = req.body as {
       schemaInference?: string | null;
       populateOrchestrator?: string | null;
       investigateSubagent?: string | null;
+      extractorBuilder?: string | null;
+      rowExtractorConcurrency?: number | null;
+      rowExtractorBrowserAttempts?: number | null;
+    };
+    const config = {
+      schemaInference: typeof body.schemaInference === "string" ? body.schemaInference.trim() || undefined : undefined,
+      populateOrchestrator: typeof body.populateOrchestrator === "string" ? body.populateOrchestrator.trim() || undefined : undefined,
+      investigateSubagent: typeof body.investigateSubagent === "string" ? body.investigateSubagent.trim() || undefined : undefined,
+      extractorBuilder: typeof body.extractorBuilder === "string" ? body.extractorBuilder.trim() || undefined : undefined,
+      rowExtractorConcurrency:
+        typeof body.rowExtractorConcurrency === "number"
+          ? body.rowExtractorConcurrency
+          : undefined,
+      rowExtractorBrowserAttempts:
+        typeof body.rowExtractorBrowserAttempts === "number"
+          ? body.rowExtractorBrowserAttempts
+          : undefined,
     };
 
-    const toValidate: Array<{ role: "schemaInference" | "populateOrchestrator" | "investigateSubagent"; slug: string }> = [];
-    if (body.schemaInference) toValidate.push({ role: "schemaInference", slug: body.schemaInference });
-    if (body.populateOrchestrator) toValidate.push({ role: "populateOrchestrator", slug: body.populateOrchestrator });
-    if (body.investigateSubagent) toValidate.push({ role: "investigateSubagent", slug: body.investigateSubagent });
+    const toValidate: Array<{
+      role:
+        | "schemaInference"
+        | "populateOrchestrator"
+        | "investigateSubagent"
+        | "extractorBuilder";
+      slug: string;
+    }> = [];
+    if (config.schemaInference) toValidate.push({ role: "schemaInference", slug: config.schemaInference });
+    if (config.populateOrchestrator) toValidate.push({ role: "populateOrchestrator", slug: config.populateOrchestrator });
+    if (config.investigateSubagent) toValidate.push({ role: "investigateSubagent", slug: config.investigateSubagent });
+    if (config.extractorBuilder) toValidate.push({ role: "extractorBuilder", slug: config.extractorBuilder });
 
     if (toValidate.length > 0) {
       try {
-        const models = await getCachedModels();
-        for (const { role, slug } of toValidate) {
-          const found = models.some((m) => m.canonicalSlug === slug);
-          if (!found) {
-            return reply.code(400).send({
-              error: `Invalid model slug "${slug}" for ${role}. Refresh the model list first or choose a different model.`,
-            });
-          }
+        const models = await fetchModelsForCurrentLlmProvider();
+        const invalidModelSlugs = toValidate.filter(
+          ({ slug }) => !models.some((m) => m.canonicalSlug === slug),
+        );
+
+        if (invalidModelSlugs.length > 0) {
+          req.log.warn(
+            { invalidModelSlugs },
+            "Rejected model slugs that were not returned by the current LLM provider",
+          );
+          const [firstInvalidModelSlug] = invalidModelSlugs;
+          return reply.code(400).send({
+            error:
+              invalidModelSlugs.length === 1 && firstInvalidModelSlug
+                ? `Invalid model slug "${firstInvalidModelSlug.slug}" for ${firstInvalidModelSlug.role}`
+                : "One or more model slugs are not available for the current LLM provider",
+            details: { invalidModelSlugs },
+          });
         }
       } catch (err) {
-        req.log.error(err, "Failed to validate model slugs — allowing save");
+        req.log.error(err, "Failed to validate model slugs");
+        return reply.code(502).send({ error: "Failed to validate model preferences" });
       }
     }
 
     try {
       await upsertModelConfig(req.auth!.userId, {
-        schemaInference: body.schemaInference ?? undefined,
-        populateOrchestrator: body.populateOrchestrator ?? undefined,
-        investigateSubagent: body.investigateSubagent ?? undefined,
+        schemaInference: config.schemaInference,
+        populateOrchestrator: config.populateOrchestrator,
+        investigateSubagent: config.investigateSubagent,
+        extractorBuilder: config.extractorBuilder,
+        rowExtractorConcurrency: config.rowExtractorConcurrency,
+        rowExtractorBrowserAttempts: config.rowExtractorBrowserAttempts,
       });
       return { success: true };
     } catch (err) {
@@ -1139,6 +1517,64 @@ await fastify.register(async (instance) => {
     } catch (err) {
       req.log.error(err, "Schema inference failed");
       return reply.code(502).send({ error: "Schema inference failed. Please try again." });
+    }
+  });
+
+  instance.post("/finalize-schema", async (req, reply) => {
+    const parsed = finalizeSchemaRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.code(400).send({
+        error: "Invalid request",
+        details: parsed.error.flatten().fieldErrors,
+      });
+    }
+    if (!(await ensureLocalSetupReady(reply))) return;
+
+    try {
+      const auth = req.auth;
+      let modelSlug = parsed.data.modelSlug;
+
+      if (!modelSlug && auth) {
+        const { getModelConfig } = await import("./config/models.js");
+        const config = await getModelConfig(auth.userId);
+        if (config?.schemaInference) {
+          modelSlug = config.schemaInference;
+        }
+      }
+
+      const schema = await finalizeSchemaContracts(
+        {
+          prompt: parsed.data.prompt,
+          datasetName: parsed.data.datasetName,
+          columns: parsed.data.columns.map((column) => ({
+            name: column.name,
+            type: mapDatasetTypeToSchemaType(column.type),
+            description: column.description,
+            isPrimaryKey: column.isPrimaryKey,
+          })),
+          retrievalStrategy: parsed.data.retrievalStrategy,
+          sourceHint: parsed.data.sourceHint,
+        },
+        modelSlug,
+      );
+
+      if (schema.columns.length !== parsed.data.columns.length) {
+        req.log.warn(
+          {
+            expectedColumnCount: parsed.data.columns.length,
+            actualColumnCount: schema.columns.length,
+          },
+          "Schema finalization returned a different column count",
+        );
+        return reply.code(502).send({
+          error: "Schema finalization failed. Please try again.",
+        });
+      }
+
+      return schema;
+    } catch (err) {
+      req.log.error(err, "Schema finalization failed");
+      return reply.code(502).send({ error: "Schema finalization failed. Please try again." });
     }
   });
 
@@ -1200,12 +1636,19 @@ await fastify.register(async (instance) => {
       // arriving before registerDataset runs inside the background function
       // would incorrectly force-transition an active run to "failed".
       const controller = registerDataset(parsed.data.datasetId);
-
-      void runPopulateWorkflowInBackground({
-        input: {
+      const input = await withCodificationProfile(
+        {
           ...parsed.data,
           maxRowCount: dataset.maxRowCount ?? parsed.data.maxRowCount,
+          retrievalStrategy: dataset.retrievalStrategy ?? parsed.data.retrievalStrategy,
+          sourceHint: dataset.sourceHint ?? parsed.data.sourceHint,
+          codificationProfile: dataset.codificationProfile ?? parsed.data.codificationProfile,
         },
+        req.log,
+      );
+
+      void runPopulateWorkflowInBackground({
+        input,
         run,
         controller,
         authorizedUserId: auth.userId,
@@ -1262,6 +1705,13 @@ await fastify.register(async (instance) => {
         throw new Error(`Unexpected update claim outcome: ${updateOutcome}`);
       }
 
+      const dataset = await convex.query(internal.datasets.getInternal, {
+        id: parsed.data.datasetId,
+      });
+      if (!dataset) {
+        return reply.code(404).send({ error: "Dataset not found" });
+      }
+
       let run: UpdateWorkflowRun;
       try {
         run = await updateWorkflow.createRun();
@@ -1279,9 +1729,19 @@ await fastify.register(async (instance) => {
       // arriving before registerDataset runs inside the background function
       // would incorrectly force-transition an active run to "failed".
       registerDataset(parsed.data.datasetId);
+      const input = await withCodificationProfile(
+        {
+          ...parsed.data,
+          maxRowCount: dataset.maxRowCount ?? parsed.data.maxRowCount,
+          retrievalStrategy: dataset.retrievalStrategy ?? parsed.data.retrievalStrategy,
+          sourceHint: dataset.sourceHint ?? parsed.data.sourceHint,
+          codificationProfile: dataset.codificationProfile ?? parsed.data.codificationProfile,
+        },
+        req.log,
+      );
 
       void runUpdateWorkflowInBackground({
-        input: parsed.data,
+        input,
         run,
         authorizedUserId: auth.userId,
         logger: req.log,

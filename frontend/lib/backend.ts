@@ -2,9 +2,42 @@ export interface InferredSchema {
   dataset_name: string;
   description: string;
   columns: InferredColumn[];
-  primary_key: string;
+  primary_key: string[];
   retrieval_strategy: "search_fetch" | "browser" | "hybrid";
   source_hint: string;
+  codification_profile: InferredCodificationProfile;
+}
+
+export interface InferredCodificationProfile {
+  version: 1;
+  mode: "disabled" | "candidate" | "required" | "unknown";
+  reason: string;
+  primary_key_shape: "url" | "slug" | "name" | "id" | "mixed" | "unknown";
+  families: InferredCodificationFamily[];
+}
+
+export interface InferredCodificationFamily {
+  label: string;
+  source_host?: string;
+  source_path_prefix?: string;
+  url_template?: string;
+  primary_key_regex?: string;
+}
+
+export interface CodificationProfile {
+  version: 1;
+  mode: "disabled" | "candidate" | "required" | "unknown";
+  reason: string;
+  primaryKeyShape: "url" | "slug" | "name" | "id" | "mixed" | "unknown";
+  families: CodificationFamily[];
+}
+
+export interface CodificationFamily {
+  label: string;
+  sourceHost?: string;
+  sourcePathPrefix?: string;
+  urlTemplate?: string;
+  primaryKeyRegex?: string;
 }
 
 export interface InferredColumn {
@@ -15,6 +48,8 @@ export interface InferredColumn {
   is_enumerable: boolean;
   retrieval_hint: string;
   nullable: boolean;
+  validation_regex?: string;
+  normalization_hint?: string;
 }
 
 export interface PopulateColumn {
@@ -22,6 +57,24 @@ export interface PopulateColumn {
   type: "text" | "number" | "boolean" | "url" | "date";
   description?: string;
   isPrimaryKey?: boolean;
+  nullable?: boolean;
+  validationRegex?: string;
+  normalizationHint?: string;
+}
+
+export interface FinalizeSchemaColumn {
+  name: string;
+  type: PopulateColumn["type"];
+  description?: string;
+  isPrimaryKey?: boolean;
+}
+
+export interface FinalizeSchemaInput {
+  prompt: string;
+  datasetName?: string;
+  columns: FinalizeSchemaColumn[];
+  retrievalStrategy?: InferredSchema["retrieval_strategy"];
+  sourceHint?: string;
 }
 
 export interface PopulateStartResult {
@@ -36,23 +89,29 @@ export interface WorkflowResult {
 
 /**
  * The effective model config — always complete, never null.
- * schemaInference / populateOrchestrator / investigateSubagent are always strings
+ * schemaInference / populateOrchestrator / investigateSubagent / extractorBuilder are always strings
  * (user preference or system default from env).
  */
 export interface EffectiveModelConfig {
   schemaInference: string;
   populateOrchestrator: string;
   investigateSubagent: string;
+  extractorBuilder: string;
+  rowExtractorConcurrency: number;
+  rowExtractorBrowserAttempts: number;
 }
 
 /**
- * User's saved model preferences — stores the canonical slug (e.g. "anthropic/claude-sonnet-4.6")
+ * User's saved model preferences — stores the provider model id (e.g. "openai/gpt-5.4-mini" or "gpt-5.4-mini")
  * for each agent role. Null means no preference saved — backend will use the env default.
  */
 export interface SavedModelConfig {
   schemaInference: string | null;
   populateOrchestrator: string | null;
   investigateSubagent: string | null;
+  extractorBuilder: string | null;
+  rowExtractorConcurrency: number | null;
+  rowExtractorBrowserAttempts: number | null;
 }
 
 export interface OpenRouterModel {
@@ -63,11 +122,33 @@ export interface OpenRouterModel {
   promptCost: number;
 }
 
+export type LlmProviderType =
+  | "openrouter"
+  | "openai"
+  | "anthropic"
+  | "google"
+  | "xai"
+  | "deepseek"
+  | "qwen"
+  | "mistral"
+  | "groq"
+  | "togetherai"
+  | "deepinfra"
+  | "fireworks"
+  | "huggingface"
+  | "ollama"
+  | "lmstudio"
+  | "custom";
+
 export interface ServiceSetupStatus {
   configured: boolean;
   source: "local" | "env" | null;
   connectionMethod: "api_key" | "oauth" | null;
   verifiedAt: number | null;
+  provider?: LlmProviderType;
+  providerLabel?: string;
+  baseUrl?: string;
+  defaultModel?: string;
 }
 
 export interface LocalSetupStatus {
@@ -76,12 +157,58 @@ export interface LocalSetupStatus {
   complete: boolean;
   services: {
     tinyfish: ServiceSetupStatus;
-    openrouter: ServiceSetupStatus;
+    llm: ServiceSetupStatus;
+    llmProviders?: Record<LlmProviderType, ServiceSetupStatus>;
+    openrouter?: ServiceSetupStatus;
   };
 }
 
 const BACKEND_URL =
   process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:3501";
+const DEFAULT_ROW_EXTRACTOR_CONCURRENCY = 5;
+const DEFAULT_ROW_EXTRACTOR_BROWSER_ATTEMPTS = 2;
+
+function normalizeIntegerSetting(
+  value: unknown,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(min, Math.trunc(parsed)));
+}
+
+function normalizeEffectiveModelConfig(
+  config: Partial<EffectiveModelConfig> | null | undefined,
+): EffectiveModelConfig {
+  return {
+    schemaInference:
+      typeof config?.schemaInference === "string" ? config.schemaInference : "",
+    populateOrchestrator:
+      typeof config?.populateOrchestrator === "string"
+        ? config.populateOrchestrator
+        : "",
+    investigateSubagent:
+      typeof config?.investigateSubagent === "string"
+        ? config.investigateSubagent
+        : "",
+    extractorBuilder:
+      typeof config?.extractorBuilder === "string" ? config.extractorBuilder : "",
+    rowExtractorConcurrency: normalizeIntegerSetting(
+      config?.rowExtractorConcurrency,
+      DEFAULT_ROW_EXTRACTOR_CONCURRENCY,
+      1,
+      100,
+    ),
+    rowExtractorBrowserAttempts: normalizeIntegerSetting(
+      config?.rowExtractorBrowserAttempts,
+      DEFAULT_ROW_EXTRACTOR_BROWSER_ATTEMPTS,
+      1,
+      10,
+    ),
+  };
+}
 
 async function errorMessage(res: Response): Promise<string> {
   const body = await res.json().catch(() => null);
@@ -116,13 +243,16 @@ export async function saveTinyFishApiKey(
   return res.json();
 }
 
-export async function saveOpenRouterApiKey(
-  apiKey: string,
-): Promise<LocalSetupStatus> {
-  const res = await fetch(`${BACKEND_URL}/local-setup/openrouter-key`, {
+export async function saveLlmProviderConfig(config: {
+  provider: LlmProviderType;
+  apiKey?: string;
+  defaultModel: string;
+  baseUrl?: string;
+}): Promise<LocalSetupStatus> {
+  const res = await fetch(`${BACKEND_URL}/local-setup/llm-provider`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ apiKey }),
+    body: JSON.stringify(config),
   });
 
   if (!res.ok) {
@@ -130,6 +260,16 @@ export async function saveOpenRouterApiKey(
   }
 
   return res.json();
+}
+
+export async function saveOpenRouterApiKey(
+  apiKey: string,
+): Promise<LocalSetupStatus> {
+  return saveLlmProviderConfig({
+    provider: "openrouter",
+    apiKey,
+    defaultModel: "anthropic/claude-sonnet-4.6",
+  });
 }
 
 export async function exchangeOpenRouterOAuth(
@@ -177,7 +317,7 @@ export async function getModelConfig(token: string): Promise<EffectiveModelConfi
   }
 
   const data = await res.json();
-  return data.config;
+  return normalizeEffectiveModelConfig(data.config);
 }
 
 /**
@@ -187,7 +327,7 @@ export async function getModelConfig(token: string): Promise<EffectiveModelConfi
  * and does a partial upsert — only the fields provided in the body are updated.
  * Unset fields retain their existing values.
  *
- * @param config - A partial model config. e.g. { schemaInference: "google/gemini-2.0-flash-001" }
+ * @param config - A partial model config. e.g. { schemaInference: "gemini-3.5-flash" }
  *                Only the roles the user wants to change need to be included.
  * @param token - Clerk JWT obtained via getToken()
  *
@@ -225,6 +365,21 @@ export async function saveModelConfig(
  */
 export async function getOpenRouterModels(): Promise<OpenRouterModel[]> {
   const res = await fetch(`${BACKEND_URL}/openrouter/models`, {
+    method: "GET",
+  });
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    const message = body?.error || `Backend error (${res.status})`;
+    throw new Error(message);
+  }
+
+  const data = await res.json();
+  return data.models ?? [];
+}
+
+export async function getLlmProviderModels(): Promise<OpenRouterModel[]> {
+  const res = await fetch(`${BACKEND_URL}/llm-provider/models`, {
     method: "GET",
   });
 
@@ -279,6 +434,28 @@ export async function inferSchema(
       Authorization: `Bearer ${token}`,
     },
     body: JSON.stringify({ prompt }),
+  });
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    const message = body?.error || `Backend error (${res.status})`;
+    throw new Error(message);
+  }
+
+  return res.json();
+}
+
+export async function finalizeSchema(
+  input: FinalizeSchemaInput,
+  token: string,
+): Promise<InferredSchema> {
+  const res = await fetch(`${BACKEND_URL}/finalize-schema`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(input),
   });
 
   if (!res.ok) {

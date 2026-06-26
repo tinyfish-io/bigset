@@ -5,6 +5,19 @@ import {
   getKeychainCredential,
   setKeychainCredential,
 } from "./local-keychain-client.js";
+import {
+  LLM_PROVIDER_TYPES,
+  defaultBaseUrlForLlmProvider,
+  defaultModelForLlmProvider,
+  defaultModelForLlmProviderRole,
+  isLlmProviderType,
+  llmProviderLabel,
+  normalizeLlmProviderInput,
+  type LlmProviderConfig,
+  type LlmProviderInput,
+  type ModelRoleKey,
+  type LlmProviderType,
+} from "./config/llm.js";
 import type {
   ConnectionMethod,
   LocalCredentialService,
@@ -12,18 +25,35 @@ import type {
 
 export const LOCAL_USER_ID = "local_user_default";
 
+const MODEL_ROLE_KEYS: ModelRoleKey[] = [
+  "schemaInference",
+  "populateOrchestrator",
+  "investigateSubagent",
+  "extractorBuilder",
+];
+
 export interface ServiceSetupStatus {
   configured: boolean;
   source: "local" | "env" | null;
   connectionMethod: ConnectionMethod | null;
   verifiedAt: number | null;
+  provider?: LlmProviderType;
+  providerLabel?: string;
+  baseUrl?: string;
+  defaultModel?: string;
 }
 
 export interface LocalSetupStatus {
   mode: "local" | "production";
   required: boolean;
   complete: boolean;
-  services: Record<LocalCredentialService, ServiceSetupStatus>;
+  services: {
+    tinyfish: ServiceSetupStatus;
+    llm: ServiceSetupStatus;
+    llmProviders?: Record<LlmProviderType, ServiceSetupStatus>;
+    /** Deprecated compatibility alias for older UI code. */
+    openrouter?: ServiceSetupStatus;
+  };
 }
 
 function isPlaceholder(value: string, service: LocalCredentialService): boolean {
@@ -35,9 +65,74 @@ function isPlaceholder(value: string, service: LocalCredentialService): boolean 
 
 function envCredential(service: LocalCredentialService): string | undefined {
   const value =
-    service === "tinyfish" ? process.env.TINYFISH_API_KEY : env.OPENROUTER_API_KEY;
+    service === "tinyfish"
+      ? process.env.TINYFISH_API_KEY
+      : service === "openrouter"
+        ? env.OPENROUTER_API_KEY
+        : undefined;
   if (!value || isPlaceholder(value, service)) return undefined;
   return value;
+}
+
+function llmProviderService(provider: LlmProviderType): LocalCredentialService {
+  return provider;
+}
+
+function nonEmptyModelId(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function localLlmProviderAllowsKeylessRead(
+  provider: LlmProviderType,
+): boolean {
+  return (
+    provider === "custom" || provider === "ollama" || provider === "lmstudio"
+  );
+}
+
+function localModelConfigRole(
+  config: unknown,
+  role: ModelRoleKey,
+): string | null {
+  if (!config || typeof config !== "object") return null;
+  return nonEmptyModelId(
+    (config as Partial<Record<ModelRoleKey, unknown>>)[role],
+  );
+}
+
+function localProviderRoleModelConfigured(
+  provider: LlmProviderType,
+  role: ModelRoleKey,
+  config: unknown,
+): boolean {
+  return Boolean(
+    localModelConfigRole(config, role) ||
+      nonEmptyModelId(defaultModelForLlmProviderRole(provider, role)),
+  );
+}
+
+async function localLlmModelRolesConfigured(
+  provider: LlmProviderType,
+): Promise<boolean> {
+  if (
+    MODEL_ROLE_KEYS.every((role) =>
+      nonEmptyModelId(defaultModelForLlmProviderRole(provider, role)),
+    )
+  ) {
+    return true;
+  }
+
+  try {
+    const config = await convex.query(internal.modelConfig.getInternal, {
+      userId: LOCAL_USER_ID,
+      provider,
+    });
+    return MODEL_ROLE_KEYS.every((role) =>
+      localProviderRoleModelConfigured(provider, role, config),
+    );
+  } catch {
+    return false;
+  }
 }
 
 async function localCredential(service: LocalCredentialService): Promise<{
@@ -45,20 +140,75 @@ async function localCredential(service: LocalCredentialService): Promise<{
   connectionMethod: ConnectionMethod;
   verifiedAt: number | null;
   keychainAccount: string;
+  llmProvider?: LlmProviderType;
+  llmBaseUrl?: string;
+  llmDefaultModel?: string;
 } | null> {
   if (!env.IS_LOCAL_MODE) return null;
-  const keychain = await getKeychainCredential(service);
-  if (!keychain?.apiKey) return null;
 
   const row = await convex.query(internal.localCredentials.getInternal, {
     service,
   });
+  const rowData = row as
+    | {
+        keychainAccount?: string;
+        connectionMethod?: ConnectionMethod;
+        verifiedAt?: number;
+        llmProvider?: unknown;
+        llmBaseUrl?: unknown;
+        llmDefaultModel?: unknown;
+      }
+    | null;
+
+  const rowProvider = isLlmProviderType(rowData?.llmProvider)
+    ? rowData.llmProvider
+    : undefined;
+  const rowBaseUrl =
+    typeof rowData?.llmBaseUrl === "string" ? rowData.llmBaseUrl : undefined;
+  const rowDefaultModel =
+    typeof rowData?.llmDefaultModel === "string"
+      ? rowData.llmDefaultModel
+      : undefined;
+  const rowKeychainAccount =
+    typeof rowData?.keychainAccount === "string"
+      ? rowData.keychainAccount
+      : undefined;
+  const isKeylessLocalLlmProviderRow = Boolean(
+    rowProvider &&
+      service === rowProvider &&
+      localLlmProviderAllowsKeylessRead(rowProvider) &&
+      rowBaseUrl,
+  );
+
+  const keychain =
+    !isKeylessLocalLlmProviderRow || rowKeychainAccount
+      ? await getKeychainCredential(service)
+      : null;
+
+  if (keychain?.apiKey) {
+    return {
+      apiKey: keychain.apiKey,
+      connectionMethod: rowData?.connectionMethod ?? "api_key",
+      verifiedAt: rowData?.verifiedAt ?? null,
+      keychainAccount: keychain.keychainAccount,
+      llmProvider: rowProvider,
+      llmBaseUrl: rowBaseUrl,
+      llmDefaultModel: rowDefaultModel,
+    };
+  }
+
+  if (!isKeylessLocalLlmProviderRow) {
+    return null;
+  }
 
   return {
-    apiKey: keychain.apiKey,
-    connectionMethod: row?.connectionMethod ?? "api_key",
-    verifiedAt: row?.verifiedAt ?? null,
-    keychainAccount: keychain.keychainAccount,
+    apiKey: "",
+    connectionMethod: rowData?.connectionMethod ?? "api_key",
+    verifiedAt: rowData?.verifiedAt ?? null,
+    keychainAccount: rowKeychainAccount ?? "",
+    llmProvider: rowProvider,
+    llmBaseUrl: rowBaseUrl,
+    llmDefaultModel: rowDefaultModel,
   };
 }
 
@@ -70,6 +220,57 @@ async function localCredentialForStatus(
   } catch {
     return null;
   }
+}
+
+async function activeLlmProviderForStatus(): Promise<LlmProviderType> {
+  if (!env.IS_LOCAL_MODE) return "openrouter";
+
+  try {
+    const active = await convex.query(internal.localCredentials.getInternal, {
+      service: "llm",
+    });
+    const activeProvider = (active as { llmProvider?: unknown } | null)
+      ?.llmProvider;
+    if (isLlmProviderType(activeProvider)) return activeProvider;
+  } catch {
+    // Convex functions may be one push behind during local development. Fall
+    // back instead of making every backend status/settings route return 500.
+  }
+
+  const legacy = await localCredentialForStatus("openrouter");
+  if (legacy?.llmProvider) return legacy.llmProvider;
+  return "openrouter";
+}
+
+async function localCredentialForLlmProvider(
+  provider: LlmProviderType,
+): Promise<Awaited<ReturnType<typeof localCredential>>> {
+  const direct = await localCredentialForStatus(llmProviderService(provider));
+  if (direct && (!direct.llmProvider || direct.llmProvider === provider)) {
+    return direct;
+  }
+
+  if (provider !== "openrouter") {
+    const legacy = await localCredentialForStatus("openrouter");
+    if (legacy?.llmProvider === provider) return legacy;
+  }
+
+  return null;
+}
+
+export async function setActiveLocalLlmProvider(
+  provider: LlmProviderType,
+): Promise<void> {
+  if (!env.IS_LOCAL_MODE) {
+    throw new Error("Local credential storage is disabled when PROD=1.");
+  }
+
+  await convex.mutation(internal.localCredentials.upsertInternal, {
+    service: "llm",
+    connectionMethod: "api_key",
+    verifiedAt: Date.now(),
+    llmProvider: provider,
+  });
 }
 
 export async function resolveCredential(
@@ -86,14 +287,55 @@ export async function resolveCredential(
   return null;
 }
 
+export async function getLlmProviderConfig(): Promise<LlmProviderConfig | null> {
+  if (env.IS_LOCAL_MODE) {
+    const provider = await activeLlmProviderForStatus();
+    const local = await localCredentialForLlmProvider(provider);
+    if (!local) return null;
+
+    return normalizeLlmProviderInput(
+      {
+        provider,
+        apiKey: local.apiKey,
+        baseUrl:
+          local.llmBaseUrl ?? defaultBaseUrlForLlmProvider(provider),
+        defaultModel:
+          local.llmDefaultModel || defaultModelForLlmProvider(provider),
+      },
+      "local",
+    );
+  }
+
+  const apiKey = envCredential("openrouter");
+  if (!apiKey) return null;
+  return normalizeLlmProviderInput(
+    {
+      provider: "openrouter",
+      apiKey,
+      baseUrl: process.env.OPENROUTER_BASE_URL,
+      defaultModel: env.SCHEMA_INFERENCE_MODEL,
+    },
+    "env",
+  );
+}
+
+export async function requireLlmProviderConfig(): Promise<LlmProviderConfig> {
+  const config = await getLlmProviderConfig();
+  if (!config) {
+    throw new Error("LLM provider is not configured. Complete local setup first.");
+  }
+  return config;
+}
+
 export async function getOpenRouterApiKey(): Promise<string | undefined> {
-  return (await resolveCredential("openrouter"))?.apiKey;
+  const config = await getLlmProviderConfig();
+  return config?.provider === "openrouter" ? config.apiKey : undefined;
 }
 
 export async function requireOpenRouterApiKey(): Promise<string> {
   const apiKey = await getOpenRouterApiKey();
   if (!apiKey) {
-    throw new Error("OpenRouter is not configured. Complete local setup first.");
+    throw new Error("OpenRouter is not configured as the current LLM provider.");
   }
   return apiKey;
 }
@@ -140,7 +382,24 @@ export async function requireLocalSetupComplete(): Promise<void> {
 export async function getLocalSetupStatus(): Promise<LocalSetupStatus> {
   if (!env.IS_LOCAL_MODE) {
     const tinyfish = envCredential("tinyfish");
-    const openrouter = envCredential("openrouter");
+    const llmConfig = await getLlmProviderConfig();
+    const llm: ServiceSetupStatus = llmConfig
+      ? {
+          configured: true,
+          source: llmConfig.source,
+          connectionMethod: "api_key",
+          verifiedAt: null,
+          provider: llmConfig.provider,
+          providerLabel: llmProviderLabel(llmConfig.provider),
+          baseUrl: llmConfig.baseUrl,
+          defaultModel: llmConfig.defaultModel,
+        }
+      : {
+          configured: false,
+          source: null,
+          connectionMethod: null,
+          verifiedAt: null,
+        };
     return {
       mode: "production",
       required: false,
@@ -152,18 +411,13 @@ export async function getLocalSetupStatus(): Promise<LocalSetupStatus> {
           connectionMethod: tinyfish ? "api_key" : null,
           verifiedAt: null,
         },
-        openrouter: {
-          configured: !!openrouter,
-          source: openrouter ? "env" : null,
-          connectionMethod: openrouter ? "api_key" : null,
-          verifiedAt: null,
-        },
+        llm,
+        openrouter: llm,
       },
     };
   }
 
   const tinyfishLocal = await localCredentialForStatus("tinyfish");
-  const openrouterLocal = await localCredentialForStatus("openrouter");
 
   const tinyfish: ServiceSetupStatus = tinyfishLocal
     ? {
@@ -179,25 +433,50 @@ export async function getLocalSetupStatus(): Promise<LocalSetupStatus> {
         verifiedAt: null,
       };
 
-  const openrouter: ServiceSetupStatus = openrouterLocal
-    ? {
-        configured: true,
-        source: "local",
-        connectionMethod: openrouterLocal.connectionMethod,
-        verifiedAt: openrouterLocal.verifiedAt,
-      }
-    : {
-        configured: false,
-        source: null,
-        connectionMethod: null,
-        verifiedAt: null,
-      };
+  const providerStatuses = {} as Record<LlmProviderType, ServiceSetupStatus>;
+  for (const provider of LLM_PROVIDER_TYPES) {
+    const credential = await localCredentialForLlmProvider(provider);
+    providerStatuses[provider] = credential
+      ? {
+          configured: true,
+          source: "local",
+          connectionMethod: credential.connectionMethod,
+          verifiedAt: credential.verifiedAt,
+          provider,
+          providerLabel: llmProviderLabel(provider),
+          baseUrl:
+            credential.llmBaseUrl ?? defaultBaseUrlForLlmProvider(provider),
+          defaultModel:
+            credential.llmDefaultModel || defaultModelForLlmProvider(provider),
+        }
+      : {
+          configured: false,
+          source: null,
+          connectionMethod: null,
+          verifiedAt: null,
+          provider,
+          providerLabel: llmProviderLabel(provider),
+          baseUrl: defaultBaseUrlForLlmProvider(provider),
+          defaultModel: defaultModelForLlmProvider(provider),
+        };
+  }
+
+  const llmProvider = await activeLlmProviderForStatus();
+  const llm = providerStatuses[llmProvider];
+  const llmModelRolesConfigured = llm.configured
+    ? await localLlmModelRolesConfigured(llmProvider)
+    : false;
 
   return {
     mode: "local",
     required: true,
-    complete: tinyfish.configured && openrouter.configured,
-    services: { tinyfish, openrouter },
+    complete: tinyfish.configured && llm.configured && llmModelRolesConfigured,
+    services: {
+      tinyfish,
+      llm,
+      llmProviders: providerStatuses,
+      openrouter: providerStatuses.openrouter,
+    },
   };
 }
 
@@ -215,7 +494,48 @@ export async function saveLocalCredential(
     keychainAccount,
     connectionMethod,
     verifiedAt: Date.now(),
+    ...(service === "openrouter"
+      ? {
+          llmProvider: "openrouter" as const,
+          llmBaseUrl: defaultBaseUrlForLlmProvider("openrouter"),
+          llmDefaultModel: defaultModelForLlmProvider("openrouter"),
+        }
+      : {}),
   });
+
+  if (service === "openrouter") {
+    await setActiveLocalLlmProvider("openrouter");
+  }
+}
+
+export async function saveLocalLlmProviderConfig(
+  input: LlmProviderInput,
+  connectionMethod: ConnectionMethod = "api_key",
+): Promise<LlmProviderConfig> {
+  if (!env.IS_LOCAL_MODE) {
+    throw new Error("Local credential storage is disabled when PROD=1.");
+  }
+
+  const config = normalizeLlmProviderInput(input, "local");
+  const keychainAccount = config.apiKey
+    ? (
+        await setKeychainCredential(
+          llmProviderService(config.provider),
+          config.apiKey,
+        )
+      ).keychainAccount
+    : undefined;
+  await convex.mutation(internal.localCredentials.upsertInternal, {
+    service: llmProviderService(config.provider),
+    keychainAccount: keychainAccount ?? null,
+    connectionMethod,
+    verifiedAt: Date.now(),
+    llmProvider: config.provider,
+    llmBaseUrl: config.baseUrl,
+    llmDefaultModel: config.defaultModel,
+  });
+  await setActiveLocalLlmProvider(config.provider);
+  return config;
 }
 
 export async function clearLegacyPlaintextLocalCredentials(): Promise<void> {

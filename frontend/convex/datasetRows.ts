@@ -82,6 +82,7 @@ export const insert = internalMutation({
     datasetId: v.id("datasets"),
     data: v.record(v.string(), v.any()),
     sources: v.optional(v.array(v.string())),
+    cellSources: v.optional(v.record(v.string(), v.array(v.string()))),
     rowSummary: v.optional(v.string()),
     howFound: v.optional(v.string()),
   },
@@ -167,6 +168,7 @@ export const update = internalMutation({
     expectedDatasetId: v.id("datasets"),
     data: v.record(v.string(), v.any()),
     sources: v.optional(v.array(v.string())),
+    cellSources: v.optional(v.record(v.string(), v.array(v.string()))),
     rowSummary: v.optional(v.string()),
     howFound: v.optional(v.string()),
   },
@@ -199,6 +201,7 @@ export const update = internalMutation({
       updateStatus: undefined,
     };
     if (args.sources !== undefined) patch.sources = args.sources;
+    if (args.cellSources !== undefined) patch.cellSources = args.cellSources;
     if (args.rowSummary !== undefined) patch.rowSummary = args.rowSummary;
     if (args.howFound !== undefined) patch.howFound = args.howFound;
     await ctx.db.patch(args.id, patch);

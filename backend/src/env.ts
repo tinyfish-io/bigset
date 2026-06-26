@@ -1,4 +1,5 @@
 import { config as loadDotenv } from "dotenv";
+import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 loadDotenv({ path: fileURLToPath(new URL("../../.env", import.meta.url)) });
@@ -18,10 +19,17 @@ function numberFromEnv(name: string, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function positiveIntegerFromEnv(name: string, fallback: number): number {
+  const parsed = numberFromEnv(name, fallback);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 export const env = {
   PROD: process.env.PROD,
   IS_PROD: process.env.PROD === "1",
   IS_LOCAL_MODE: process.env.PROD !== "1",
+  IS_DOCKER:
+    process.env.BIGSET_RUNNING_IN_DOCKER === "1" || existsSync("/.dockerenv"),
   CLIENT_ORIGIN: process.env.CLIENT_ORIGIN || "http://localhost:3500",
   CONVEX_URL: required("CONVEX_URL"),
   PORT: numberFromEnv("PORT", 3501),
@@ -45,13 +53,25 @@ export const env = {
   LOCAL_KEYCHAIN_TIMEOUT_MS: numberFromEnv("LOCAL_KEYCHAIN_TIMEOUT_MS", 5_000),
 
   // Default models — used when a user has not saved a preference.
-  // Each must be a valid OpenRouter model slug.
+  // In production these are still interpreted as OpenRouter model slugs; in
+  // local mode the selected LLM provider's default model is used first.
   SCHEMA_INFERENCE_MODEL:
     process.env.SCHEMA_INFERENCE_MODEL ?? "anthropic/claude-sonnet-4.6",
   POPULATE_ORCHESTRATOR_MODEL:
     process.env.POPULATE_ORCHESTRATOR_MODEL ?? "qwen/qwen3.7-max",
+  POPULATE_ORCHESTRATOR_MAX_STEPS: positiveIntegerFromEnv(
+    "POPULATE_ORCHESTRATOR_MAX_STEPS",
+    80,
+  ),
   INVESTIGATE_SUBAGENT_MODEL:
     process.env.INVESTIGATE_SUBAGENT_MODEL ?? "qwen/qwen3.7-max",
+  EXTRACTOR_BUILDER_MODEL:
+    process.env.EXTRACTOR_BUILDER_MODEL ?? "anthropic/claude-sonnet-4.6",
+  ROW_EXTRACTOR_CONCURRENCY: numberFromEnv("ROW_EXTRACTOR_CONCURRENCY", 5),
+  ROW_EXTRACTOR_BROWSER_ATTEMPTS: numberFromEnv(
+    "ROW_EXTRACTOR_BROWSER_ATTEMPTS",
+    2,
+  ),
 
   // Resend (transactional email). Optional — when RESEND_API_KEY is unset
   // the email module no-ops with a log line, so local dev works without

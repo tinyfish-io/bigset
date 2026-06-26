@@ -6,7 +6,13 @@ import Link from "next/link";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { EVENTS, track } from "@/lib/analytics";
-import { inferSchema, type InferredColumn } from "@/lib/backend";
+import {
+  finalizeSchema,
+  inferSchema,
+  type CodificationProfile,
+  type InferredCodificationProfile,
+  type InferredColumn,
+} from "@/lib/backend";
 import { useAppAuth, useAppConvexAuth } from "@/lib/app-auth";
 import {
   REFRESH_CADENCE_OPTIONS,
@@ -48,10 +54,28 @@ const DEFAULT_MAX_ROW_COUNT = 100;
 function mapBackendColumn(col: InferredColumn, index: number): ProposedColumn {
   return {
     id: String(index + 1),
-    name: col.display_name,
+    name: col.name,
     type: BACKEND_TYPE_MAP[col.type],
     description: col.retrieval_hint,
     isPrimaryKey: col.is_primary_key,
+  };
+}
+
+function mapCodificationProfile(
+  profile: InferredCodificationProfile,
+): CodificationProfile {
+  return {
+    version: 1,
+    mode: profile.mode,
+    reason: profile.reason,
+    primaryKeyShape: profile.primary_key_shape,
+    families: profile.families.map((family) => ({
+      label: family.label,
+      sourceHost: family.source_host,
+      sourcePathPrefix: family.source_path_prefix,
+      urlTemplate: family.url_template,
+      primaryKeyRegex: family.primary_key_regex,
+    })),
   };
 }
 
@@ -187,19 +211,50 @@ export default function NewDatasetPage() {
     setError(null);
     let datasetId: string;
     try {
+      const token = await getToken();
+      if (!token) throw new Error("Not authenticated");
+
+      const finalizedSchema = await finalizeSchema(
+        {
+          prompt: prompt.trim(),
+          datasetName,
+          retrievalStrategy: retrievalStrategy ?? undefined,
+          sourceHint: sourceHint || undefined,
+          columns: columns.map((column) => ({
+            name: column.name,
+            type: column.type,
+            description: column.description || undefined,
+            isPrimaryKey: column.isPrimaryKey || undefined,
+          })),
+        },
+        token,
+      );
+      const finalizedColumns = columns.map((column, index) => {
+        const finalizedColumn = finalizedSchema.columns[index];
+        if (!finalizedColumn) {
+          throw new Error("Schema finalization returned an incomplete schema.");
+        }
+
+        return {
+          name: column.name,
+          type: column.type,
+          description: column.description || undefined,
+          isPrimaryKey: finalizedColumn.is_primary_key || undefined,
+          nullable: finalizedColumn.nullable,
+          validationRegex: finalizedColumn.validation_regex || undefined,
+          normalizationHint: finalizedColumn.normalization_hint || undefined,
+        };
+      });
+
       datasetId = await createDataset({
         name: datasetName,
         description: prompt,
         refreshCadence,
         maxRowCount,
-        columns: columns.map((c) => ({
-          name: c.name,
-          type: c.type,
-          description: c.description || undefined,
-          isPrimaryKey: c.isPrimaryKey || undefined,
-        })),
-        retrievalStrategy: retrievalStrategy ?? undefined,
-        sourceHint: sourceHint || undefined,
+        columns: finalizedColumns,
+        retrievalStrategy: finalizedSchema.retrieval_strategy ?? retrievalStrategy ?? undefined,
+        sourceHint: finalizedSchema.source_hint || sourceHint || undefined,
+        codificationProfile: mapCodificationProfile(finalizedSchema.codification_profile),
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to create dataset";

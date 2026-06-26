@@ -65,6 +65,38 @@ export default defineSchema({
         ),
         description: v.optional(v.string()),
         isPrimaryKey: v.optional(v.boolean()),
+        nullable: v.optional(v.boolean()),
+        validationRegex: v.optional(v.string()),
+        normalizationHint: v.optional(v.string()),
+      })
+    ),
+    codificationProfile: v.optional(
+      v.object({
+        version: v.literal(1),
+        mode: v.union(
+          v.literal("disabled"),
+          v.literal("candidate"),
+          v.literal("required"),
+          v.literal("unknown")
+        ),
+        reason: v.string(),
+        primaryKeyShape: v.union(
+          v.literal("url"),
+          v.literal("slug"),
+          v.literal("name"),
+          v.literal("id"),
+          v.literal("mixed"),
+          v.literal("unknown")
+        ),
+        families: v.array(
+          v.object({
+            label: v.string(),
+            sourceHost: v.optional(v.string()),
+            sourcePathPrefix: v.optional(v.string()),
+            urlTemplate: v.optional(v.string()),
+            primaryKeyRegex: v.optional(v.string()),
+          })
+        ),
       })
     ),
     retrievalStrategy: v.optional(
@@ -85,6 +117,7 @@ export default defineSchema({
     datasetId: v.id("datasets"),
     data: v.record(v.string(), v.any()),
     sources: v.optional(v.array(v.string())),
+    cellSources: v.optional(v.record(v.string(), v.array(v.string()))),
     rowSummary: v.optional(v.string()),
     howFound: v.optional(v.string()),
     updateStatus: v.optional(v.literal("pending")),
@@ -135,17 +168,100 @@ export default defineSchema({
 
   modelConfig: defineTable({
     userId: v.string(),
+    provider: v.optional(
+      v.union(
+        v.literal("openrouter"),
+        v.literal("openai"),
+        v.literal("anthropic"),
+        v.literal("google"),
+        v.literal("xai"),
+        v.literal("deepseek"),
+        v.literal("qwen"),
+        v.literal("mistral"),
+        v.literal("groq"),
+        v.literal("togetherai"),
+        v.literal("deepinfra"),
+        v.literal("fireworks"),
+        v.literal("huggingface"),
+        v.literal("ollama"),
+        v.literal("lmstudio"),
+        v.literal("custom")
+      )
+    ),
     schemaInference: v.optional(v.string()),
     populateOrchestrator: v.optional(v.string()),
     investigateSubagent: v.optional(v.string()),
-  }).index("by_user", ["userId"]),
+    extractorBuilder: v.optional(v.string()),
+    rowExtractorConcurrency: v.optional(v.number()),
+    rowExtractorBrowserAttempts: v.optional(v.number()),
+  })
+    .index("by_user", ["userId"])
+    .index("by_user_provider", ["userId", "provider"]),
+
+  datasetExtractors: defineTable({
+    datasetId: v.id("datasets"),
+    siteKey: v.string(),
+    columnsHash: v.string(),
+    script: v.string(),
+    status: v.union(v.literal("active"), v.literal("failed")),
+    model: v.optional(v.string()),
+    probeSummary: v.optional(v.string()),
+    lastError: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_dataset_site", ["datasetId", "siteKey"]),
 
   localCredentials: defineTable({
-    service: v.union(v.literal("tinyfish"), v.literal("openrouter")),
+    service: v.union(
+      v.literal("tinyfish"),
+      v.literal("llm"),
+      v.literal("openrouter"),
+      v.literal("openai"),
+      v.literal("anthropic"),
+      v.literal("google"),
+      v.literal("xai"),
+      v.literal("deepseek"),
+      v.literal("qwen"),
+      v.literal("mistral"),
+      v.literal("groq"),
+      v.literal("togetherai"),
+      v.literal("deepinfra"),
+      v.literal("fireworks"),
+      v.literal("huggingface"),
+      v.literal("ollama"),
+      v.literal("lmstudio"),
+      v.literal("custom")
+    ),
     keychainAccount: v.optional(v.string()),
     connectionMethod: v.union(v.literal("api_key"), v.literal("oauth")),
     verifiedAt: v.number(),
     updatedAt: v.number(),
+    // For service:"llm" this stores the active local LLM provider.
+    // Provider-specific rows store each provider's keychain account and
+    // optional custom base URL so users can switch providers without
+    // re-entering keys.
+    llmProvider: v.optional(
+      v.union(
+        v.literal("openrouter"),
+        v.literal("openai"),
+        v.literal("anthropic"),
+        v.literal("google"),
+        v.literal("xai"),
+        v.literal("deepseek"),
+        v.literal("qwen"),
+        v.literal("mistral"),
+        v.literal("groq"),
+        v.literal("togetherai"),
+        v.literal("deepinfra"),
+        v.literal("fireworks"),
+        v.literal("huggingface"),
+        v.literal("ollama"),
+        v.literal("lmstudio"),
+        v.literal("custom")
+      )
+    ),
+    llmBaseUrl: v.optional(v.string()),
+    llmDefaultModel: v.optional(v.string()),
     // Legacy only: accepted so the migration can deploy, then cleared by the
     // backend startup purge. New code never writes this field.
     apiKey: v.optional(v.string()),

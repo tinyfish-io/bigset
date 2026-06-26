@@ -1,5 +1,11 @@
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
+import {
+  datasetAbortError,
+  getSignal,
+  isAbortLikeError,
+  throwIfDatasetRunAborted,
+} from "../../abort-registry.js";
 import { FETCH_TIMEOUT_MS } from "../../fetch-timeout.js";
 import { getTinyFishApiKey, tinyFishHeaders } from "../../local-credentials.js";
 
@@ -9,7 +15,147 @@ const searchResultSchema = z.object({
   url: z.string(),
 });
 
-export const searchWebTool = createTool({
+const FETCH_FAILURE_CACHE_TTL_MS = 10 * 60 * 1000;
+const recentFetchFailures = new Map<
+  string,
+  { at: number; code: string; status?: string; message: string }
+>();
+
+interface WebToolOptions {
+  datasetId?: string;
+  abortSignal?: AbortSignal;
+}
+
+function abortSignalMessage(signal: AbortSignal): string {
+  const reason = signal.reason;
+  if (reason instanceof Error) return reason.message;
+  return reason ? String(reason) : "Run was stopped";
+}
+
+function throwIfAbortSignalAborted(signal: AbortSignal | undefined): void {
+  if (!signal?.aborted) return;
+  const reason = signal.reason;
+  if (reason instanceof Error) throw reason;
+  throw new DOMException(abortSignalMessage(signal), "AbortError");
+}
+
+function throwIfStopped(
+  datasetId: string | undefined,
+  abortSignal: AbortSignal | undefined,
+): void {
+  if (datasetId) throwIfDatasetRunAborted(datasetId);
+  throwIfAbortSignalAborted(abortSignal);
+}
+
+function timeoutSignalForDataset(
+  datasetId: string | undefined,
+  abortSignal: AbortSignal | undefined,
+): {
+  signal: AbortSignal;
+  cleanup: () => void;
+  timedOut: () => boolean;
+} {
+  throwIfStopped(datasetId, abortSignal);
+
+  const controller = new AbortController();
+  const runSignal = datasetId ? getSignal(datasetId) : undefined;
+  const abortListeners: Array<{ signal: AbortSignal; listener: () => void }> = [];
+  let timedOut = false;
+
+  const addAbortListener = (signal: AbortSignal | undefined) => {
+    if (!signal) return;
+    const listener = () => {
+      controller.abort(signal.reason ?? datasetAbortError());
+    };
+    signal.addEventListener("abort", listener, { once: true });
+    abortListeners.push({ signal, listener });
+    if (signal.aborted) listener();
+  };
+  addAbortListener(runSignal);
+  addAbortListener(abortSignal);
+
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort(new DOMException("Operation timed out", "TimeoutError"));
+  }, FETCH_TIMEOUT_MS);
+
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      clearTimeout(timeout);
+      for (const { signal, listener } of abortListeners) {
+        signal.removeEventListener("abort", listener);
+      }
+    },
+    timedOut: () => timedOut,
+  };
+}
+
+function throwIfStoppedAbort(
+  err: unknown,
+  datasetId: string | undefined,
+  abortSignal: AbortSignal | undefined,
+): void {
+  const abortLike =
+    isAbortLikeError(err) ||
+    (err instanceof Error && err.name === "TimeoutError");
+  if (!abortLike) return;
+  if (datasetId && getSignal(datasetId)?.aborted === true) {
+    throw datasetAbortError();
+  }
+  throwIfAbortSignalAborted(abortSignal);
+}
+
+function cachedFetchFailure(url: string): string | undefined {
+  const cached = recentFetchFailures.get(url);
+  if (!cached) return undefined;
+  if (Date.now() - cached.at > FETCH_FAILURE_CACHE_TTL_MS) {
+    recentFetchFailures.delete(url);
+    return undefined;
+  }
+  console.log(
+    `[fetch_page] Skipping recently failed URL: url=${url} error=${cached.code} status=${cached.status ?? "n/a"}`,
+  );
+  return cached.message;
+}
+
+function rememberFetchFailure(
+  url: string,
+  code: string,
+  status: string | undefined,
+  message: string,
+): void {
+  if (!isCacheableFetchFailure(code, status)) return;
+  recentFetchFailures.set(url, {
+    at: Date.now(),
+    code,
+    status,
+    message,
+  });
+}
+
+function isCacheableFetchFailure(code: string, status: string | undefined): boolean {
+  if (code === "page_not_found" || code === "bot_blocked") return true;
+  if (code !== "target_http_error" || !status) return false;
+  const statusCode = Number(status);
+  return Number.isFinite(statusCode) && statusCode >= 400 && statusCode < 500;
+}
+
+function fetchPageErrorMessage(code: string, status: string | undefined): string {
+  const hints: Record<string, string> = {
+    bot_blocked: "This site blocks automated access. Use the search snippet data instead.",
+    timeout: "Page took too long to load. Try a different URL.",
+    target_unreachable: "Could not connect to this site. Try a different URL.",
+    page_not_found: "Page not found (404). The URL may be outdated. Try a different one.",
+    target_http_error: `Site returned HTTP ${status ?? "error"}. Try a different URL.`,
+  };
+  return hints[code] ?? `Fetch failed: ${code}. Try a different URL.`;
+}
+
+function buildSearchWebTool(options: WebToolOptions = {}) {
+  const datasetId = options.datasetId;
+  const abortSignal = options.abortSignal;
+  return createTool({
   id: "search_web",
   description:
     'Search the web for information. Returns a list of results with titles, snippets, and URLs. Call with: {"query": "your search terms"}',
@@ -21,8 +167,10 @@ export const searchWebTool = createTool({
     error: z.string().optional(),
   }),
   execute: async ({ query }) => {
-    if (!query?.trim())
+    query = query?.trim();
+    if (!query)
       return { error: "query is required and cannot be empty." };
+    throwIfStopped(datasetId, abortSignal);
 
     const apiKey = await getTinyFishApiKey();
     if (!apiKey)
@@ -31,14 +179,13 @@ export const searchWebTool = createTool({
     const url = `https://api.search.tinyfish.ai?query=${encodeURIComponent(query)}`;
     console.log(`[search_web] Searching: "${query}"`);
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    const request = timeoutSignalForDataset(datasetId, abortSignal);
     try {
       const res = await fetch(url, {
         headers: tinyFishHeaders(apiKey),
-        signal: controller.signal,
+        signal: request.signal,
       });
-      clearTimeout(timeout);
+      throwIfStopped(datasetId, abortSignal);
 
       if (!res.ok) {
         const body = await res.text();
@@ -51,6 +198,7 @@ export const searchWebTool = createTool({
       }
 
       const data = await res.json();
+      throwIfStopped(datasetId, abortSignal);
       const results = (data.results ?? []).map((r: Record<string, unknown>) => ({
         title: r.title as string,
         snippet: r.snippet as string,
@@ -62,17 +210,26 @@ export const searchWebTool = createTool({
         return { results: [], error: "No results found for this query. Try a broader search or use synthetic data." };
       return { results };
     } catch (err) {
-      clearTimeout(timeout);
-      if (err instanceof Error && err.name === "AbortError")
+      throwIfStoppedAbort(err, datasetId, abortSignal);
+      if (
+        request.timedOut() ||
+        (err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError"))
+      )
         return { error: "Search timed out. Skip web search and use synthetic data." };
       const msg = err instanceof Error ? err.message : String(err);
       console.error(`[search_web] Failed:`, msg);
       return { error: `Search failed: ${msg}. Skip web search and use synthetic data.` };
+    } finally {
+      request.cleanup();
     }
   },
-});
+  });
+}
 
-export const fetchPageTool = createTool({
+function buildFetchPageTool(options: WebToolOptions = {}) {
+  const datasetId = options.datasetId;
+  const abortSignal = options.abortSignal;
+  return createTool({
   id: "fetch_page",
   description:
     'Fetch a web page and extract its content as clean markdown text. Call with: {"url": "https://example.com/page"}',
@@ -85,19 +242,23 @@ export const fetchPageTool = createTool({
     error: z.string().optional(),
   }),
   execute: async ({ url: targetUrl }) => {
-    if (!targetUrl?.trim())
+    targetUrl = targetUrl?.trim();
+    if (!targetUrl)
       return { error: "url is required and cannot be empty." };
     if (!targetUrl.startsWith("http://") && !targetUrl.startsWith("https://"))
       return { error: `Invalid URL "${targetUrl}". Must start with http:// or https://.` };
+    throwIfStopped(datasetId, abortSignal);
 
     const apiKey = await getTinyFishApiKey();
     if (!apiKey)
       return { error: "TINYFISH_API_KEY is not configured. Page fetch is unavailable — use data from search snippets instead." };
 
+    const cachedFailure = cachedFetchFailure(targetUrl);
+    if (cachedFailure) return { error: cachedFailure };
+
     console.log(`[fetch_page] Fetching: ${targetUrl}`);
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    const request = timeoutSignalForDataset(datasetId, abortSignal);
     try {
       const res = await fetch("https://api.fetch.tinyfish.ai", {
         method: "POST",
@@ -106,9 +267,9 @@ export const fetchPageTool = createTool({
           ...tinyFishHeaders(apiKey),
         },
         body: JSON.stringify({ urls: [targetUrl], format: "markdown" }),
-        signal: controller.signal,
+        signal: request.signal,
       });
-      clearTimeout(timeout);
+      throwIfStopped(datasetId, abortSignal);
 
       if (!res.ok) {
         const body = await res.text();
@@ -121,18 +282,18 @@ export const fetchPageTool = createTool({
       }
 
       const data = await res.json();
+      throwIfStopped(datasetId, abortSignal);
 
       if (data.errors?.length > 0) {
         const err = data.errors[0];
-        console.log(`[fetch_page] Failed: ${err.error}`);
-        const hints: Record<string, string> = {
-          bot_blocked: "This site blocks automated access. Use the search snippet data instead.",
-          timeout: "Page took too long to load. Try a different URL.",
-          target_unreachable: "Could not connect to this site. Try a different URL.",
-          page_not_found: "Page not found (404). The URL may be outdated. Try a different one.",
-          target_http_error: `Site returned HTTP ${err.status ?? "error"}. Try a different URL.`,
-        };
-        return { error: hints[err.error] ?? `Fetch failed: ${err.error}. Try a different URL.` };
+        const code = String(err.error ?? "unknown_error");
+        const status = err.status === undefined ? undefined : String(err.status);
+        const message = fetchPageErrorMessage(code, status);
+        console.log(
+          `[fetch_page] Failed: url=${targetUrl} error=${code} status=${status ?? "n/a"}`,
+        );
+        rememberFetchFailure(targetUrl, code, status, message);
+        return { error: message };
       }
 
       const page = data.results?.[0];
@@ -151,12 +312,28 @@ export const fetchPageTool = createTool({
         text,
       };
     } catch (err) {
-      clearTimeout(timeout);
-      if (err instanceof Error && err.name === "AbortError")
+      throwIfStoppedAbort(err, datasetId, abortSignal);
+      if (
+        request.timedOut() ||
+        (err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError"))
+      )
         return { error: "Page fetch timed out. Try a different URL or use search snippet data." };
       const msg = err instanceof Error ? err.message : String(err);
       console.error(`[fetch_page] Failed:`, msg);
       return { error: `Fetch failed: ${msg}. Use data from search snippets instead.` };
+    } finally {
+      request.cleanup();
     }
   },
-});
+  });
+}
+
+export function buildWebTools(options: WebToolOptions = {}) {
+  return {
+    search_web: buildSearchWebTool(options),
+    fetch_page: buildFetchPageTool(options),
+  };
+}
+
+export const searchWebTool = buildSearchWebTool();
+export const fetchPageTool = buildFetchPageTool();

@@ -35,6 +35,35 @@ export function getSignal(datasetId: string): AbortSignal | undefined {
   return controllers.get(datasetId)?.signal;
 }
 
+export function datasetAbortError(): DOMException {
+  return new DOMException("Run was stopped", "AbortError");
+}
+
+export function isDatasetRunAborted(datasetId: string): boolean {
+  return getSignal(datasetId)?.aborted === true;
+}
+
+export function throwIfDatasetRunAborted(datasetId: string): void {
+  if (isDatasetRunAborted(datasetId)) {
+    throw datasetAbortError();
+  }
+}
+
+export function isAbortLikeError(err: unknown): boolean {
+  if (err instanceof DOMException && err.name === "AbortError") return true;
+  return err instanceof Error && err.name === "AbortError";
+}
+
+/** Number of dataset runs currently active in this process. */
+export function activeDatasetRunCount(): number {
+  return controllers.size;
+}
+
+/** True when any dataset run is currently active in this process. */
+export function hasActiveDatasetRuns(): boolean {
+  return controllers.size > 0;
+}
+
 /**
  * Fire the abort signal for a dataset's active run.
  * Does NOT remove the entry — deregisterDataset() handles that.

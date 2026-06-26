@@ -1,15 +1,25 @@
 import { createStep, createWorkflow } from "@mastra/core/workflows";
 import { z } from "zod";
 import { generateText } from "ai";
-import { createOpenRouter } from "@openrouter/ai-sdk-provider";
-import { datasetContextSchema, populateColumnSchema } from "../../pipeline/populate.js";
+import {
+  codificationProfileSchema,
+  datasetContextSchema,
+  populateColumnSchema,
+} from "../../pipeline/populate.js";
 import { convex, internal } from "../../convex.js";
 import { DEFAULT_MODEL_IDS } from "../../config/models.js";
-import { requireOpenRouterApiKey } from "../../local-credentials.js";
+import { createLanguageModel } from "../../config/llm.js";
+import { AGENT_MAX_OUTPUT_TOKENS } from "../../config/agent-output-tokens.js";
+import { requireLlmProviderConfig } from "../../local-credentials.js";
 import { buildPopulateAgent } from "../agents/populate.js";
+import {
+  clearQueuedSubagents,
+  drainQueuedSubagents,
+} from "../tools/investigate-tool.js";
 import { RunMetrics } from "../run-metrics.js";
 import { saveRunMetrics } from "../save-run-metrics.js";
 import { getSignal } from "../../abort-registry.js";
+import { env } from "../../env.js";
 
 /**
  * Server-set auth/run context threaded through every step.
@@ -37,6 +47,9 @@ export const authContextSchema = z.object({
     schemaInference: z.string().min(1),
     populateOrchestrator: z.string().min(1),
     investigateSubagent: z.string().min(1),
+    extractorBuilder: z.string().min(1),
+    rowExtractorConcurrency: z.number().int().min(1).max(100).default(5),
+    rowExtractorBrowserAttempts: z.number().int().min(1).max(10).default(2),
   }),
   isBenchmark: z.boolean().optional(),
 });
@@ -85,7 +98,7 @@ const enumerateStep = createStep({
     const columnsDesc = inputData.columns
       .map(
         (c) =>
-          `- "${c.name}" (${c.type})${c.isPrimaryKey ? " [PK]" : ""}${c.description ? `: ${c.description}` : ""}`,
+          `- "${c.name}" (${c.type})${c.isPrimaryKey ? " [PK]" : ""}${c.nullable === false ? " [REQUIRED]" : c.nullable === true ? " [OPTIONAL]" : ""}${c.validationRegex ? ` validation_regex=${JSON.stringify(c.validationRegex)}` : ""}${c.normalizationHint ? ` normalization_hint=${JSON.stringify(c.normalizationHint)}` : ""}${c.description ? `: ${c.description}` : ""}`,
       )
       .join("\n");
 
@@ -109,15 +122,11 @@ Respond with EXACTLY one word: scraper or search`;
 
     let classification: "scraper" | "search" = "search";
     try {
-      const apiKey = await requireOpenRouterApiKey();
-      const openrouter = createOpenRouter({
-        apiKey,
-        baseURL: process.env.OPENROUTER_BASE_URL,
-      });
+      const llmConfig = await requireLlmProviderConfig();
       const modelSlug =
-        inputData.authContext?.modelConfig?.schemaInference ?? DEFAULT_MODEL_IDS.SCHEMA_INFERENCE;
+        inputData.authContext?.modelConfig?.schemaInference ?? llmConfig.defaultModel ?? DEFAULT_MODEL_IDS.SCHEMA_INFERENCE;
       const result = await generateText({
-        model: openrouter(modelSlug),
+        model: createLanguageModel(llmConfig, modelSlug),
         prompt: classificationPrompt,
         maxOutputTokens: 10,
         abortSignal: getSignal(inputData.datasetId),
@@ -161,6 +170,11 @@ const buildPromptOutputSchema = z.object({
   authContext: authContextSchema,
   columns: z.array(populateColumnSchema),
   maxRowCount: z.number().int().min(1),
+  datasetName: z.string(),
+  description: z.string(),
+  retrievalStrategy: z.enum(["search_fetch", "browser", "hybrid"]).optional(),
+  sourceHint: z.string().optional(),
+  codificationProfile: z.optional(codificationProfileSchema),
 });
 
 const buildPromptStep = createStep({
@@ -172,13 +186,13 @@ const buildPromptStep = createStep({
     const columnsDesc = inputData.columns
       .map(
         (c) =>
-          `- "${c.name}" (${c.type})${c.isPrimaryKey ? " [PRIMARY KEY]" : ""}${c.description ? `: ${c.description}` : ""}`,
+          `- "${c.name}" (${c.type})${c.isPrimaryKey ? " [PRIMARY KEY]" : ""}${c.nullable === false ? " [REQUIRED]" : c.nullable === true ? " [OPTIONAL]" : ""}${c.validationRegex ? ` validation_regex=${JSON.stringify(c.validationRegex)}` : ""}${c.normalizationHint ? ` normalization_hint=${JSON.stringify(c.normalizationHint)}` : ""}${c.description ? `: ${c.description}` : ""}`,
       )
       .join("\n");
 
     const pkNote =
       pkColumns.length > 0
-        ? `\nPrimary key column(s): ${pkColumns.map((c) => `"${c.name}"`).join(", ")}. When calling run_subagent, you MUST pass these values in the primary_keys field. The subagent will research and fill in the remaining columns.`
+        ? `\nPrimary key column(s): ${pkColumns.map((c) => `"${c.name}"`).join(", ")}. When calling run_subagent, you MUST pass these values in the primary_keys field as an array of {"column": "column_name", "value": "value"} entries. The subagent will research and fill in the remaining columns.`
         : "";
 
     let manifestNote = "";
@@ -205,7 +219,9 @@ Data fields to collect:
 ${columnsDesc}${pkNote}${manifestNote}${strategyNote}
 
 Search the web broadly to find real entities that fit this dataset topic.
-For each lead you find, call run_subagent with the primary key values and any context/URLs you have found.
+When you find multiple leads, call queue_subagents with a batch of candidates so discovery can continue while row workers run in the background. Use run_subagent only when you need immediate feedback for one lead.
+Call drain_subagents before finishing if you want queued feedback; the workflow will also drain queued candidates automatically before completing.
+Example primary_keys format: [{"column": "company_name", "value": "Stripe"}]
 If run_subagent returns ROW_LIMIT_REACHED, stop immediately and do not make any more tool calls.
 Stop the populate run as soon as the dataset reaches ${inputData.maxRowCount} rows.`;
 
@@ -218,6 +234,11 @@ Stop the populate run as soon as the dataset reaches ${inputData.maxRowCount} ro
       authContext: inputData.authContext,
       columns: inputData.columns,
       maxRowCount: inputData.maxRowCount,
+      datasetName: inputData.datasetName,
+      description: inputData.description,
+      retrievalStrategy: inputData.retrievalStrategy,
+      sourceHint: inputData.sourceHint,
+      codificationProfile: inputData.codificationProfile,
     };
   },
 });
@@ -245,21 +266,45 @@ const agentStep = createStep({
     const startedAt = Date.now();
     let status: "success" | "error" = "success";
     let errorMsg: string | undefined;
+    let drainedQueuedSubagents = false;
 
     try {
       const agent = buildPopulateAgent(
         inputData.authorizedDatasetId,
         inputData.authContext,
         inputData.columns,
-        await requireOpenRouterApiKey(),
+        await requireLlmProviderConfig(),
         inputData.maxRowCount,
+        {
+          datasetName: inputData.datasetName,
+          description: inputData.description,
+          retrievalStrategy: inputData.retrievalStrategy,
+          sourceHint: inputData.sourceHint,
+          codificationProfile: inputData.codificationProfile,
+        },
         metrics,
       );
       const abortSignal = getSignal(inputData.authorizedDatasetId);
-      const result = await agent.generate(inputData.prompt, { abortSignal, maxSteps: 80 });
+      console.log(
+        `[populate-agent] Running orchestrator with maxSteps=${env.POPULATE_ORCHESTRATOR_MAX_STEPS}`,
+      );
+      const result = await agent.generate(inputData.prompt, {
+        abortSignal,
+        maxSteps: env.POPULATE_ORCHESTRATOR_MAX_STEPS,
+        modelSettings: {
+          maxOutputTokens: AGENT_MAX_OUTPUT_TOKENS.POPULATE_ORCHESTRATOR,
+        },
+      });
       metrics.addOrchestratorResult(result);
       // Use result.toolCalls (flat accumulated list) — same reasoning as investigate-tool.ts.
       metrics.countToolCalls(result.toolCalls ?? []);
+      const queueSummary = await drainQueuedSubagents(inputData.authContext.workflowRunId);
+      drainedQueuedSubagents = true;
+      if (queueSummary.completed > 0) {
+        console.log(
+          `[populate-agent] Drained queued subagents completed=${queueSummary.completed} inserted=${queueSummary.inserted} failed=${queueSummary.failed}`,
+        );
+      }
       return { text: result.text };
     } catch (err) {
       status = "error";
@@ -274,6 +319,9 @@ const agentStep = createStep({
       console.error(`[populate-agent] agent.generate failed: ${errorMsg}`);
       throw err;
     } finally {
+      if (!drainedQueuedSubagents) {
+        await clearQueuedSubagents(inputData.authContext.workflowRunId);
+      }
       const finishedAt = Date.now();
       void saveRunMetrics({
         workflowRunId: inputData.authContext.workflowRunId,

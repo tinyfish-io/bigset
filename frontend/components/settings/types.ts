@@ -16,4 +16,5 @@ export const MODEL_ROLES: ModelRole[] = [
   { key: "schemaInference", label: "Schema Inference", description: "Used to generate dataset schema from natural language" },
   { key: "populateOrchestrator", label: "Populate Orchestrator", description: "Coordinates row population workflow" },
   { key: "investigateSubagent", label: "Investigate Subagent", description: "Researches individual entities" },
+  { key: "extractorBuilder", label: "Extractor Builder", description: "Writes reusable Playwright extractors from browser probes" },
 ];
