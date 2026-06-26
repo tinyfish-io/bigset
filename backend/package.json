@@ -33,6 +33,8 @@
   "overrides": {
     "ws": "^8.21.0",
     "hono": "^4.12.25",
-    "js-cookie": "^3.0.7"
+    "js-cookie": "^3.0.7",
+    "@babel/core": "^7.29.6",
+    "esbuild": "^0.28.1"
   }
 }
