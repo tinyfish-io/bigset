@@ -75,7 +75,10 @@ const updateDetails = useMutation(api.datasets.updateDetails);
       : { datasetId, filter },
   );
 
-  const displayRows = filter === null ? (rows ?? []) : (filteredRows ?? []);
+  const displayRows = useMemo(
+    () => (filter === null ? (rows ?? []) : (filteredRows ?? [])),
+    [filter, rows, filteredRows],
+  );
   const updateRefreshSettings = useMutation(api.datasets.updateRefreshSettings);
   const updateMaxRowCount = useMutation(api.datasets.updateMaxRowCount);
   const usage = useQuery(
@@ -86,6 +89,11 @@ const updateDetails = useMutation(api.datasets.updateDetails);
   const rowIds = useMemo(() => (displayRows ?? []).map((r) => r._id), [displayRows]);
   const selection = useSelection(rowIds);
   const selectedCount = selection.selected.size;
+
+  useEffect(() => {
+    selection.clear();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filter, selection.clear]);
 
   const handlePopulate = useCallback(async () => {
     if (!dataset || populating || dataset.status === "building") return;
