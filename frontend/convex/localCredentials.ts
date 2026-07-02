@@ -3,12 +3,47 @@ import { v } from "convex/values";
 
 const serviceValidator = v.union(
   v.literal("tinyfish"),
+  v.literal("llm"),
   v.literal("openrouter"),
+  v.literal("openai"),
+  v.literal("anthropic"),
+  v.literal("google"),
+  v.literal("xai"),
+  v.literal("deepseek"),
+  v.literal("qwen"),
+  v.literal("mistral"),
+  v.literal("groq"),
+  v.literal("togetherai"),
+  v.literal("deepinfra"),
+  v.literal("fireworks"),
+  v.literal("huggingface"),
+  v.literal("ollama"),
+  v.literal("lmstudio"),
+  v.literal("custom"),
 );
 
 const connectionMethodValidator = v.union(
   v.literal("api_key"),
   v.literal("oauth"),
+);
+
+const llmProviderValidator = v.union(
+  v.literal("openrouter"),
+  v.literal("openai"),
+  v.literal("anthropic"),
+  v.literal("google"),
+  v.literal("xai"),
+  v.literal("deepseek"),
+  v.literal("qwen"),
+  v.literal("mistral"),
+  v.literal("groq"),
+  v.literal("togetherai"),
+  v.literal("deepinfra"),
+  v.literal("fireworks"),
+  v.literal("huggingface"),
+  v.literal("ollama"),
+  v.literal("lmstudio"),
+  v.literal("custom"),
 );
 
 export const getInternal = internalQuery({
@@ -24,9 +59,12 @@ export const getInternal = internalQuery({
 export const upsertInternal = internalMutation({
   args: {
     service: serviceValidator,
-    keychainAccount: v.string(),
+    keychainAccount: v.optional(v.string()),
     connectionMethod: connectionMethodValidator,
     verifiedAt: v.number(),
+    llmProvider: v.optional(llmProviderValidator),
+    llmBaseUrl: v.optional(v.string()),
+    llmDefaultModel: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const existing = await ctx.db
@@ -35,20 +73,39 @@ export const upsertInternal = internalMutation({
       .unique();
 
     const update = {
-      keychainAccount: args.keychainAccount,
+      ...(args.keychainAccount !== undefined
+        ? { keychainAccount: args.keychainAccount }
+        : {}),
       connectionMethod: args.connectionMethod,
       verifiedAt: args.verifiedAt,
       updatedAt: Date.now(),
     };
+    const llmPatch = args.llmProvider !== undefined
+      ? {
+          llmProvider: args.llmProvider,
+          // Explicit undefined clears stale custom-provider values when the
+          // user switches back to OpenAI/Anthropic/OpenRouter.
+          llmBaseUrl: args.llmBaseUrl,
+          llmDefaultModel: args.llmDefaultModel,
+        }
+      : {};
+    const llmInsert = args.llmProvider !== undefined
+      ? {
+          llmProvider: args.llmProvider,
+          ...(args.llmBaseUrl !== undefined ? { llmBaseUrl: args.llmBaseUrl } : {}),
+          ...(args.llmDefaultModel !== undefined ? { llmDefaultModel: args.llmDefaultModel } : {}),
+        }
+      : {};
 
     if (existing) {
-      await ctx.db.patch(existing._id, { ...update, apiKey: undefined });
+      await ctx.db.patch(existing._id, { ...update, ...llmPatch, apiKey: undefined });
       return existing._id;
     }
 
     return await ctx.db.insert("localCredentials", {
       service: args.service,
       ...update,
+      ...llmInsert,
     });
   },
 });

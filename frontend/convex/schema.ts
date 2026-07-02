@@ -135,17 +135,84 @@ export default defineSchema({
 
   modelConfig: defineTable({
     userId: v.string(),
+    provider: v.optional(
+      v.union(
+        v.literal("openrouter"),
+        v.literal("openai"),
+        v.literal("anthropic"),
+        v.literal("google"),
+        v.literal("xai"),
+        v.literal("deepseek"),
+        v.literal("qwen"),
+        v.literal("mistral"),
+        v.literal("groq"),
+        v.literal("togetherai"),
+        v.literal("deepinfra"),
+        v.literal("fireworks"),
+        v.literal("huggingface"),
+        v.literal("ollama"),
+        v.literal("lmstudio"),
+        v.literal("custom")
+      )
+    ),
     schemaInference: v.optional(v.string()),
     populateOrchestrator: v.optional(v.string()),
     investigateSubagent: v.optional(v.string()),
-  }).index("by_user", ["userId"]),
+  })
+    .index("by_user", ["userId"])
+    .index("by_user_provider", ["userId", "provider"]),
 
   localCredentials: defineTable({
-    service: v.union(v.literal("tinyfish"), v.literal("openrouter")),
+    service: v.union(
+      v.literal("tinyfish"),
+      v.literal("llm"),
+      v.literal("openrouter"),
+      v.literal("openai"),
+      v.literal("anthropic"),
+      v.literal("google"),
+      v.literal("xai"),
+      v.literal("deepseek"),
+      v.literal("qwen"),
+      v.literal("mistral"),
+      v.literal("groq"),
+      v.literal("togetherai"),
+      v.literal("deepinfra"),
+      v.literal("fireworks"),
+      v.literal("huggingface"),
+      v.literal("ollama"),
+      v.literal("lmstudio"),
+      v.literal("custom")
+    ),
     keychainAccount: v.optional(v.string()),
     connectionMethod: v.union(v.literal("api_key"), v.literal("oauth")),
     verifiedAt: v.number(),
     updatedAt: v.number(),
+    // For service:"llm" this stores the active local LLM provider.
+    // Provider-specific rows store each provider's keychain account and
+    // optional custom base URL so users can switch providers without
+    // re-entering keys.
+    llmProvider: v.optional(
+      v.union(
+        v.literal("openrouter"),
+        v.literal("openai"),
+        v.literal("anthropic"),
+        v.literal("google"),
+        v.literal("xai"),
+        v.literal("deepseek"),
+        v.literal("qwen"),
+        v.literal("mistral"),
+        v.literal("groq"),
+        v.literal("togetherai"),
+        v.literal("deepinfra"),
+        v.literal("fireworks"),
+        v.literal("huggingface"),
+        v.literal("ollama"),
+        v.literal("lmstudio"),
+        v.literal("custom")
+      )
+    ),
+    llmBaseUrl: v.optional(v.string()),
+    llmDefaultModel: v.optional(v.string()),
     // Legacy only: accepted so the migration can deploy, then cleared by the
     // backend startup purge. New code never writes this field.
     apiKey: v.optional(v.string()),
